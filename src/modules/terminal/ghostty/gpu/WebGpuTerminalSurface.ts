@@ -308,9 +308,11 @@ export class WebGpuTerminalSurface
       (active) => {
         this.resizeInteractionActive = active;
         if (active) return;
-        // The gesture is over: the grid follows the final size once (one reflow, one SIGWINCH)
-        // and what the drag grew is compacted. The host is measured when the fit runs, in the
-        // next frame, not now: the last pointer move may not have been laid out yet.
+        // The gesture is over: flush any fit held while the drag was in flight so the grid
+        // and PTY stay in step with the host immediately instead of waiting for the next
+        // layout event (moving the window to another display can otherwise leave the terminal
+        // at the old size until something else — such as opening the AI panel — forces a redraw).
+        if (this.heldBounds) this.flushHeldBounds();
         this.compactAfterResize = true;
         this.fitQueue.request();
         this.runtime.schedule(this);
@@ -347,6 +349,21 @@ export class WebGpuTerminalSurface
     if (this.visible) this.runtime.schedule(this);
   }
 
+  /** Applies the fit held for the end of a resize gesture before the host goes away. */
+  private flushHeldBounds(): void {
+    const held = this.heldBounds;
+    this.heldBounds = null;
+    if (!held) return;
+    const fit = fitTerminalViewport(
+      held.width,
+      held.height,
+      this.metrics,
+      held.device,
+      TERMINAL_RIGHT_GUTTER_CSS_PX,
+    );
+    if (fit) this.resizeSync.request(fit.cols, fit.rows);
+  }
+
   detach(): void {
     if (!this.host) return;
     this.resizeObserver.disconnect();
@@ -354,20 +371,8 @@ export class WebGpuTerminalSurface
     // A fit held for the end of a resize gesture must not die with the host: the
     // model and the PTY would keep the pre-drag grid while the next surface
     // renders a different one, leaving winsize and layout out of sync (#981).
-    if (this.heldBounds) {
-      const held = this.heldBounds;
-      this.heldBounds = null;
-      const fit = fitTerminalViewport(
-        held.width,
-        held.height,
-        this.metrics,
-        held.device,
-        TERMINAL_RIGHT_GUTTER_CSS_PX,
-      );
-      if (fit) this.resizeSync.request(fit.cols, fit.rows);
-    }
+    this.flushHeldBounds();
     this.fitQueue.clear();
-    this.heldBounds = null;
     this.pixelRatioMonitor.stop();
     this.clearCursorTimer();
     this.clearTextBlinkTimer();

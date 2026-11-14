@@ -4864,7 +4864,7 @@ dependencies = [
 
 [[package]]
 name = "terax"
-version = "0.9.0"
+version = "0.9.0-dy"
 dependencies = [
  "block2",
  "bytes",

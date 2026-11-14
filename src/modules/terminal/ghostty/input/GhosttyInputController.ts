@@ -43,6 +43,8 @@ export type GhosttyInputControllerOptions = {
   readonly onData: (bytes: Uint8Array) => void;
   readonly onCopy: () => boolean;
   readonly getSelection?: () => string | null;
+  /** Ctrl+C copies a selection when one exists; off restores SIGINT. Defaults true. */
+  readonly smartCopyPaste?: () => boolean;
   readonly onPaste?: (text: string) => boolean;
   readonly onText?: (text: string) => boolean;
   readonly onKeyDown?: (event: KeyboardEvent) => boolean;
@@ -89,6 +91,8 @@ export class GhosttyInputController {
       composing: () => this.composing,
       alternateScreen: () => options.model.modes().alternateScreen,
       kittyFlags: () => this.kittyFlags(),
+      smartCopyPaste: () => true,
+      hasSelection: () => Boolean(options.getSelection?.()),
     };
     this.proxy = new TerminalInputProxy(options.input, {
       placeholder: options.inputPlaceholder ?? this.isMac,

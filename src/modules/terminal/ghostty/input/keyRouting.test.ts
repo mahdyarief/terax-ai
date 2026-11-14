@@ -406,6 +406,23 @@ describe("routeKeyDown", () => {
       routeKeyDown(press({ key: "Unmapped", code: "Lang1" }), ctx()).kind,
     ).toBe("ignore");
   });
+
+  it("smart copies only when a selection exists", () => {
+    const copy = press({ key: "c", code: "KeyC", ctrlKey: true });
+    expect(routeKeyDown(copy, ctx({ hasSelection: () => true }))).toEqual({
+      kind: "copy",
+    });
+    expect(routeKeyDown(copy, ctx({ hasSelection: () => false }))).toEqual({
+      kind: "key",
+      key: Key.C,
+    });
+    expect(
+      routeKeyDown(
+        copy,
+        ctx({ smartCopyPaste: () => false, hasSelection: () => true }),
+      ),
+    ).toEqual({ kind: "key", key: Key.C });
+  });
 });
 
 describe("routeKeyDown on a layout with AltGr", () => {

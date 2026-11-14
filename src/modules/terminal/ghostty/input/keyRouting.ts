@@ -36,6 +36,10 @@ export type KeyContext = {
   readonly alternateScreen: () => boolean;
   /** Active Kitty keyboard flags; zero outside the protocol. */
   readonly kittyFlags: () => number;
+  /** Ctrl+C copies a selection when one exists (Windows-Terminal style); off restores SIGINT. */
+  readonly smartCopyPaste?: () => boolean;
+  /** Whether the terminal currently holds a text selection. */
+  readonly hasSelection?: () => boolean;
 };
 
 export type KeyRoute =
@@ -142,9 +146,25 @@ export function routeKeyDown(
       isLayoutKey(event, "v")
       ? PASTE_OR_KEY
       : PASTE;
-  if (clipboard === "copy") {
-    if (!skipCopy) return COPY;
+
+  if (clipboard === "copy" && skipCopy) {
+    // A failed copy must not become an interrupt. Outside the Kitty protocol
+    // the event is swallowed; inside it the encoder reports the chord.
     if (ctx.kittyFlags() === 0) return IGNORE;
+  } else {
+    const smartCopy =
+      !skipCopy &&
+      clipboard !== "copy" &&
+      !ctx.isMac &&
+      event.ctrlKey &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !event.metaKey &&
+      key.length === 1 &&
+      isLayoutKey(event, "c") &&
+      (ctx.smartCopyPaste?.() ?? true) &&
+      Boolean(ctx.hasSelection?.());
+    if (clipboard === "copy" || smartCopy) return COPY;
   }
 
   const readline = terminalReadlineSequence(event, ctx);
@@ -330,7 +350,9 @@ type ClipboardKey = Pick<
 /**
  * The clipboard chord of the platform: Command+C/V on macOS; Ctrl+Shift+C/V,
  * Ctrl+Insert (copy) and Shift+Insert (paste) elsewhere, and plain Ctrl+V on
- * Windows. Ctrl+C stays an interrupt everywhere.
+ * Windows. Plain Ctrl+C is not a clipboard chord here: it stays an interrupt
+ * unless {@link routeKeyDown} sees a selection and the preference allows
+ * smart copy.
  */
 export function clipboardShortcut(
   event: ClipboardKey,
