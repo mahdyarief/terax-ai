@@ -351,6 +351,21 @@ export class WebGpuTerminalSurface
     if (!this.host) return;
     this.resizeObserver.disconnect();
     window.removeEventListener?.("resize", this.handleWindowResize);
+    // A fit held for the end of a resize gesture must not die with the host: the
+    // model and the PTY would keep the pre-drag grid while the next surface
+    // renders a different one, leaving winsize and layout out of sync (#981).
+    if (this.heldBounds) {
+      const held = this.heldBounds;
+      this.heldBounds = null;
+      const fit = fitTerminalViewport(
+        held.width,
+        held.height,
+        this.metrics,
+        held.device,
+        TERMINAL_RIGHT_GUTTER_CSS_PX,
+      );
+      if (fit) this.resizeSync.request(fit.cols, fit.rows);
+    }
     this.fitQueue.clear();
     this.heldBounds = null;
     this.pixelRatioMonitor.stop();

@@ -610,6 +610,31 @@ describe("resizing the host", () => {
     expect(h.surface.diagnostics().cols).toBe(80);
   });
 
+  it("lands a held fit when the host is detached mid-gesture instead of leaving the PTY behind", async () => {
+    vi.useFakeTimers();
+    const h = await harness();
+    h.render();
+    vi.advanceTimersByTime(500);
+    h.onResize.mockClear();
+
+    const token = {};
+    beginTerminalResizeInteraction(token);
+    h.observe(hostSize(640));
+    h.render();
+    expect(h.onResize).not.toHaveBeenCalled();
+    expect(h.surface.diagnostics().deferredGridResizes).toBeGreaterThan(0);
+
+    // Replacing the surface (tab switch, pane remount) tears the host down while
+    // the gesture still holds the last fit; the PTY must not keep the old size.
+    h.surface.detach();
+    expect(h.onResize).toHaveBeenCalledOnce();
+    expect(h.onResize).toHaveBeenCalledWith(
+      h.surface.diagnostics().cols,
+      h.surface.diagnostics().rows,
+    );
+    endTerminalResizeInteraction(token);
+  });
+
   it("treats a burst of host changes as a gesture and lands the last size when it is quiet", async () => {
     vi.useFakeTimers();
     const h = await harness();
