@@ -3,6 +3,7 @@ import { checkReadable } from "@/modules/ai/lib/security";
 import {
   isAllowedLocalImage,
   isInsideRoot,
+  isSafeMarkdownUrl,
   previewBoundary,
   rehypeLocalImages,
   resolveRelativeAsset,
@@ -53,6 +54,41 @@ describe("resolveRelativeAsset", () => {
     expect(
       resolveRelativeAsset("C:\\proj\\docs\\guide.md", "../img/a.png"),
     ).toBe("C:\\proj\\img\\a.png");
+  });
+
+  it("refuses references carrying control characters", () => {
+    expect(resolveRelativeAsset(base, "img/x\t.png")).toBeNull();
+    expect(resolveRelativeAsset(base, "img/x%0A.png")).toBeNull();
+    expect(resolveRelativeAsset(base, "java\nscript:alert(1)")).toBeNull();
+  });
+});
+
+describe("isSafeMarkdownUrl", () => {
+  it("allows ordinary relative and remote references", () => {
+    for (const src of [
+      "./img/a.png",
+      "img/a.png",
+      "../a.md#top",
+      "https://example.com/x",
+      "mailto:a@b.c",
+    ]) {
+      expect(isSafeMarkdownUrl(src)).toBe(true);
+    }
+  });
+
+  it("rejects active schemes, control chars and data:text/html", () => {
+    for (const src of [
+      "javascript:alert(1)",
+      "java\nscript:alert(1)",
+      "java\tscript:alert(1)",
+      "JavaScript:alert(1)",
+      "data:text/html,<script>x</script>",
+      "data:text/html%2C%3Cscript%3Ex",
+      "img/x\u0000.png",
+      "img/x%00.png",
+    ]) {
+      expect(isSafeMarkdownUrl(src)).toBe(false);
+    }
   });
 });
 

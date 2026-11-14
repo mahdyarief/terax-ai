@@ -7,6 +7,7 @@ import { InlineInput } from "./InlineInput";
 import { explorerGitTextClass } from "./lib/gitStatusColor";
 import type { GitStatusCode } from "./lib/gitStatusUtils";
 import { FileIcon, FolderIcon } from "./FileIcon";
+import { FileRowHoverCard } from "./FileRowHoverCard";
 
 export type SelectModifiers = { shift: boolean; mod: boolean };
 
@@ -97,7 +98,7 @@ function EntryRowImpl(props: EntryRowProps) {
     else onOpenFile(path);
   };
 
-  return (
+  const rowButton = (
     <button
       type="button"
       data-fs-path={path}
@@ -147,6 +148,24 @@ function EntryRowImpl(props: EntryRowProps) {
         {name}
       </span>
     </button>
+  );
+
+  // Only files get a hover card — folders have nothing extra worth surfacing,
+  // and the card must never wrap a node we don't control. The trigger is
+  // `asChild`, so it reuses the row's own button (no extra DOM, no geometry
+  // change, clicks/double-clicks pass straight through).
+  if (isDir) return rowButton;
+
+  return (
+    <FileRowHoverCard
+      path={path}
+      name={name}
+      gitStatusCode={gitStatusCode}
+      gitignored={gitignored}
+      onOpenFile={onOpenFile}
+    >
+      {rowButton}
+    </FileRowHoverCard>
   );
 }
 

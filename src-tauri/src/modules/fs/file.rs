@@ -6,6 +6,7 @@ use std::{
 };
 
 use serde::Serialize;
+use base64::Engine;
 use tauri::Emitter;
 use tempfile::NamedTempFile;
 
@@ -15,6 +16,9 @@ use super::mutate::note_changed;
 use crate::modules::workspace::{resolve_path, WorkspaceEnv};
 
 const MAX_READ_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
+/// Binary previews (DOCX/XLSX) carry base64 over IPC, so this matches
+/// MAX_OFFICE_PREVIEW_BYTES in the renderer rather than the text limit.
+const MAX_BINARY_BYTES: u64 = 20 * 1024 * 1024; // 20 MB
 /// Ceiling for explicit "open anyway"; mirrored as FORCE_READ_LIMIT in useDocument.ts.
 const FORCE_MAX_READ_BYTES: u64 = 50 * 1024 * 1024;
 const BINARY_SNIFF_BYTES: usize = 8 * 1024;
@@ -58,6 +62,53 @@ fn mtime_millis(meta: &fs::Metadata) -> u64 {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as u64)
         .unwrap_or(0)
+}
+
+#[derive(Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ReadResultWithBytes {
+    Binary {
+        content: String,
+        size: u64,
+    },
+    TooLarge {
+        size: u64,
+        limit: u64,
+    },
+}
+
+#[tauri::command]
+pub async fn fs_read_binary(
+    path: String,
+    workspace: Option<WorkspaceEnv>,
+) -> Result<ReadResultWithBytes, String> {
+    blocking(move || {
+        let workspace = WorkspaceEnv::from_option(workspace);
+        let p = resolve_path(&path, &workspace);
+        let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
+        if !meta.is_file() {
+            return Err("only regular files can be read".into());
+        }
+        let size = meta.len();
+        if size > MAX_BINARY_BYTES {
+            return Ok(ReadResultWithBytes::TooLarge { size, limit: MAX_BINARY_BYTES });
+        }
+        // Bounded read: the file may grow between the stat and the read.
+        let mut bytes = Vec::with_capacity(size as usize);
+        fs::File::open(&p)
+            .map_err(|e| e.to_string())?
+            .take(MAX_BINARY_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_BINARY_BYTES as usize {
+            return Ok(ReadResultWithBytes::TooLarge { size, limit: MAX_BINARY_BYTES });
+        }
+        Ok(ReadResultWithBytes::Binary {
+            content: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            size,
+        })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -470,6 +521,55 @@ mod tests {
             fs_canonicalize(path, None, Some(true)).await.unwrap(),
             super::super::to_canon(std::fs::canonicalize(external.join("main.ts")).unwrap())
         );
+    }
+
+    #[tokio::test]
+    async fn binary_reads_return_base64_not_a_byte_array() {
+        use base64::Engine;
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("a.docx");
+        std::fs::write(&f, b"PK\x03\x04binary").unwrap();
+        match fs_read_binary(f.to_string_lossy().into_owned(), None)
+            .await
+            .unwrap()
+        {
+            ReadResultWithBytes::Binary { content, size } => {
+                assert_eq!(size, 10);
+                assert_eq!(
+                    base64::engine::general_purpose::STANDARD.decode(content).unwrap(),
+                    b"PK\x03\x04binary"
+                );
+            }
+            ReadResultWithBytes::TooLarge { .. } => panic!("expected binary"),
+        }
+    }
+
+    #[test]
+    fn binary_reads_serialize_with_a_kind_tag() {
+        // The renderer discriminates on `kind`; a bare `{ "binary": ... }`
+        // object silently reads as null and the preview shows nothing.
+        let json = serde_json::to_value(ReadResultWithBytes::Binary {
+            content: "QQ==".into(),
+            size: 1,
+        })
+        .unwrap();
+        assert_eq!(json["kind"], "binary");
+        assert_eq!(json["content"], "QQ==");
+        assert_eq!(json["size"], 1);
+
+        let json = serde_json::to_value(ReadResultWithBytes::TooLarge { size: 4, limit: 2 }).unwrap();
+        assert_eq!(json["kind"], "toolarge");
+        assert_eq!(json["limit"], 2);
+    }
+
+    #[tokio::test]
+    async fn binary_reads_reject_directories() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(fs_read_binary(dir.path().to_string_lossy().into_owned(), None)
+            .await
+            .err()
+            .unwrap()
+            .contains("regular"));
     }
 
     #[test]

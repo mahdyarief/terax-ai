@@ -32,19 +32,16 @@ type Props = {
   onOpenCommitFile: GitHistoryStackProps["onOpenCommitFile"];
   onGitHistorySearchHandle: GitHistoryStackProps["onSearchHandle"];
   onSetMarkdownView: EditorStackProps["onSetMarkdownView"];
+  /** When set, the active tab is mirrored into a side-by-side secondary pane. */
+  secondaryActiveId?: number | null;
+  secondaryActiveTab?: Tab | undefined;
+  onCloseSecondary?: () => void;
 };
 
 const LAYER = "absolute inset-0";
 
-/**
- * Stacks every tab-kind surface absolutely on top of each other and toggles
- * visibility off the active tab, so panes keep their mounted state (terminal
- * buffers, editor scroll, ...) when switching tabs.
- *
- * Layers sit flush inside the workspace pane; only the terminal layer is inset,
- * because the terminal draws glyphs right up to its container edge.
- */
-export function WorkspaceSurface({
+/** All tab-kind layers, stacked absolutely and toggled by `activeTab.kind`. */
+function SurfaceLayers({
   tabs,
   activeId,
   activeTab,
@@ -156,6 +153,50 @@ export function WorkspaceSurface({
           activeId={activeId}
           onOpenCommitFile={onOpenCommitFile}
           onSearchHandle={onGitHistorySearchHandle}
+        />
+      </div>
+    </div>
+  );
+}
+
+export function WorkspaceSurface(props: Props) {
+  const {
+    tabs,
+    secondaryActiveId,
+    secondaryActiveTab,
+    onCloseSecondary,
+  } = props;
+
+  if (secondaryActiveId == null || !secondaryActiveTab) {
+    return <SurfaceLayers {...props} />;
+  }
+
+  // Primary shows every tab except the secondary one; the secondary pane shows
+  // only that tab. Splitting so no tab id is mounted twice avoids duplicate
+  // LSP didOpen / iframe / registerHandle calls.
+  const primaryTabs = tabs.filter((t) => t.id !== secondaryActiveId);
+  const secondaryTabs = tabs.filter((t) => t.id === secondaryActiveId);
+
+  return (
+    <div className="flex h-full min-h-0 w-full flex-row">
+      <div className="relative min-h-0 flex-1">
+        <SurfaceLayers {...props} tabs={primaryTabs} />
+      </div>
+      <div className="w-px shrink-0 bg-border" />
+      <div className="relative min-h-0 flex-1">
+        <button
+          type="button"
+          onClick={onCloseSecondary}
+          className="absolute right-2 top-2 z-10 rounded bg-background/80 px-2 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+          aria-label="Close side pane"
+        >
+          ✕
+        </button>
+        <SurfaceLayers
+          {...props}
+          tabs={secondaryTabs}
+          activeId={secondaryActiveId}
+          activeTab={secondaryActiveTab}
         />
       </div>
     </div>

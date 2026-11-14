@@ -4,6 +4,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { hostname } from "@tauri-apps/plugin-os";
 import { toast } from "sonner";
 import { openExternalUrl } from "@/lib/external-link";
+import { openUrlInPreview } from "@/modules/preview/lib/navigator";
 import {
   isLocalFileHost,
   isNetworkOrDevicePath,
@@ -174,7 +175,10 @@ function defaultDeps(context: LinkActivationContext): LinkActivationDeps {
   const workspace = context.workspace;
   const navigator = getLspNavigator();
   return {
-    openUrl: (url, focus) => openExternalUrl(url, focus),
+    openUrl: (url, focus) => {
+      if (openUrlInPreview(url)) return Promise.resolve();
+      return openExternalUrl(url, focus);
+    },
     stat: async (path, localOnly) => {
       const stat = await invoke<{ kind: StatKind }>("fs_stat", {
         path,

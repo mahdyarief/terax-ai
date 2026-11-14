@@ -6,6 +6,13 @@ import { invoke } from "@tauri-apps/api/core";
 
 type ReadResult = { kind: string; content?: string; mtime?: number };
 
+// Mirrors src-tauri::modules::fs::file::ReadResultWithBytes
+type ReadResultWithBytes =
+  | { kind: "binary"; content: string; size: number }
+  | { kind: "toolarge"; size: number };
+
+export { MAX_OFFICE_PREVIEW_BYTES, validateOfficeArchive } from "./officeArchive";
+
 type CommandOutput = {
   stdout: string;
   stderr: string;
@@ -151,6 +158,41 @@ export async function readFileText(
   }).catch(() => null);
   if (res?.kind !== "text" || res.content == null) return null;
   return { text: res.content, mtime: res.mtime ?? 0 };
+}
+
+export async function readBinaryBase64(path: string): Promise<{
+  bytes: Uint8Array;
+  size: number;
+} | null> {
+  const res = await invoke<ReadResultWithBytes>("fs_read_binary", {
+    path,
+    workspace: currentWorkspaceEnv(),
+  }).catch(() => null);
+  if (res?.kind === "binary") {
+    const bytes = base64ToBytes(res.content);
+    return { bytes, size: res.size };
+  }
+  if (res?.kind === "toolarge") {
+    return {
+      bytes: new Uint8Array(),
+      size: res.size,
+    };
+  }
+  return null;
+}
+
+export async function readBinary(path: string): Promise<Uint8Array | null> {
+  const r = await readBinaryBase64(path);
+  return r ? r.bytes : null;
+}
+
+// base64 → Uint8Array (Tauri returns base64 strings)
+function base64ToBytes(base64: string): Uint8Array {
+  const raw = atob(base64);
+  const n = raw.length;
+  const out = new Uint8Array(n);
+  for (let i = 0; i < n; i++) out[i] = raw.charCodeAt(i);
+  return out;
 }
 
 // Minimal change dispatch: trimming the common prefix/suffix keeps the

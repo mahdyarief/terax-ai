@@ -2,6 +2,26 @@
 
 const WINDOWS_DRIVE = /^[a-zA-Z]:[\\/]/;
 const URL_SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
+/** C0/C1 controls and DEL are never valid inside a path reference. */
+const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f]/;
+
+/**
+ * Pure guard for untrusted markdown URL/asset references. Control characters
+ * (also when percent-encoded) are refused, and active schemes are rejected
+ * even if a control char was used to split the scheme name (`java\nscript:`).
+ */
+export function isSafeMarkdownUrl(src: string): boolean {
+  let decoded = src;
+  try {
+    decoded = decodeURIComponent(src);
+  } catch {
+    /* keep the raw text */
+  }
+  if (CONTROL_CHARS.test(src) || CONTROL_CHARS.test(decoded)) return false;
+
+  const compact = decoded.replace(/\s/g, "").toLowerCase();
+  return !compact.startsWith("javascript:") && !compact.startsWith("data:text/html");
+}
 
 /**
  * Absolute path of `src` as the markdown file at `base` would resolve it, or
@@ -10,6 +30,7 @@ const URL_SCHEME = /^[a-zA-Z][a-zA-Z0-9+.-]*:/;
  * decoded, as a browser would before asking the file system.
  */
 export function resolveRelativeAsset(base: string, src: string): string | null {
+  if (!isSafeMarkdownUrl(src)) return null;
   const bare = src.trim().split(/[?#]/)[0];
   if (!bare || bare.startsWith("/") || bare.startsWith("\\")) return null;
   if (WINDOWS_DRIVE.test(bare)) return null;

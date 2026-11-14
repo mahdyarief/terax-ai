@@ -17,3 +17,21 @@ describe("MarkdownPreviewPane Streamdown configuration", () => {
     expect(streamdownJsx).toMatch(/parseIncompleteMarkdown=\{false\}/);
   });
 });
+
+describe("MarkdownPreviewPane outline", () => {
+  it("exposes the outline as a navigation landmark", () => {
+    expect(src).toMatch(/role="navigation"/);
+    expect(src).toMatch(/aria-label="Document outline"/);
+  });
+
+  it("scrolls to the clicked heading via an escaped id selector", () => {
+    expect(src).toMatch(/CSS\.escape\(heading\.id\)/);
+    expect(src).toMatch(/scrollIntoView\(\{ behavior: "smooth", block: "start" \}\)/);
+    expect(src).toMatch(/onNavigate=\{navigateTo\}/);
+  });
+
+  it("wires the hide and re-show toggles", () => {
+    expect(src).toMatch(/onHide=\{\(\) => setOutlineHidden\(true\)\}/);
+    expect(src).toMatch(/onClick=\{\(\) => setOutlineHidden\(false\)\}/);
+  });
+});

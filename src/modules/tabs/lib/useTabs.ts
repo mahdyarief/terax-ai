@@ -1,3 +1,4 @@
+import { planTabRetention } from "./planTabRetention";
 import { isMarkdownPath } from "@/lib/utils";
 import {
   type AgentInstanceCount,
@@ -32,7 +33,10 @@ export const MAX_PANES_PER_TAB = 4;
 
 type TabBase = {
   spaceId: string;
-  /** Restored from disk, not yet activated: rendered as a placeholder, not mounted. */
+  /**
+   * Rendered as a placeholder, not mounted: either restored from disk but never
+   * activated, or outside the MRU budget (see `planTabRetention`).
+   */
   cold?: boolean;
 };
 
@@ -607,6 +611,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   const activeSpaceIdRef = useRef(DEFAULT_SPACE_ID);
   const tabsRef = useRef(tabs);
   const activeIdRef = useRef(activeId);
+  const recentIdsRef = useRef<number[]>([activeId]);
 
   // Actions compose against the latest mutation, even before React renders.
   const setTabs = useCallback((action: SetStateAction<Tab[]>) => {
@@ -620,17 +625,32 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       typeof action === "function" ? action(activeIdRef.current) : action;
     activeIdRef.current = next;
     renderActiveId(next);
+    // Every activation path funnels through here. Only record real tab ids so
+    // boot-time placeholder ids don't pollute the MRU list.
+    if (tabsRef.current.some((t) => t.id === next)) {
+      recentIdsRef.current = [
+        next,
+        ...recentIdsRef.current.filter((id) => id !== next),
+      ].slice(0, 8);
+    }
   }, []);
 
-  // Activating a cold tab warms it: one choke point for every activation path.
+  // One effect warms the active tab and cools anything outside the MRU budget.
+  // Depends on `activeId` only (not `tabs`): `planTabRetention` returns null
+  // when nothing changes, so `setTabs` preserves identity and React bails out.
   useEffect(() => {
     if (!booted) return;
-    setTabs((curr) => {
-      const t = curr.find((x) => x.id === activeId);
-      if (!t?.cold) return curr;
-      return curr.map((x) => (x.id === activeId ? { ...x, cold: false } : x));
-    });
+    setTabs((curr) => planTabRetention(curr, recentIdsRef.current, activeId) ?? curr);
   }, [activeId, booted, setTabs]);
+
+  // Drop ids of closed tabs from the MRU list. No setTabs, so no loop.
+  useEffect(() => {
+    const live = new Set(tabs.map((t) => t.id));
+    const pruned = recentIdsRef.current.filter((id) => live.has(id));
+    if (pruned.length !== recentIdsRef.current.length) {
+      recentIdsRef.current = pruned;
+    }
+  }, [tabs]);
 
   const allocId = useCallback(() => nextIdRef.current++, []);
 

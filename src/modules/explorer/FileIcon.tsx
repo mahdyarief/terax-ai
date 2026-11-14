@@ -1,5 +1,10 @@
 import { cn } from "@/lib/utils";
-import { type ImgHTMLAttributes, useState, useSyncExternalStore } from "react";
+import {
+  type CSSProperties,
+  type ImgHTMLAttributes,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   peekFileIconUrl,
   peekFolderIconUrl,
@@ -14,22 +19,34 @@ const serverSnapshot = () => "";
  * Renders an icon URL, or - while the lazily loaded icon set is still on its
  * way - an empty slot with the exact same box, so nothing shifts when it lands.
  * A slot that was blank at mount fades the icon in instead of popping it.
+ *
+ * The single desaturation knob keeps bright Catppuccin glyphs from drowning out
+ * the explorer's status dots / git decorations: icons stay recognizable but no
+ * longer dominate. Applied on every slot's img/placeholder so file and folder
+ * icons are affected identically.
  */
+const iconRecolorStyle: CSSProperties = {
+  filter: "saturate(0.82)",
+  opacity: 0.92,
+};
+
 function IconSlot({
   url,
   className,
   width,
   height,
+  style,
   onError,
   ...rest
 }: IconImgProps & { url: string }) {
   const [arrivedLate] = useState(url === "");
+  const recolorStyle = { ...style, ...iconRecolorStyle };
   if (!url) {
     return (
       <span
         aria-hidden
         className={cn("block", className)}
-        style={{ width, height }}
+        style={{ width, height, ...recolorStyle }}
       />
     );
   }
@@ -41,6 +58,7 @@ function IconSlot({
       width={width}
       height={height}
       className={cn(className, arrivedLate && "terax-icon-in")}
+      style={recolorStyle}
       onError={onError}
     />
   );

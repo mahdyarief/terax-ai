@@ -1,5 +1,10 @@
 import { cn } from "@/lib/utils";
-import { FolderGitTwoIcon, FolderTreeIcon } from "@hugeicons/core-free-icons";
+import { useDiagnosticsStore } from "@/modules/editor/lib/diagnosticsStore";
+import {
+  Alert02Icon,
+  FolderGitTwoIcon,
+  FolderTreeIcon,
+} from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import type { SidebarViewId } from "./types";
 
@@ -19,6 +24,12 @@ type Props = {
 };
 
 export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
+  const problemCount = useDiagnosticsStore((s) =>
+    Object.values(s.byPath).reduce(
+      (total, counts) => total + counts.errors + counts.warnings,
+      0,
+    ),
+  );
   const items: RailItem[] = [
     { id: "explorer", label: "Files", icon: FolderTreeIcon },
     {
@@ -26,6 +37,12 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
       label: "Git",
       icon: FolderGitTwoIcon,
       badge: changedCount,
+    },
+    {
+      id: "problems",
+      label: "Problems",
+      icon: Alert02Icon,
+      badge: problemCount,
     },
   ];
 

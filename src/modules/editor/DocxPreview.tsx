@@ -1,8 +1,9 @@
 import { createElement, useEffect, useState, type ReactNode } from "react";
 import {
   MAX_OFFICE_PREVIEW_BYTES,
+  readBinary,
   validateOfficeArchive,
-} from "./lib/officeArchive";
+} from "./lib/externalFormat";
 
 const ALLOWED_TAGS = new Set([
   "a",
@@ -38,41 +39,49 @@ const ALLOWED_TAGS = new Set([
   "ul",
 ]);
 
-type Props = { src: string; size: number };
-type State = { src: string; content?: string; error?: string };
+type Props = { path: string; size: number };
 
-export function DocxPreview({ src, size }: Props) {
-  const [state, setState] = useState<State>({ src });
+type State = { path: string; content?: string; error?: string };
+
+// Reading goes through IPC: the webview cannot fetch `asset:`/`http://asset.localhost`
+// URLs under the CSP, and convertFileSrc() encodes the path in a way the
+// filesystem layer cannot resolve.
+export function DocxPreview({ path, size }: Props) {
+  const [state, setState] = useState<State>({ path });
 
   useEffect(() => {
     let cancelled = false;
-    setState({ src });
+    setState({ path });
     if (size > MAX_OFFICE_PREVIEW_BYTES) {
-      setState({ src, error: "DOCX preview is limited to 20 MB." });
+      setState({ path, error: "DOCX preview is limited to 20 MB." });
       return;
     }
 
     void (async () => {
       try {
-        const response = await fetch(src);
-        if (!response.ok)
-          throw new Error(`Could not read document (${response.status}).`);
-        const bytes = await response.arrayBuffer();
+        const bytes = await readBinary(path);
+        if (!bytes) throw new Error("Could not read document.");
         if (bytes.byteLength > MAX_OFFICE_PREVIEW_BYTES) {
           throw new Error("DOCX preview is limited to 20 MB.");
         }
-        validateOfficeArchive(bytes, "DOCX");
+        validateOfficeArchive(
+          bytes.buffer.slice(0, bytes.byteLength) as ArrayBuffer,
+          "DOCX",
+        );
         const mammoth = await import("mammoth");
         const converter = mammoth.default;
-        const result = await converter.convertToHtml(
-          { arrayBuffer: bytes },
+        // mammoth's browser build reads `input.arrayBuffer` as a value, not a
+        // function; handing it a function makes unzip reject with
+        // "Could not find file in options".
+        const result = await (converter as any).convertToHtml(
+          { arrayBuffer: bytes.buffer.slice(0, bytes.byteLength) as ArrayBuffer },
           { externalFileAccess: false },
         );
-        if (!cancelled) setState({ src, content: result.value });
+        if (!cancelled) setState({ path, content: result.value });
       } catch (error) {
         if (!cancelled) {
           setState({
-            src,
+            path,
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -82,9 +91,9 @@ export function DocxPreview({ src, size }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [src, size]);
+  }, [path, size]);
 
-  if (state.src !== src || (!state.content && !state.error)) {
+  if (state.path !== path || (!state.content && !state.error)) {
     return <PreviewMessage>Loading Word document…</PreviewMessage>;
   }
   if (state.error) return <PreviewMessage>{state.error}</PreviewMessage>;

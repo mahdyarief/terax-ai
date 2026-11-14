@@ -1,88 +1,67 @@
 import { useEffect, useState } from "react";
 import {
   MAX_OFFICE_PREVIEW_BYTES,
+  readBinary,
   validateOfficeArchive,
-} from "./lib/officeArchive";
-
-const MAX_ROWS = 201;
-const MAX_COLUMNS = 40;
-const MAX_SHEETS = 20;
-
-type PreviewSheet = {
-  name: string;
-  rows: unknown[][];
-  columns: number;
-  truncated: boolean;
-};
+} from "./lib/externalFormat";
+import { buildPreviewSheets, type PreviewSheet } from "./lib/spreadsheetPreview";
 
 type State = {
-  src: string;
+  path: string;
   sheets?: PreviewSheet[];
   error?: string;
   truncated?: boolean;
 };
 
+// Bytes come from IPC for the same reason as DOCX: the webview cannot fetch
+// `asset:`/`http://asset.localhost` under the CSP, and convertFileSrc()
+// encodes the path in a form the filesystem layer cannot resolve.
 export function SpreadsheetPreview({
-  src,
+  path,
   size,
 }: {
-  src: string;
+  path: string;
   size: number;
 }) {
-  const [state, setState] = useState<State>({ src });
+  const [state, setState] = useState<State>({ path });
   const [activeSheet, setActiveSheet] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    setState({ src });
+    setState({ path });
     setActiveSheet(0);
     if (size > MAX_OFFICE_PREVIEW_BYTES) {
-      setState({ src, error: "XLSX preview is limited to 20 MB." });
+      setState({ path, error: "XLSX preview is limited to 20 MB." });
       return;
     }
 
     void (async () => {
       try {
-        const response = await fetch(src);
-        if (!response.ok) {
-          throw new Error(`Could not read spreadsheet (${response.status}).`);
-        }
-        const bytes = await response.arrayBuffer();
+        const bytes = await readBinary(path);
+        if (!bytes) throw new Error("Could not read spreadsheet.");
         if (bytes.byteLength > MAX_OFFICE_PREVIEW_BYTES) {
           throw new Error("XLSX preview is limited to 20 MB.");
         }
-        validateOfficeArchive(bytes, "XLSX");
+        validateOfficeArchive(
+          bytes.buffer.slice(0, bytes.byteLength) as ArrayBuffer,
+          "XLSX",
+        );
         const { default: readXlsxFile } = await import(
           "read-excel-file/browser"
         );
-        const workbook = await readXlsxFile(bytes);
-        const sheets = workbook.slice(0, MAX_SHEETS).map(({ sheet, data }) => {
-          const rows = data
-            .slice(0, MAX_ROWS)
-            .map((row) => row.slice(0, MAX_COLUMNS));
-          return {
-            name: sheet,
-            rows,
-            columns: Math.min(
-              MAX_COLUMNS,
-              rows.reduce((max, row) => Math.max(max, row.length), 0),
-            ),
-            truncated:
-              data.length > MAX_ROWS ||
-              data.some((row) => row.length > MAX_COLUMNS),
-          };
-        });
+        // read-excel-file accepts File | Blob | ArrayBuffer; pass the buffer
+        // directly rather than an object that only imitates a Blob.
+        const workbook = await (readXlsxFile as any)(
+          bytes.buffer.slice(0, bytes.byteLength) as ArrayBuffer,
+        );
+        const preview = buildPreviewSheets(workbook as any);
         if (!cancelled) {
-          setState({
-            src,
-            sheets,
-            truncated: workbook.length > MAX_SHEETS,
-          });
+          setState({ path, ...preview });
         }
       } catch (error) {
         if (!cancelled) {
           setState({
-            src,
+            path,
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -92,9 +71,9 @@ export function SpreadsheetPreview({
     return () => {
       cancelled = true;
     };
-  }, [src, size]);
+  }, [path, size]);
 
-  if (state.src !== src || (!state.sheets && !state.error)) {
+  if (state.path !== path || (!state.sheets && !state.error)) {
     return <PreviewMessage>Loading spreadsheet…</PreviewMessage>;
   }
   if (state.error) return <PreviewMessage>{state.error}</PreviewMessage>;

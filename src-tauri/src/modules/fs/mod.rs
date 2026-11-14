@@ -8,6 +8,7 @@ pub mod index;
 #[cfg(windows)]
 mod local_file;
 pub mod mutate;
+pub mod preview;
 pub mod project_memory;
 mod read_policy;
 pub mod search;

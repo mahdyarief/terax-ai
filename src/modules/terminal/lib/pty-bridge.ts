@@ -10,6 +10,7 @@ import {
   PtyOutputReceiver,
   type PtyOutputStatus,
 } from "@/modules/terminal/lib/PtyOutputReceiver";
+import { usePtyActivityStore } from "@/modules/terminal/lib/ptyActivity";
 import {
   bindLeafPty,
   leafPresentationClass,
@@ -122,7 +123,10 @@ export async function openPty(
   let notice: string | number | undefined;
   let progress: ((processedBytes: number) => void) | null = null;
   const receiver = new PtyOutputReceiver(
-    handlers.onData,
+    (bytes) => {
+      if (id !== null) usePtyActivityStore.getState().markRunning(id);
+      return handlers.onData(bytes);
+    },
     (processedBytes) => progress?.(processedBytes),
     (status) => {
       handlers.onOutputStatus?.(status);
@@ -152,6 +156,7 @@ export async function openPty(
     if (id !== null) {
       stream.unregister(id);
       receivers.delete(id);
+      usePtyActivityStore.getState().clear(id);
       clearAgentActivity(id);
       if (paneId !== undefined) unbindLeafPty(paneId, id);
     }

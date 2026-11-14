@@ -20,6 +20,7 @@ export {
   writeToSession,
 } from "./lib/terminalSessionApi";
 export { isTerminalSurfaceTarget } from "./lib/terminalSurfaceTarget";
+export { isPtyRunning, usePtyActivityStore } from "./lib/ptyActivity";
 export {
   type TerminalPathDropTarget,
   useTerminalFileDrop,

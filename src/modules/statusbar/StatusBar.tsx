@@ -29,6 +29,8 @@ type Props = {
   /** Only rendered when the AI panel is open and a key is loaded. */
   hasComposer: boolean;
   privateActive: boolean;
+  /** Opens the sidebar Problems panel. */
+  onOpenProblems?: () => void;
 };
 
 export function StatusBar({
@@ -41,6 +43,7 @@ export function StatusBar({
   onOpenAi,
   hasComposer,
   privateActive,
+  onOpenProblems,
 }: Props) {
   const panelOpen = useChatStore((s) => s.panelOpen);
 
@@ -50,7 +53,10 @@ export function StatusBar({
         <WorkspaceEnvSelector onSelect={onWorkspaceChange} />
         <CwdBreadcrumb cwd={cwd} filePath={filePath} home={home} onCd={onCd} />
         <LspStatusPill filePath={filePath ?? null} />
-        <DiagnosticsBadge filePath={filePath ?? null} />
+        <DiagnosticsBadge
+          filePath={filePath ?? null}
+          onOpen={onOpenProblems}
+        />
         {privateActive ? (
           <Tooltip>
             <TooltipTrigger asChild>

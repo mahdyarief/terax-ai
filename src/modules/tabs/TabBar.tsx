@@ -23,9 +23,11 @@ import {
 import { resolveDisplayName } from "@/modules/editor/lib/languageResolver";
 import { FileIcon } from "@/modules/explorer/FileIcon";
 import {
+  isPtyRunning,
   leafIds,
   ptyIdForLeaf,
   useAgentActivityStore,
+  usePtyActivityStore,
 } from "@/modules/terminal";
 import {
   ArrowRight01Icon,
@@ -625,8 +627,12 @@ function terminalPtyIds(tab: TerminalTab): number[] {
  * Non-terminal tabs never reach this component and subscribe to nothing.
  */
 function TerminalTabIcon({ tab }: { tab: TerminalTab }) {
+  const ids = terminalPtyIds(tab);
   const agentStatus = useAgentActivityStore(
-    useShallow((s) => selectTabAgentStatus(s, terminalPtyIds(tab))),
+    useShallow((s) => selectTabAgentStatus(s, ids)),
+  );
+  const ptyRunning = usePtyActivityStore(
+    useShallow((s) => isPtyRunning(s, ids)),
   );
   if (agentStatus.state === "attention") {
     return (
@@ -654,6 +660,22 @@ function TerminalTabIcon({ tab }: { tab: TerminalTab }) {
   ) {
     return (
       <AgentIcon agent={agentStatus.agent} size={14} className="shrink-0" />
+    );
+  }
+  if (agentStatus.state === null && ptyRunning) {
+    return (
+      <span className="relative inline-flex shrink-0 items-center justify-center">
+        <HugeiconsIcon
+          icon={ComputerTerminal02Icon}
+          size={14}
+          strokeWidth={2}
+          className="shrink-0"
+        />
+        <span
+          aria-label="Terminal active"
+          className="absolute -bottom-0.5 -right-0.5 size-1.5 rounded-full bg-emerald-500/80"
+        />
+      </span>
     );
   }
   return (

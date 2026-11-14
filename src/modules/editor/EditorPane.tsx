@@ -17,6 +17,8 @@ import { Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { vim } from "@replit/codemirror-vim";
 import { useAssetGrant } from "@/lib/useAssetGrant";
+import { isHtmlPath } from "@/lib/utils";
+import { MarkdownViewToggle } from "@/modules/markdown";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import {
   forwardRef,
@@ -63,6 +65,7 @@ import { MediaPreview } from "./MediaPreview";
 import { delimitedTextKind } from "./lib/csvPreview";
 import { CsvPreview } from "./CsvPreview";
 import { DocxPreview } from "./DocxPreview";
+import { HtmlPreview } from "./HtmlPreview";
 import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
 initVimGlobals();
@@ -149,6 +152,8 @@ export const EditorPane = memo(
     const [langId, setLangId] = useState<string | null>(null);
     const [csvRawPath, setCsvRawPath] = useState<string | null>(null);
     const csvRaw = csvRawPath === path;
+    const [htmlSourcePath, setHtmlSourcePath] = useState<string | null>(null);
+    const htmlSource = htmlSourcePath === path;
     const apiKeyRef = useRef<string | null>(null);
 
     useEffect(() => {
@@ -598,7 +603,17 @@ export const EditorPane = memo(
       const isDocx = kind === "docx";
       const isXlsx = kind === "xlsx";
 
-      if (isImage || isVideo || isAudio || isPdf || isDocx || isXlsx) {
+      // Office documents are read over IPC, so they need no asset grant.
+      if (isDocx || isXlsx) {
+        return (
+          <div className="flex h-full min-h-0 flex-col items-center justify-center bg-background p-4 overflow-auto">
+            {isDocx && <DocxPreview path={path} size={doc.size} />}
+            {isXlsx && <SpreadsheetPreview path={path} size={doc.size} />}
+          </div>
+        );
+      }
+
+      if (isImage || isVideo || isAudio || isPdf) {
         const assetUrl = assetGrant.urlFor(path);
         if (!assetUrl)
           return (
@@ -647,8 +662,6 @@ export const EditorPane = memo(
                 title={path.split("/").pop()}
               />
             )}
-            {isDocx && <DocxPreview src={assetUrl} size={doc.size} />}
-            {isXlsx && <SpreadsheetPreview src={assetUrl} size={doc.size} />}
           </div>
         );
       }
@@ -689,28 +702,41 @@ export const EditorPane = memo(
       );
     }
 
+    const isHtml = doc.status === "ready" && isHtmlPath(path);
     return (
-      <div className="flex h-full min-h-0 flex-col zoom-exempt">
-        <CodeMirror
-          ref={cmRef}
-          value={doc.content}
-          onChange={onChange}
-          theme={themeExt}
-          extensions={extensions}
-          height="100%"
-          className="terax-code-editor flex-1 min-h-0 overflow-hidden"
-          basicSetup={{
-            lineNumbers: true,
-            highlightActiveLineGutter: true,
-            foldGutter: true,
-            bracketMatching: true,
-            closeBrackets: true,
-            autocompletion: true,
-            highlightActiveLine: true,
-            highlightSelectionMatches: true,
-            searchKeymap: true,
-          }}
-        />
+      <div className="relative flex h-full min-h-0 flex-col zoom-exempt">
+        {isHtml && (
+          <MarkdownViewToggle
+            mode={htmlSource ? "raw" : "rendered"}
+            onChange={(mode) => setHtmlSourcePath(mode === "raw" ? path : null)}
+          />
+        )}
+        {isHtml && !htmlSource ? (
+          <div className="h-full min-h-0 flex-1">
+            <HtmlPreview html={doc.content} />
+          </div>
+        ) : (
+          <CodeMirror
+            ref={cmRef}
+            value={doc.content}
+            onChange={onChange}
+            theme={themeExt}
+            extensions={extensions}
+            height="100%"
+            className="terax-code-editor flex-1 min-h-0 overflow-hidden"
+            basicSetup={{
+              lineNumbers: true,
+              highlightActiveLineGutter: true,
+              foldGutter: true,
+              bracketMatching: true,
+              closeBrackets: true,
+              autocompletion: true,
+              highlightActiveLine: true,
+              highlightSelectionMatches: true,
+              searchKeymap: true,
+            }}
+          />
+        )}
       </div>
     );
   }),

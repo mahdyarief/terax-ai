@@ -41,6 +41,7 @@ import { useControlBridge } from "@/modules/control";
 import {
   type EditorPaneHandle,
   NewEditorDialog,
+  ProblemsPanel,
   useApplyEditorFontSize,
   useEditorFileSync,
 } from "@/modules/editor";
@@ -52,6 +53,8 @@ import {
   type SearchTarget,
 } from "@/modules/header";
 import { setLspNavigator } from "@/modules/lsp";
+import { setPreviewNavigator } from "@/modules/preview";
+import { isAllowedPreviewUrl } from "@/modules/preview/lib/previewUrl";
 import type { PreviewPaneHandle } from "@/modules/preview";
 import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
 import { usePreferencesStore } from "@/modules/settings/preferences";
@@ -369,6 +372,15 @@ export default function App() {
   const { hasComposer, keysLoaded } = useAiBootstrap();
 
   const activeTab = tabs.find((t) => t.id === activeId);
+  const [secondaryTabId, setSecondaryTabId] = useState<number | null>(null);
+  const secondaryActiveTab =
+    secondaryTabId == null
+      ? undefined
+      : tabs.find((t) => t.id === secondaryTabId);
+  useEffect(() => {
+    if (secondaryTabId == null) return;
+    if (!tabs.some((t) => t.id === secondaryTabId)) setSecondaryTabId(null);
+  }, [tabs, secondaryTabId]);
   const isTerminalTab = activeTab?.kind === "terminal";
   const isBlockTab = activeTerminalTab?.blocks === true;
   const isEditorTab = activeTab?.kind === "editor";
@@ -1342,13 +1354,28 @@ export default function App() {
     [openFileTab],
   );
 
-  // `target.side` (open to the side) has no host support yet: plain open.
   const openPaletteFile = useCallback(
     (path: string, target: OpenFileTarget) => {
+      if (target.side) {
+        // Open beside the active tab without stealing it: the new editor goes
+        // to the secondary pane, which mounts it on its own.
+        const id = openFileTab(path, true, { activate: false });
+        setSecondaryTabId(id);
+        if (target.line !== undefined) {
+          const h = editorRefs.current.get(id);
+          if (h) h.gotoLine(target.line, { focus: false });
+          else
+            pendingEditorNavigation.current.set(id, {
+              line: target.line,
+              focus: false,
+            });
+        }
+        return;
+      }
       if (target.line !== undefined) openContentHit(path, target.line);
       else handleOpenFile(path, true);
     },
-    [openContentHit, handleOpenFile],
+    [openContentHit, handleOpenFile, openFileTab],
   );
 
   const openControlFile = useCallback(
@@ -1395,6 +1422,17 @@ export default function App() {
     setLspNavigator({ openFile: openContentHit });
     return () => setLspNavigator(null);
   }, [openContentHit]);
+
+  useEffect(() => {
+    setPreviewNavigator({
+      openUrl: (url) => {
+        if (!isAllowedPreviewUrl(url)) return false;
+        openPreviewTab(url);
+        return true;
+      },
+    });
+    return () => setPreviewNavigator(null);
+  }, [openPreviewTab]);
 
   const insertHistoryCommand = useMemo(
     () =>
@@ -1523,7 +1561,7 @@ export default function App() {
                           pathDropTarget={terminalPathDropTarget}
                           visible={!sidebarCollapsed}
                         />
-                      ) : (
+                      ) : sidebarView === "source-control" ? (
                         <SourceControlPanel
                           open
                           sourceControl={sourceControl}
@@ -1536,6 +1574,8 @@ export default function App() {
                             handleFollowRepositoryContext
                           }
                         />
+                      ) : (
+                        <ProblemsPanel onOpenAt={openContentHit} />
                       )}
                     </div>
                     <SidebarRail
@@ -1570,6 +1610,9 @@ export default function App() {
                         onOpenCommitFile={openCommitFileDiffTab}
                         onGitHistorySearchHandle={setGitHistoryHandle}
                         onSetMarkdownView={setMarkdownView}
+                        secondaryActiveId={secondaryTabId}
+                        secondaryActiveTab={secondaryActiveTab}
+                        onCloseSecondary={() => setSecondaryTabId(null)}
                       />
                     </div>
 
@@ -1603,6 +1646,7 @@ export default function App() {
               privateActive={
                 activeTab?.kind === "terminal" && activeTab.private === true
               }
+              onOpenProblems={() => openSidebarView("problems")}
             />
           )}
 
