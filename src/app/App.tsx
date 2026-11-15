@@ -112,6 +112,7 @@ import {
   navigateFocusedBlocks,
   type PaneBounds,
   ptyIdForLeaf,
+  scrollFocusedTerminalToBottom,
   type TerminalPaneHandle,
   useAgentActivityStore,
   useTerminalFileDrop,
@@ -979,6 +980,9 @@ export default function App() {
       "terminal.clear": () => {
         clearFocusedTerminal();
       },
+      "terminal.scrollToBottom": () => {
+        scrollFocusedTerminalToBottom();
+      },
       "terminal.toggleInput": () =>
         window.dispatchEvent(new CustomEvent(TOGGLE_BLOCK_INPUT_EVENT)),
       "blocks.prev": () => navigateFocusedBlocks(-1),
@@ -1074,9 +1078,9 @@ export default function App() {
           () => !!captureActiveSelection()?.trim(),
         );
       }
-      if (id === "terminal.clear") {
-        // Only intercept ⌘K while a terminal is focused; elsewhere let the key
-        // fall through (we never preventDefault when disabled).
+      if (id === "terminal.clear" || id === "terminal.scrollToBottom") {
+        // Only intercept the chord while a terminal is focused; elsewhere let
+        // it fall through (we never preventDefault when disabled).
         const target =
           (e.target as HTMLElement | null) ?? document.activeElement;
         return !isTerminalSurfaceTarget(target);

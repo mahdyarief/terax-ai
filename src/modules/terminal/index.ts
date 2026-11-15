@@ -16,6 +16,7 @@ export {
   leafIdForPty,
   navigateFocusedBlocks,
   ptyIdForLeaf,
+  scrollFocusedTerminalToBottom,
   whenSessionReady,
   writeToSession,
 } from "./lib/terminalSessionApi";

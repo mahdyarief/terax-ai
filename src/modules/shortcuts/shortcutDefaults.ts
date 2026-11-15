@@ -26,6 +26,7 @@ import type { KeyBinding, ShortcutId } from "./shortcuts";
 export const MAC_DEFAULTS: Readonly<Record<ShortcutId, readonly KeyBinding[]>> =
   {
     "terminal.clear": [{ meta: true, key: "k" }],
+    "terminal.scrollToBottom": [{ shift: true, meta: true, key: "ArrowDown" }],
     "commandPalette.open": [
       { shift: true, meta: true, key: "p" },
       { meta: true, key: "k" },
@@ -114,6 +115,7 @@ export const WIN_LINUX_DEFAULTS: Readonly<
   "pane.swapDown": [{ ctrl: true, alt: true, key: "ArrowDown" }],
   "pane.source": [{ ...CS, key: ";" }],
   "terminal.clear": [],
+  "terminal.scrollToBottom": [{ ctrl: true, alt: true, key: "End" }],
   "terminal.toggleInput": [{ ...CS, key: "y" }],
   "blocks.prev": [{ ...CS, key: "ArrowUp" }],
   "blocks.next": [{ ...CS, key: "ArrowDown" }],

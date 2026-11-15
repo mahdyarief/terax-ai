@@ -20,6 +20,7 @@ import {
 // Both tables are tested regardless of the platform the tests run on.
 
 const MAC_EXPECTED = `terminal.clear: Cmd+k
+terminal.scrollToBottom: Shift+Cmd+ArrowDown
 commandPalette.open: Shift+Cmd+p, Cmd+k
 commandPalette.files: Cmd+p
 commandPalette.content: Shift+Cmd+h

@@ -407,6 +407,61 @@ html *::-webkit-scrollbar {
   );
 }
 
+/* Opt-in visible scrollbars. The global rules above hide every native bar, so
+ * a region that should stay scrollable without a wheel opts back in here. */
+.terax-visible-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--foreground) 18%, transparent)
+    transparent;
+}
+.terax-visible-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  display: block;
+}
+.terax-visible-scrollbar::-webkit-scrollbar-track,
+.terax-visible-scrollbar::-webkit-scrollbar-corner {
+  background: transparent;
+}
+.terax-visible-scrollbar::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 20%, transparent);
+  background-clip: padding-box;
+}
+.terax-visible-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--foreground) 34%, transparent);
+  background-clip: padding-box;
+}
+
+/* The terminal surface keeps its own proxy scrollbar element, which the global
+ * hide rule was blanking out. Restore it on the scrollback container only. */
+[data-terax-terminal-surface] > [role="scrollbar"] {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--foreground) 20%, transparent)
+    transparent;
+}
+[data-terax-terminal-surface] > [role="scrollbar"]::-webkit-scrollbar {
+  width: 10px;
+  height: 0;
+  display: block;
+}
+[data-terax-terminal-surface] > [role="scrollbar"]::-webkit-scrollbar-track,
+[data-terax-terminal-surface] > [role="scrollbar"]::-webkit-scrollbar-corner {
+  background: transparent;
+}
+[data-terax-terminal-surface] > [role="scrollbar"]::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--foreground) 20%, transparent);
+  background-clip: padding-box;
+}
+[data-terax-terminal-surface]
+  > [role="scrollbar"]::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--foreground) 34%, transparent);
+  background-clip: padding-box;
+}
+
 /* Motion tokens. Reduced-motion zeroes the durations as a global snap. */
 :root {
   --dur-fast: 160ms;

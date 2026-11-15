@@ -12,6 +12,7 @@ import {
   hasGhosttySession,
   interruptGhosttySession,
   pasteIntoGhosttySession,
+  scrollGhosttySessionToBottom,
   submitToGhosttySession,
   whenGhosttySessionReady,
   writeToGhosttySession,
@@ -140,6 +141,12 @@ export function blockWatermarkState(leafId: number): WatermarkState {
 export function clearFocusedTerminal(): boolean {
   const ghosttyLeaf = ghosttyFocusedLeaf();
   if (ghosttyLeaf !== null) return clearGhosttySession(ghosttyLeaf);
+  return false;
+}
+
+export function scrollFocusedTerminalToBottom(): boolean {
+  const ghosttyLeaf = ghosttyFocusedLeaf();
+  if (ghosttyLeaf !== null) return scrollGhosttySessionToBottom(ghosttyLeaf);
   return false;
 }
 

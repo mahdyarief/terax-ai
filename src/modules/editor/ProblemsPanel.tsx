@@ -60,7 +60,7 @@ export function ProblemsPanel({ onOpenAt }: Props) {
   }
 
   return (
-    <div className="h-full min-h-0 overflow-auto px-1.5 py-1 text-[11px]">
+    <div className="terax-visible-scrollbar h-full min-h-0 overflow-auto px-1.5 py-1 text-[11px]">
       {groups.map((group) => (
         <div key={group.path} className="mb-1">
           <div className="flex items-center gap-1.5 rounded px-1 py-0.5 font-medium text-foreground/90">

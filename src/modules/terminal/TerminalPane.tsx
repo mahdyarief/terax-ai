@@ -1,6 +1,8 @@
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { TerminalSearchController } from "@/modules/terminal/search/TerminalSearchController";
 import { useTheme } from "@/modules/theme";
+import { ArrowDown01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import {
   forwardRef,
   lazy,
@@ -13,11 +15,11 @@ import {
 } from "react";
 import type { TerminalBackendKind } from "./backend/contracts";
 import { terminalBackendFor } from "./backend/selection";
-import {
-  useGhosttyTerminalSession,
-  ghosttyBlockGeometry,
-} from "./ghostty/useGhosttyTerminalSession";
 import { ghosttyBlocks } from "./ghostty/ghosttyBlockSessions";
+import {
+  ghosttyBlockGeometry,
+  useGhosttyTerminalSession,
+} from "./ghostty/useGhosttyTerminalSession";
 
 export type TerminalPaneHandle = {
   write: (data: string) => void;
@@ -74,6 +76,7 @@ const GhosttyTerminalPane = memo(
     const containerRef = useRef<HTMLDivElement>(null);
     const down = useRef<{ x: number; y: number } | null>(null);
     const { resolvedMode, activeTheme } = useTheme();
+    const [scrolledUp, setScrolledUp] = useState(false);
     const session = useGhosttyTerminalSession({
       leafId,
       backend,
@@ -86,6 +89,20 @@ const GhosttyTerminalPane = memo(
       onExit: (code) => onExit?.(leafId, code),
       onCwd: (cwd) => onCwd?.(leafId, cwd),
     });
+
+    useEffect(() => {
+      const model = session.model;
+      if (!model) {
+        setScrolledUp(false);
+        return;
+      }
+      const update = () =>
+        setScrolledUp(
+          model.scrollPosition().offset > 0 && !model.modes().alternateScreen,
+        );
+      update();
+      return model.subscribeDamage(update);
+    }, [session.model]);
 
     useEffect(() => {
       void resolvedMode;
@@ -175,6 +192,17 @@ const GhosttyTerminalPane = memo(
           <Suspense fallback={null}>
             <GhosttyBlockOverlay leafId={leafId} />
           </Suspense>
+        )}
+        {visible && session.model && scrolledUp && !session.error && (
+          <button
+            type="button"
+            aria-label="Scroll to bottom"
+            title="Scroll to bottom"
+            className="absolute bottom-3 right-[18px] z-10 flex size-8 items-center justify-center rounded-full border bg-background/90 text-muted-foreground shadow-sm hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            onClick={() => session.model?.scrollToBottom()}
+          >
+            <HugeiconsIcon icon={ArrowDown01Icon} size={16} strokeWidth={2} />
+          </button>
         )}
         {session.error && (
           <div

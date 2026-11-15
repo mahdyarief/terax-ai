@@ -381,6 +381,12 @@ export function clearGhosttySession(leafId: number): boolean {
   return true;
 }
 
+export function scrollGhosttySessionToBottom(leafId: number): boolean {
+  const session = sessions.get(leafId);
+  if (!session?.model || session.disposed) return false;
+  return session.model.scrollToBottom();
+}
+
 export function pasteIntoGhosttySession(leafId: number, text: string): boolean {
   const blocks = ghosttyBlocks(leafId);
   if (blocks?.getMode() === "prompt" && blocks.paste) {

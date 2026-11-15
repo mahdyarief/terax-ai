@@ -31,6 +31,7 @@ export type ShortcutId =
   | "pane.swapDown"
   | "pane.source"
   | "terminal.clear"
+  | "terminal.scrollToBottom"
   | "terminal.toggleInput"
   | "blocks.prev"
   | "blocks.next"
@@ -88,6 +89,11 @@ const SHORTCUT_META: Omit<Shortcut, "defaultBindings">[] = [
   {
     id: "terminal.clear",
     label: "Clear terminal",
+    group: "Terminal",
+  },
+  {
+    id: "terminal.scrollToBottom",
+    label: "Scroll terminal to bottom",
     group: "Terminal",
   },
   {
