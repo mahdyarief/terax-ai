@@ -84,6 +84,11 @@ import {
   useSpaces,
   useSpacesBoot,
 } from "@/modules/spaces";
+import {
+  reclaimHost,
+  SPACE_RECLAIM_REQUEST_EVENT,
+  SPACE_TABS_MOVED_EVENT,
+} from "@/modules/spaces/lib/crossWindowSync";
 import { planSpaceHandoff } from "@/modules/spaces/lib/handoff";
 import { StatusBar } from "@/modules/statusbar";
 import {
@@ -130,7 +135,7 @@ import {
   workspaceScopeKey,
 } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   lazy,
@@ -1344,6 +1349,7 @@ export default function App() {
         SPACE_DELETED_EVENT,
         SPACE_META_CHANGED_EVENT,
         SPACE_HOST_CHANGED_EVENT,
+        SPACE_TABS_MOVED_EVENT,
         applyHostChanged,
         applyDeletedSpace,
       } = await import("@/modules/spaces/lib/crossWindowSync");
@@ -1413,6 +1419,44 @@ export default function App() {
             })();
           },
         ),
+        listen<{ spaceId: string; toWindow: string }>(
+          SPACE_RECLAIM_REQUEST_EVENT,
+          (event) => {
+            const { spaceId, toWindow } = event.payload ?? {};
+            if (!spaceId || toWindow !== "main" || windowLabel !== `space-${spaceId}`) {
+              return;
+            }
+            void (async () => {
+              try {
+                await flushNow();
+                detachTabsForSpace(spaceId);
+                await getCurrentWindow().destroy();
+              } catch (e) {
+                console.error("[terax] reclaim handoff failed:", e);
+                void refreshRegistry();
+              }
+            })();
+          },
+        ),
+        listen<{
+          spaceId: string;
+          fromWindow: string;
+          toWindow: string;
+          tabs: import("@/modules/spaces/lib/serialize").SerializedTab[];
+        }>(SPACE_TABS_MOVED_EVENT, (event) => {
+          const payload = event.payload;
+          if (!payload || payload.toWindow !== windowLabel) return;
+          void (async () => {
+            const { hydrateTabs } = await import(
+              "@/modules/spaces/lib/serialize"
+            );
+            const hydrated = hydrateTabs(payload.tabs, payload.spaceId, allocId);
+            if (hydrated.length === 0) return;
+            attachTabsForSpace(payload.spaceId, hydrated);
+            setActiveId(hydrated[0].id);
+            useSpaces.getState().setActive(payload.spaceId);
+          })();
+        }),
         listen<{ spaceId: string }>(SPACE_DELETED_EVENT, (event) => {
           const id = event.payload?.spaceId;
           if (!id) {
@@ -1443,17 +1487,64 @@ export default function App() {
       const target = useSpaces
         .getState()
         .spaces.find((s) => s.id === targetSpaceId);
-      if (target && (target.hostWindowLabel ?? "main") !== windowLabel) {
-        toast("That space is open in another window", {
-          description: "Switch to its window to move tabs there.",
-        });
+      const targetWindow = target?.hostWindowLabel ?? "main";
+      if (target && targetWindow !== windowLabel) {
+        const tab = tabsRef.current.find((t) => t.id === tabId);
+        if (!tab) return;
+        void (async () => {
+          const { serializeTabs } = await import(
+            "@/modules/spaces/lib/serialize"
+          );
+          const serialized = serializeTabs([tab]);
+          if (serialized.length === 0) {
+            toast("This tab cannot move between windows", {
+              description: "Its type has no cross-window representation.",
+            });
+            return;
+          }
+          try {
+            await emitTo(targetWindow, SPACE_TABS_MOVED_EVENT, {
+              spaceId: targetSpaceId,
+              fromWindow: windowLabel,
+              toWindow: targetWindow,
+              tabs: serialized,
+            });
+          } catch (e) {
+            console.error("[terax] cross-window tab move failed:", e);
+            toast("Could not move the tab", {
+              description: "Its window may have closed.",
+            });
+            return;
+          }
+          closeTab(tabId);
+        })();
         return;
       }
       if (moveTabToSpace(tabId, targetSpaceId)) {
         useSpaces.getState().setActive(targetSpaceId);
       }
     },
-    [moveTabToSpace, windowLabel],
+    [moveTabToSpace, closeTab, windowLabel],
+  );
+
+  const handleBringSpaceToWindow = useCallback(
+    (spaceId: string) => {
+      const space = useSpaces
+        .getState()
+        .spaces.find((s) => s.id === spaceId);
+      const host = reclaimHost(space, windowLabel);
+      if (!host) return;
+      void emitTo(host, SPACE_RECLAIM_REQUEST_EVENT, {
+        spaceId,
+        toWindow: windowLabel,
+      }).catch((e) => {
+        console.error("[terax] reclaim request failed:", e);
+        toast("Could not bring the space back", {
+          description: "Its window may have closed.",
+        });
+      });
+    },
+    [windowLabel],
   );
 
   const handleReorderTab = useCallback(
@@ -1495,6 +1586,7 @@ export default function App() {
       onNewSpace={() => void handleNewSpace()}
       onDeleteSpace={handleDeleteSpace}
       onOpenSpaceInWindow={handleOpenSpaceInWindow}
+      onBringSpaceToWindow={handleBringSpaceToWindow}
       onNewTabInSpace={handleNewTabInSpace}
       onJumpTab={jumpToTab}
       onCloseTab={handleClose}

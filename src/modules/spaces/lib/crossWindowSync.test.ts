@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyHostChanged,
   type HostChangedPayload,
+  reclaimHost,
 } from "./crossWindowSync";
 import type { SpaceMeta } from "./store";
 
@@ -63,5 +64,24 @@ describe("applyHostChanged", () => {
     const once = applyHostChanged(spaces(), payload);
     const twice = applyHostChanged(once, payload);
     expect(twice).toEqual(once);
+  });
+});
+
+describe("reclaimHost", () => {
+  it("returns the current host when main wants the space back", () => {
+    expect(reclaimHost({ hostWindowLabel: "space-a" }, "main")).toBe("space-a");
+  });
+
+  it("returns null for a space already hosted by main", () => {
+    expect(reclaimHost({ hostWindowLabel: "main" }, "main")).toBeNull();
+    expect(reclaimHost({}, "main")).toBeNull();
+  });
+
+  it("is unavailable from space windows", () => {
+    expect(reclaimHost({ hostWindowLabel: "space-b" }, "space-a")).toBeNull();
+  });
+
+  it("returns null for an unknown space", () => {
+    expect(reclaimHost(undefined, "main")).toBeNull();
   });
 });

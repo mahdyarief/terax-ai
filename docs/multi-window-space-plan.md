@@ -288,7 +288,7 @@ Update checklist ini saat implementasi berjalan. Satu item selesai = centang + c
 ### Fase 7 — Close semantics
 - [x] Reclaim space ke `"main"` saat space window ditutup
 - [x] Keputusan close `"main"` + cleanup semua child window — `main.on_window_event(Destroyed)` kini menutup semua `space-*` (tidak hanya di macOS) dengan cleanup PTY per-label via event Destroyed mereka sendiri; sebelumnya terbungkus `#[cfg(target_os = "macos")]` sehingga tidak jalan di Windows/Linux
-- [x] Move tab lintas window: diblokir dengan toast (disabled by design di v1)
+- [x] Move tab lintas window via respawn: tab diserialisasi, dikirim ke window host lewat event `spaces:tabs-moved`, lalu di-hydrate di sana; window sumber menutup tab dan mematikan PTY-nya (sesi terminal restart di tujuan)
 
 ### Fase 8 — Opsional
 - [ ] Transfer live PTY / hub rebind (v1 memakai respawn mode)
@@ -303,7 +303,9 @@ Update checklist ini saat implementasi berjalan. Satu item selesai = centang + c
 - `src-tauri/src/lib.rs` juga memakai `"main"` untuk settings window dan reclaim; ini memang disengaja untuk v1.
 - Capability `default.json`, `desktop.json`, `clipboard.json` sekarang mencakup glob `space-*`.
 - `src/app/App.tsx` + `src/modules/spaces/*` sudah memakai `windowLabel`, boot scoped, persistence scoped, dan tab hosting guard.
-- Batasan v1: handoff memakai respawn mode (PTY lama didispose, tab state dipersist, target me-rehydrate cold tabs), bukan transfer live PTY. Rebind live PTY sengaja ditunda karena `owner = webview.label()` juga mengikat cleanup per label, `StreamTokens` per `(label, token)`, asset grants, dan jalur AI/control readiness; rebind parsial berisiko memutus proses atau membocorkan sesi. Move tab lintas window diblokir; konfirmasi foreground process bersifat best-effort.
+- Batasan v1: handoff memakai respawn mode (PTY lama didispose, tab state dipersist, target me-rehydrate cold tabs), bukan transfer live PTY. Rebind live PTY sengaja ditunda karena `owner = webview.label()` juga mengikat cleanup per label, `StreamTokens` per `(label, token)`, asset grants, dan jalur AI/control readiness; rebind parsial berisiko memutus proses atau membocorkan sesi. Move tab lintas window juga memakai respawn (serialize → `spaces:tabs-moved` → hydrate), jadi proses yang berjalan di tab tersebut berhenti; konfirmasi foreground process bersifat best-effort.
+- Kontrol host manual: aksi "Bring back to this window" hanya tersedia di `main` karena handler `Destroyed` backend selalu mengembalikan space yang window-nya ditutup ke `"main"`. Alurnya: `main` mengirim `spaces:reclaim-request` ke host, host `flushNow()` → detach tab → `destroy()` window-nya, lalu broadcast `host-changed` memicu `main` hydrate dari snapshot di disk.
+- Geometri window `space-*` sudah dipulihkan otomatis oleh `tauri-plugin-window-state` per label; tidak ada kode geometri tambahan.
 - 2026-11-15: rollback handoff kini memakai flag `detached` agar snapshot lokal tidak di-attach ulang ketika `flushNow()` gagal sebelum `detachTabsForSpace`; judul OS window `space-*` mengikuti nama space lewat argumen ketiga `useWindowTitle`.
 - Upstream sync: gunakan `git fetch upstream && git merge upstream/main` pada branch `dydev` secara berkala (merge, bukan rebase-force) agar perubahan tidak hilang.
 

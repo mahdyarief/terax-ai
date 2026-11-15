@@ -40,8 +40,15 @@ export function useSpacePersistence({
   }
 
   const flush = useCallback(async (snap: Snapshot): Promise<void> => {
+    const spaceState = useSpaces.getState();
+    const hosted = new Set(
+      spaceState.spaces
+        .filter((s) => (s.hostWindowLabel ?? "main") === spaceState.windowLabel)
+        .map((s) => s.id),
+    );
     const groups = new Map<string, Tab[]>();
     for (const t of snap.tabs) {
+      if (!hosted.has(t.spaceId)) continue;
       const arr = groups.get(t.spaceId);
       if (arr) arr.push(t);
       else groups.set(t.spaceId, [t]);

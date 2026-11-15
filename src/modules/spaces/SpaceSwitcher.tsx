@@ -9,6 +9,7 @@ import { useShortcutLabel } from "@/modules/shortcuts";
 import { labelFor, type Tab, TabIcon } from "@/modules/tabs";
 import {
   ArrowDown01Icon,
+  ArrowLeft02Icon,
   ArrowRight01Icon,
   ArrowUpRight02Icon,
   Cancel01Icon,
@@ -32,6 +33,7 @@ type Props = {
   onNewSpace: () => void;
   onDeleteSpace: (id: string) => void;
   onOpenSpaceInWindow: (id: string) => void;
+  onBringSpaceToWindow: (id: string) => void;
   onNewTabInSpace: (spaceId: string) => void;
   onJumpTab: (id: number) => void;
   onCloseTab: (id: number) => void;
@@ -80,6 +82,7 @@ export function SpaceSwitcher({
   onNewSpace,
   onDeleteSpace,
   onOpenSpaceInWindow,
+  onBringSpaceToWindow,
   onNewTabInSpace,
   onJumpTab,
   onCloseTab,
@@ -297,6 +300,7 @@ export function SpaceSwitcher({
               onCancelRename={() => setEditingId(null)}
               onDelete={() => onDeleteSpace(sp.id)}
               onOpenInWindow={() => onOpenSpaceInWindow(sp.id)}
+              onBringBack={() => onBringSpaceToWindow(sp.id)}
               windowLabel={windowLabel}
               onNewTab={() => onNewTabInSpace(sp.id)}
               onJumpTab={onJumpTab}
@@ -361,6 +365,7 @@ type SpaceRowProps = {
   onCancelRename: () => void;
   onDelete: () => void;
   onOpenInWindow: () => void;
+  onBringBack: () => void;
   windowLabel: string;
   onNewTab: () => void;
   onJumpTab: (id: number) => void;
@@ -387,6 +392,7 @@ function SpaceRow({
   onCancelRename,
   onDelete,
   onOpenInWindow,
+  onBringBack,
   windowLabel,
   onNewTab,
   onJumpTab,
@@ -476,6 +482,13 @@ function SpaceRow({
                 label={hostedHere ? "Open in new window" : "Focus window"}
                 onClick={onOpenInWindow}
               />
+              {!hostedHere && windowLabel === "main" && (
+                <RowAction
+                  icon={ArrowLeft02Icon}
+                  label="Bring back to this window"
+                  onClick={onBringBack}
+                />
+              )}
               <RowAction icon={PlusSignIcon} label="New tab" onClick={onNewTab} />
               {canDelete && (
                 <RowAction

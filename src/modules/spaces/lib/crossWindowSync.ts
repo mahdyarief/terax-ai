@@ -1,3 +1,4 @@
+import type { SerializedTab } from "./serialize";
 import type { SpaceMeta } from "./store";
 import { loadAll } from "./store";
 import { mergeSpacesByUpdatedAt } from "./sync";
@@ -7,6 +8,10 @@ export { applyDeletedSpace } from "./sync";
 export const SPACE_META_CHANGED_EVENT = "terax:space-meta-changed";
 export const SPACE_HOST_CHANGED_EVENT = "spaces:host-changed";
 export const SPACE_DELETED_EVENT = "terax:space-deleted";
+/** A window asks the current host to hand the space back. */
+export const SPACE_RECLAIM_REQUEST_EVENT = "spaces:reclaim-request";
+/** Serialized tabs are handed from one window to another. */
+export const SPACE_TABS_MOVED_EVENT = "spaces:tabs-moved";
 
 export type HostChangedPayload = {
   spaceId: string;
@@ -15,11 +20,34 @@ export type HostChangedPayload = {
   updatedAt?: number;
 };
 
+export type ReclaimRequestPayload = {
+  spaceId: string;
+  /** Window that should become the new host / receive the tabs. */
+  toWindow: string;
+};
+
+export type TabsMovedPayload = {
+  spaceId: string;
+  fromWindow: string;
+  toWindow: string;
+  /** Serialized tab snapshot from the source window. */
+  tabs: SerializedTab[];
+};
+
 /**
- * Pure re-map of the registry: only the matching space takes the new host.
- * Returns the same array reference when the space is unknown so callers can
- * detect a no-op and skip the disk write.
+ * "Bring back" is only valid from `main`: the backend's Destroyed handler
+ * always reassigns a closed space window back to `main`, so reclaiming into a
+ * non-main window would be immediately overwritten.
  */
+export function reclaimHost(
+  space: Pick<SpaceMeta, "hostWindowLabel"> | undefined,
+  windowLabel: string,
+): string | null {
+  if (windowLabel !== "main") return null;
+  const host = space?.hostWindowLabel ?? "main";
+  return host === windowLabel ? null : host;
+}
+
 export function applyHostChanged(
   spaces: SpaceMeta[],
   payload: HostChangedPayload,
