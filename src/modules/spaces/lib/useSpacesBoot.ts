@@ -8,12 +8,20 @@ import { useEffect, useRef } from "react";
 import { activeSpaceEnv, freshTabCwd } from "./activeSpace";
 import { freshTerminalTab, hydrateTabs } from "./serialize";
 import { loadAll, type SpaceMeta, saveActiveId, saveSpacesList } from "./store";
-import { useSpaces } from "./useSpaces";
+import { selectHostedSpaces, useSpaces } from "./useSpaces";
+
+export function spacesForWindow(
+  spaces: SpaceMeta[],
+  windowLabel: string,
+): SpaceMeta[] {
+  return selectHostedSpaces(spaces, windowLabel);
+}
 
 type Params = {
   ready: boolean;
   launchCwd: string | null;
   home: string | null;
+  windowLabel: string;
   allocId: () => number;
   replaceTabs: (tabs: Tab[], activeId: number) => void;
   markBooted: () => void;
@@ -38,6 +46,7 @@ export function useSpacesBoot({
   ready,
   launchCwd,
   home,
+  windowLabel,
   allocId,
   replaceTabs,
   markBooted,
@@ -52,54 +61,61 @@ export function useSpacesBoot({
 
     void (async () => {
       try {
-        const { spaces, activeId, states } = await loadAll();
+        const { spaces, activeIdByWindow, states } = await loadAll();
+        const hosted = spacesForWindow(spaces, windowLabel);
 
-        if (spaces.length === 0) {
-          const root = launchCwd ?? home ?? null;
-          // Hydrate prefs before reading the saved workspace env.
-          await usePreferencesStore
-            .getState()
-            .init()
-            .catch(() => {});
-          const meta: SpaceMeta = {
-            id: DEFAULT_SPACE_ID,
-            name: "Default",
-            root,
-            env: parseWorkspaceScopeKey(
-              usePreferencesStore.getState().defaultWorkspaceEnv,
-            ),
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-          };
-          await saveSpacesList([meta]);
-          await saveActiveId(DEFAULT_SPACE_ID);
-          setActiveSpaceForNewTabs(DEFAULT_SPACE_ID);
-          useSpaces.getState().hydrate([meta], DEFAULT_SPACE_ID);
+        useSpaces.setState({ windowLabel });
+
+        if (hosted.length === 0) {
+          if (spaces.length === 0) {
+            // First run: there is no persisted space at all. Create the default
+            // space for this window (home window is "main").
+            const meta: SpaceMeta = {
+              id: DEFAULT_SPACE_ID,
+              name: "Default",
+              root: launchCwd ?? home ?? null,
+              env: parseWorkspaceScopeKey(
+                usePreferencesStore.getState().defaultWorkspaceEnv,
+              ),
+              hostWindowLabel: windowLabel || "main",
+              createdAt: Date.now(),
+              updatedAt: Date.now(),
+            };
+            await saveSpacesList([meta]);
+            await saveActiveId(DEFAULT_SPACE_ID);
+            setActiveSpaceForNewTabs(DEFAULT_SPACE_ID);
+            useSpaces.getState().hydrate([meta], DEFAULT_SPACE_ID);
+            return;
+          }
+          // No space is hosted here yet. Keep the full registry for the
+          // switcher, but render an empty tab list until a handoff arrives.
+          useSpaces.getState().hydrate(spaces, null, {});
+          setActiveSpaceForNewTabs("");
           return;
         }
 
         const restored: Tab[] = [];
-        for (const space of spaces) {
+        for (const space of hosted) {
           const st = states.get(space.id);
           if (!st) continue;
           restored.push(...hydrateTabs(st.tabs, space.id, allocId));
         }
 
-        const active =
-          activeId && spaces.some((s) => s.id === activeId)
-            ? activeId
-            : spaces[0].id;
-        setActiveSpaceForNewTabs(active);
+        const perWindow = activeIdByWindow[windowLabel] ?? null;
+        const saveActive = spaces.some((s) => s.id === perWindow)
+          ? perWindow!
+          : hosted[0].id;
+        setActiveSpaceForNewTabs(saveActive);
 
         // Apply the space's env+home before the fresh-tab fallback and spawns
         // below; env is set synchronously so cwd resolution picks WSL vs local.
-        const env = activeSpaceEnv(spaces, active);
+        const env = activeSpaceEnv(hosted, saveActive);
         const restoredHome = await adoptWorkspaceEnv(env);
 
         // Active space must never be empty, else its tab list shows nothing.
-        if (!restored.some((t) => t.spaceId === active)) {
+        if (!restored.some((t) => t.spaceId === saveActive)) {
           const cwd = freshTabCwd(env, restoredHome, launchCwd, home);
-          restored.push(freshTerminalTab(active, cwd, allocId));
+          restored.push(freshTerminalTab(saveActive, cwd, allocId));
         }
 
         await Promise.allSettled(
@@ -107,12 +123,16 @@ export function useSpacesBoot({
         );
 
         const initialActiveIndex: Record<string, number> = {};
-        for (const [id, st] of states)
-          initialActiveIndex[id] = st.activeTabIndex;
-        useSpaces.getState().hydrate(spaces, active, initialActiveIndex);
+        for (const space of hosted) {
+          const st = states.get(space.id);
+          if (st) initialActiveIndex[space.id] = st.activeTabIndex;
+        }
+        // Registry keeps every space (the switcher needs to show spaces hosted
+        // by other windows); only this window's tabs were restored above.
+        useSpaces.getState().hydrate(spaces, saveActive, initialActiveIndex);
 
-        const inActive = restored.filter((t) => t.spaceId === active);
-        const idx = states.get(active)?.activeTabIndex ?? 0;
+        const inActive = restored.filter((t) => t.spaceId === saveActive);
+        const idx = states.get(saveActive)?.activeTabIndex ?? 0;
         const activeTab = inActive[idx] ?? inActive[0] ?? restored[0];
         replaceTabs(restored, activeTab.id);
       } catch (e) {
@@ -125,6 +145,7 @@ export function useSpacesBoot({
     ready,
     launchCwd,
     home,
+    windowLabel,
     allocId,
     replaceTabs,
     markBooted,

@@ -39,7 +39,7 @@ export function useSpacePersistence({
     }
   }
 
-  const flush = useCallback((snap: Snapshot) => {
+  const flush = useCallback(async (snap: Snapshot): Promise<void> => {
     const groups = new Map<string, Tab[]>();
     for (const t of snap.tabs) {
       const arr = groups.get(t.spaceId);
@@ -47,6 +47,7 @@ export function useSpacePersistence({
       else groups.set(t.spaceId, [t]);
     }
 
+    const writes: Promise<void>[] = [];
     for (const [spaceId, group] of groups) {
       const serialized = serializeTabs(group);
       const prev = last.current.get(spaceId);
@@ -66,9 +67,18 @@ export function useSpacePersistence({
         continue;
       }
       last.current.set(spaceId, { json, activeTabIndex });
-      void saveState(spaceId, { tabs: serialized, activeTabIndex });
+      writes.push(saveState(spaceId, { tabs: serialized, activeTabIndex }));
     }
+    await Promise.all(writes);
   }, []);
+
+  const flushNow = useCallback((): Promise<void> => {
+    if (timer.current) {
+      clearTimeout(timer.current);
+      timer.current = null;
+    }
+    return flush(latest.current);
+  }, [flush]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -99,4 +109,6 @@ export function useSpacePersistence({
       flush(latest.current);
     };
   }, [enabled, flush]);
+
+  return { flushNow };
 }

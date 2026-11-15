@@ -103,6 +103,7 @@ export function useControlBridge({
   activeSpaceIdRef,
   onOpen,
 }: UseControlBridgeOptions): void {
+  const windowLabel = getCurrentWindow().label;
   useEffect(() => {
     if (!ready) return;
     let disposed = false;
@@ -114,6 +115,7 @@ export function useControlBridge({
           tabsRef.current ?? [],
           activeTabIdRef.current ?? 0,
           activeSpaceIdRef.current ?? DEFAULT_SPACE_ID,
+          windowLabel,
           request.caller.pane_id,
         );
         if (request.method === "identify") {

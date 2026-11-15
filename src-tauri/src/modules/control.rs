@@ -48,7 +48,8 @@ struct PaneCredential {
 
 struct ControlCore {
     runtime: OnceLock<RuntimeInfo>,
-    frontend_ready: AtomicBool,
+    ready_windows: Mutex<HashSet<String>>,
+    last_active_window: Mutex<Option<String>>,
     shutting_down: AtomicBool,
     active_connections: AtomicUsize,
     pending: Mutex<HashMap<String, SyncSender<FrontendResponse>>>,
@@ -65,7 +66,8 @@ impl Default for ControlState {
     fn default() -> Self {
         Self(Arc::new(ControlCore {
             runtime: OnceLock::new(),
-            frontend_ready: AtomicBool::new(false),
+            ready_windows: Mutex::new(HashSet::new()),
+            last_active_window: Mutex::new(None),
             shutting_down: AtomicBool::new(false),
             active_connections: AtomicUsize::new(0),
             pending: Mutex::new(HashMap::new()),
@@ -163,7 +165,16 @@ impl ControlState {
 
     pub fn shutdown(&self) {
         self.0.shutting_down.store(true, Ordering::Release);
-        self.0.frontend_ready.store(false, Ordering::Release);
+        self.0
+            .ready_windows
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        *self
+            .0
+            .last_active_window
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = None;
         self.0.hooks.broker.reset_all();
         self.0
             .panes
@@ -181,6 +192,73 @@ impl ControlState {
             if let Some(dir) = &runtime.launcher_dir {
                 remove_launcher_dir(dir);
             }
+        }
+    }
+
+    pub fn control_frontend_ready(&self, window: &str, ready: bool) {
+        let mut windows = self.0.ready_windows.lock().unwrap_or_else(|e| e.into_inner());
+        if ready {
+            windows.insert(window.to_string());
+            *self
+                .0
+                .last_active_window
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(window.to_string());
+        } else {
+            windows.remove(window);
+            let mut last = self
+                .0
+                .last_active_window
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            if last.as_deref() == Some(window) {
+                *last = windows.iter().next().cloned();
+            }
+        }
+    }
+
+    fn frontend_target(&self, caller: Option<u32>, host: &dyn AgentHost) -> Result<String, &'static str> {
+        if let Some(pane_id) = caller {
+            if let Some(target) = host.pane(pane_id) {
+                if self
+                    .0
+                    .ready_windows
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains(target.owner.as_ref())
+                {
+                    return Ok(target.owner.to_string());
+                }
+                return Err("frontend_not_ready");
+            }
+        }
+        let last = self
+            .0
+            .last_active_window
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let windows = self.0.ready_windows.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(window) = last.as_deref().filter(|w| windows.contains(*w)) {
+            return Ok(window.to_string());
+        }
+        if windows.len() == 1 {
+            return Ok(windows.iter().next().cloned().unwrap_or_else(|| "main".to_string()));
+        }
+        if windows.is_empty() {
+            return Err("frontend_not_ready");
+        }
+        Err("target_required")
+    }
+
+    pub fn note_window_focus(&self, window: &str) {
+        let windows = self.0.ready_windows.lock().unwrap_or_else(|e| e.into_inner());
+        if windows.contains(window) {
+            *self
+                .0
+                .last_active_window
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Some(window.to_string());
         }
     }
 
@@ -622,13 +700,26 @@ fn forward_to_frontend(
     app: &tauri::AppHandle,
     state: &ControlState,
 ) -> ControlResponse {
-    if !state.0.frontend_ready.load(Ordering::Acquire) {
-        return ControlResponse::failure(
-            request.id,
-            "frontend_not_ready",
-            "Terax is still restoring its workspace; try again shortly",
-        );
-    }
+    let host = TauriAgentHost(app);
+    let target = match state.frontend_target(request.caller.pane_id, &host) {
+        Ok(target) => target,
+        Err("target_required") => {
+            // Several windows are open and the CLI did not run inside one of
+            // their terminals, so there is no unambiguous UI to answer.
+            return ControlResponse::failure(
+                request.id,
+                "target_required",
+                "DevTools/channel target is ambiguous with multiple windows open; run the command from a terminal inside the window you mean to control",
+            );
+        }
+        Err(_) => {
+            return ControlResponse::failure(
+                request.id,
+                "frontend_not_ready",
+                "Terax is still restoring its workspace; try again shortly",
+            );
+        }
+    };
 
     let id = request.id.clone();
     let (sender, receiver) = mpsc::sync_channel(1);
@@ -653,7 +744,7 @@ fn forward_to_frontend(
         params: request.params,
         caller: request.caller,
     };
-    if let Err(error) = app.emit_to("main", CONTROL_EVENT, frontend_request) {
+    if let Err(error) = app.emit_to(target.as_str(), CONTROL_EVENT, frontend_request) {
         state
             .0
             .pending
@@ -698,8 +789,12 @@ fn forward_to_frontend(
 }
 
 #[tauri::command]
-pub fn control_frontend_ready(state: tauri::State<'_, ControlState>, ready: bool) {
-    state.0.frontend_ready.store(ready, Ordering::Release);
+pub fn control_frontend_ready(
+    webview: tauri::Webview,
+    state: tauri::State<'_, ControlState>,
+    ready: bool,
+) {
+    state.control_frontend_ready(webview.label(), ready);
 }
 
 #[tauri::command]
@@ -954,6 +1049,8 @@ fn remove_launcher_dir(bin_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::modules::agent_events::test_host::FakeHost;
+    use crate::modules::pty::PaneTarget;
     use std::io::Cursor;
 
     fn open_params(path: String) -> OpenParams {
@@ -1529,5 +1626,46 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn frontend_target_follows_caller_pane_owner() {
+        let state = ControlState::default();
+        state.control_frontend_ready("main", true);
+        state.control_frontend_ready("space-alpha", true);
+        let host = FakeHost::new(true);
+        *host.live.lock().expect("fake host live") = Some(PaneTarget {
+            pty_id: 9,
+            owner: Arc::from("space-alpha"),
+            link: crate::modules::pty::agent_detect::AgentLink::new(),
+        });
+
+        assert_eq!(
+            state.frontend_target(Some(3), &*host).expect("pane owner"),
+            "space-alpha"
+        );
+    }
+
+    #[test]
+    fn external_control_target_requires_one_ready_window() {
+        let state = ControlState::default();
+        let host = FakeHost::new(false);
+        assert_eq!(
+            state.frontend_target(None, &*host).expect_err("no UI"),
+            "frontend_not_ready"
+        );
+
+        state.control_frontend_ready("space-alpha", true);
+        assert_eq!(
+            state.frontend_target(None, &*host).expect("single UI"),
+            "space-alpha"
+        );
+
+        state.control_frontend_ready("main", true);
+        state.note_window_focus("space-alpha");
+        assert_eq!(
+            state.frontend_target(None, &*host).expect("focused UI"),
+            "space-alpha"
+        );
     }
 }

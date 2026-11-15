@@ -7,6 +7,7 @@ use modules::{
 };
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 #[cfg(target_os = "macos")]
 use tauri::{PhysicalPosition, WindowEvent};
@@ -83,6 +84,59 @@ fn parse_launch_target() -> LaunchTarget {
 
 const fn settings_always_on_top(is_macos: bool) -> bool {
     !is_macos
+}
+
+const SPACE_WINDOW_PREFIX: &str = "space-";
+
+fn space_window_label(space_id: &str) -> String {
+    format!("{SPACE_WINDOW_PREFIX}{space_id}")
+}
+
+fn space_id_from_label(label: &str) -> Option<String> {
+    label
+        .strip_prefix(SPACE_WINDOW_PREFIX)
+        .map(str::to_string)
+}
+
+/// Opens (or focuses) the window dedicated to one space. Idempotent so a
+/// double click can't spawn two windows for the same space.
+#[tauri::command]
+async fn open_space_window(app: tauri::AppHandle, space_id: String) -> Result<(), String> {
+    let label = space_window_label(&space_id);
+
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.unminimize();
+        let _ = window.show();
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    let url = format!("index.html?windowKind=space&spaceId={space_id}");
+    let builder = WebviewWindowBuilder::new(&app, &label, WebviewUrl::App(url.into()))
+        .title("Terax")
+        .inner_size(1100.0, 760.0)
+        .min_inner_size(720.0, 480.0)
+        .resizable(true)
+        // The frontend shows the window after the first paint, matching main.
+        .visible(false);
+
+    #[cfg(target_os = "macos")]
+    let builder = builder
+        .title_bar_style(tauri::TitleBarStyle::Overlay)
+        .hidden_title(true);
+
+    #[cfg(any(target_os = "linux", target_os = "windows"))]
+    let builder = builder.decorations(false).transparent(true);
+
+    #[cfg_attr(windows, allow(unused_variables))]
+    let window = builder.build().map_err(|e| e.to_string())?;
+
+    #[cfg(target_os = "linux")]
+    {
+        let _ = window.set_decorations(false);
+    }
+
+    Ok(())
 }
 
 #[tauri::command]
@@ -233,6 +287,7 @@ pub fn run() {
                         .hooks()
                         .broker
                         .set_window_ready(webview.label(), false);
+                    state.control_frontend_ready(webview.label(), false);
                 }
             }
         })
@@ -399,6 +454,7 @@ pub fn run() {
             get_launch_dir,
             get_launch_files,
             open_settings_window,
+            open_space_window,
             agent::agent_enable_hooks,
             agent::agent_disable_hooks,
             agent::agent_hooks_plan,
@@ -435,19 +491,41 @@ pub fn run() {
         .expect("error while building tauri application")
         .run(|app, event| {
             match event {
-                tauri::RunEvent::WindowEvent {
-                    label,
-                    event: tauri::WindowEvent::Destroyed,
-                    ..
-                } => {
-                    if let Some(grants) = app.try_state::<fs::assets::AssetGrants>() { grants.revoke_owner(&label); }
-                    if let Some(state) = app.try_state::<net::AiStreamState>() {
-                        state.cancel_window(&label);
+                tauri::RunEvent::WindowEvent { label, event, .. } => match event {
+                    tauri::WindowEvent::Focused(true) => {
+                        if let Some(state) = app.try_state::<control::ControlState>() {
+                            state.note_window_focus(&label);
+                        }
                     }
-                    if let Some(state) = app.try_state::<pty::PtyState>() {
-                        state.destroy_webview(&label);
+                    tauri::WindowEvent::Destroyed => {
+                        if let Some(grants) = app.try_state::<fs::assets::AssetGrants>() { grants.revoke_owner(&label); }
+                        if let Some(state) = app.try_state::<net::AiStreamState>() {
+                            state.cancel_window(&label);
+                        }
+                        if let Some(state) = app.try_state::<pty::PtyState>() {
+                            state.destroy_webview(&label);
+                        }
+                        if let Some(state) = app.try_state::<control::ControlState>() {
+                            state.hooks().broker.set_window_ready(&label, false);
+                            state.control_frontend_ready(&label, false);
+                        }
+                        if let Some(space_id) = space_id_from_label(&label) {
+                            let now = SystemTime::now()
+                                .duration_since(UNIX_EPOCH)
+                                .map(|d| d.as_millis() as i64)
+                                .unwrap_or(0);
+                            let _ = app.emit(
+                                "spaces:host-changed",
+                                serde_json::json!({
+                                    "spaceId": space_id,
+                                    "hostWindowLabel": "main",
+                                    "updatedAt": now,
+                                }),
+                            );
+                        }
                     }
-                }
+                    _ => {}
+                },
                 // Servers exit on stdin EOF, but destructors are not guaranteed
                 // on process exit; kill explicitly.
                 tauri::RunEvent::Exit => {
@@ -548,5 +626,23 @@ mod launch_target_tests {
     fn settings_float_only_outside_macos() {
         assert!(!settings_always_on_top(true));
         assert!(settings_always_on_top(false));
+    }
+}
+
+#[cfg(test)]
+mod space_window_tests {
+    use super::{space_id_from_label, space_window_label};
+
+    #[test]
+    fn space_window_label_round_trips() {
+        assert_eq!(space_window_label("abc"), "space-abc");
+        assert_eq!(space_id_from_label("space-abc"), Some("abc".to_string()));
+        assert_eq!(space_id_from_label("main"), None);
+    }
+
+    #[test]
+    fn space_id_from_label_ignores_non_space_labels() {
+        assert_eq!(space_id_from_label("settings"), None);
+        assert_eq!(space_id_from_label("space-"), Some(String::new()));
     }
 }

@@ -8,6 +8,8 @@ export {
   nextActiveInSpace,
   planCloseTabsToRight,
   planCloseOtherTabs,
+  setTabHostingGuard,
+  isSpaceTabHosted,
   type CloseTabsPlan,
   type Tab,
   type EditorTab,

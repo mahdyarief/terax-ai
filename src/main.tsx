@@ -26,8 +26,11 @@ if (__TERAX_BENCH__) {
   await installBenchEarly();
 }
 
-// Reap PTY sessions orphaned by a prior webview load before any tab spawns.
-await invoke("pty_close_all").catch(() => {});
+// Reap PTY sessions orphaned by a prior main-window load before any tab spawns.
+// Scope to main: other windows must not kill PTYs owned by the main window.
+if (getCurrentWindow().label === "main") {
+  await invoke("pty_close_all").catch(() => {});
+}
 
 // Seed before first paint so default tab mounts at target cwd (no flicker).
 await initLaunchDir();

@@ -32,7 +32,7 @@ const tabs: Tab[] = [
 
 describe("resolveControlContext", () => {
   it("targets the calling pane instead of ambient UI focus", () => {
-    expect(resolveControlContext(tabs, 20, "active-space", 13)).toEqual({
+    expect(resolveControlContext(tabs, 20, "active-space", "main", 13)).toEqual({
       window_id: "main",
       space_id: "agent-space",
       tab_id: 10,
@@ -42,7 +42,7 @@ describe("resolveControlContext", () => {
   });
 
   it("falls back to the active context for an external CLI", () => {
-    expect(resolveControlContext(tabs, 20, "active-space")).toEqual({
+    expect(resolveControlContext(tabs, 20, "active-space", "main")).toEqual({
       window_id: "main",
       space_id: "active-space",
       tab_id: 20,
@@ -52,8 +52,14 @@ describe("resolveControlContext", () => {
   });
 
   it("does not trust a stale caller pane id", () => {
-    expect(resolveControlContext(tabs, 20, "active-space", 999).source).toBe(
+    expect(resolveControlContext(tabs, 20, "active-space", "main", 999).source).toBe(
       "active",
+    );
+  });
+
+  it("reports the current window id", () => {
+    expect(resolveControlContext(tabs, 20, "active-space", "space-2").window_id).toBe(
+      "space-2",
     );
   });
 });

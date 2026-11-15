@@ -31,6 +31,18 @@ import {
 // Matches the renderer slot pool size — over this we'd evict an active leaf.
 export const MAX_PANES_PER_TAB = 4;
 
+// Set by the app so tab mutations cannot target a space hosted by another
+// window. Defaults to allow-all for tests and single-window callers.
+let hostingGuard: (spaceId: string) => boolean = () => true;
+
+export function setTabHostingGuard(guard: (spaceId: string) => boolean): void {
+  hostingGuard = guard;
+}
+
+export function isSpaceTabHosted(spaceId: string): boolean {
+  return hostingGuard(spaceId);
+}
+
 type TabBase = {
   spaceId: string;
   /**
@@ -558,6 +570,32 @@ function coldTerminalTab(
 // Plans the removal of a deleted space's tabs while keeping the invariant that
 // the now-active `fallbackSpaceId` always has at least one tab (a cold one is
 // spawned when it would be left empty). Returns null when nothing to remove.
+export function detachTabsBySpace(
+  tabs: Tab[],
+  spaceId: string,
+): { detached: Tab[]; remaining: Tab[] } {
+  const detached = tabs.filter((t) => t.spaceId === spaceId);
+  const remaining = tabs.filter((t) => t.spaceId !== spaceId);
+  return { detached, remaining };
+}
+
+export function attachTabsBySpace(
+  tabs: Tab[],
+  incoming: Tab[],
+  activeId: number,
+  desiredActiveId: number | null,
+): { tabs: Tab[]; activeId: number } {
+  if (incoming.length === 0) return { tabs, activeId };
+  const next = [...tabs, ...incoming];
+  const has = (id: number) => next.some((t) => t.id === id);
+  if (has(activeId)) return { tabs: next, activeId };
+  if (desiredActiveId !== null && has(desiredActiveId)) {
+    return { tabs: next, activeId: desiredActiveId };
+  }
+  const fallback = incoming[0]?.id ?? next[0]?.id ?? activeId;
+  return { tabs: next, activeId: fallback };
+}
+
 export function planSpaceRemoval(
   tabs: Tab[],
   currentActiveId: number,
@@ -675,6 +713,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   // overview can populate a space in place; it spawns when first opened.
   const newTabInSpace = useCallback(
     (spaceId: string, cwd?: string) => {
+      if (!isSpaceTabHosted(spaceId)) return null;
       const tabId = nextIdRef.current++;
       const leafId = nextIdRef.current++;
       setTabs((curr) => [
@@ -702,6 +741,9 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       const curr = tabsRef.current;
       const tab = curr.find((t) => t.id === tabId);
       if (!tab || tab.spaceId === targetSpaceId) return false;
+      if (!isSpaceTabHosted(targetSpaceId) || !isSpaceTabHosted(tab.spaceId)) {
+        return false;
+      }
       setTabs((prev) =>
         prev.map((t) =>
           t.id === tabId ? ({ ...t, spaceId: targetSpaceId } as Tab) : t,
@@ -728,6 +770,12 @@ export function useTabs(initial?: Partial<TerminalTab>) {
       const moved = curr.find((t) => t.id === tabId);
       const target = curr.find((t) => t.id === targetTabId);
       if (!moved || !target) return false;
+      if (
+        !isSpaceTabHosted(moved.spaceId) ||
+        !isSpaceTabHosted(target.spaceId)
+      ) {
+        return false;
+      }
       const crossSpace = moved.spaceId !== target.spaceId;
       setTabs((prev) => {
         const without = prev.filter((t) => t.id !== tabId);
@@ -1505,6 +1553,52 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     [setTabs],
   );
 
+  const detachTabsForSpaceLocal = useCallback(
+    (spaceId: string) => {
+      let toDispose: number[] = [];
+      let nextActive: number | null = null;
+      let didDetach = false;
+      setTabs((curr) => {
+        const { detached, remaining } = detachTabsBySpace(curr, spaceId);
+        if (detached.length === 0) return curr;
+        didDetach = true;
+        toDispose = detached.flatMap((t) =>
+          t.kind === "terminal" ? leafIds(t.paneTree) : [],
+        );
+        const activeDetached = detached.some(
+          (t) => t.id === activeIdRef.current,
+        );
+        if (activeDetached) nextActive = remaining[0]?.id ?? null;
+        return remaining;
+      });
+      if (!didDetach) return false;
+      if (nextActive !== null) setActiveId(nextActive);
+      for (const lid of toDispose) disposeSession(lid);
+      return true;
+    },
+    [setActiveId, setTabs],
+  );
+
+  const attachTabsForSpaceLocal = useCallback(
+    (spaceId: string, incoming: Tab[], desiredActiveId: number | null = null) => {
+      if (incoming.length === 0) return;
+      const scoped = incoming.map((t) =>
+        t.spaceId === spaceId ? t : ({ ...t, spaceId } as Tab),
+      );
+      const result = attachTabsBySpace(
+        tabsRef.current,
+        scoped,
+        activeIdRef.current,
+        desiredActiveId,
+      );
+      setTabs(result.tabs);
+      if (result.activeId !== activeIdRef.current) {
+        setActiveId(result.activeId);
+      }
+    },
+    [setActiveId, setTabs],
+  );
+
   return {
     tabs,
     activeId,
@@ -1517,6 +1611,8 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     reorderTabByGap,
     newTabInSpace,
     removeTabsForSpace,
+    detachTabsForSpace: detachTabsForSpaceLocal,
+    attachTabsForSpace: attachTabsForSpaceLocal,
     markBooted,
     setActiveSpaceForNewTabs,
     setOverrideLanguage,

@@ -84,6 +84,7 @@ import {
   useSpaces,
   useSpacesBoot,
 } from "@/modules/spaces";
+import { planSpaceHandoff } from "@/modules/spaces/lib/handoff";
 import { StatusBar } from "@/modules/statusbar";
 import {
   TabSwitcherHud,
@@ -92,6 +93,7 @@ import {
   useTabs,
   useWindowTitle,
   useWorkspaceCwd,
+  setTabHostingGuard,
 } from "@/modules/tabs";
 import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
 import {
@@ -101,6 +103,7 @@ import {
   hasLeaf,
   isTerminalSurfaceTarget,
   leafIds,
+  leafHasForegroundProcess,
   navigateFocusedBlocks,
   type PaneBounds,
   ptyIdForLeaf,
@@ -173,6 +176,8 @@ export default function App() {
     reorderTabByGap,
     newTabInSpace,
     removeTabsForSpace,
+    detachTabsForSpace,
+    attachTabsForSpace,
     markBooted,
     setActiveSpaceForNewTabs,
     newTab,
@@ -282,10 +287,13 @@ export default function App() {
     [switchWorkspace, activeSpaceId],
   );
 
+  const windowLabel = getCurrentWindow().label;
+
   useSpacesBoot({
     ready: launchCwdResolved,
     launchCwd,
     home,
+    windowLabel,
     allocId,
     replaceTabs,
     markBooted,
@@ -293,12 +301,21 @@ export default function App() {
     adoptWorkspaceEnv,
   });
 
-  useSpacePersistence({
+  const { flushNow } = useSpacePersistence({
     tabs,
     activeId,
     activeSpaceId: activeSpaceId ?? DEFAULT_SPACE_ID,
     enabled: spacesHydrated,
   });
+
+  useEffect(() => {
+    setTabHostingGuard((spaceId) => {
+      const space = useSpaces
+        .getState()
+        .spaces.find((s) => s.id === spaceId);
+      return !space || (space.hostWindowLabel ?? "main") === windowLabel;
+    });
+  }, [windowLabel]);
 
   const prevSpaceRef = useRef(activeSpaceId);
   useEffect(() => {
@@ -1226,13 +1243,208 @@ export default function App() {
     [removeTabsForSpace],
   );
 
+  const handleOpenSpaceInWindow = useCallback(
+    (spaceId: string) => {
+      const state = useSpaces.getState();
+      const space = state.spaces.find((s) => s.id === spaceId);
+      if (!space) return;
+      const plan = planSpaceHandoff(
+        {
+          spaceId,
+          hostWindowLabel: space.hostWindowLabel,
+        },
+        windowLabel,
+      );
+
+      if (plan.kind === "focus") {
+        void invoke("open_space_window", { spaceId }).catch((e) => {
+          console.error("[terax] focus space window failed:", e);
+        });
+        return;
+      }
+
+      void (async () => {
+        const snapshot = tabs.filter((t) => t.spaceId === spaceId);
+        try {
+          const leaves = snapshot.flatMap((t) =>
+            t.kind === "terminal" ? leafIds(t.paneTree) : [],
+          );
+          const checks = await Promise.all(
+            leaves.map((leafId) => leafHasForegroundProcess(leafId)),
+          );
+          const runningCount = checks.filter(Boolean).length;
+          if (runningCount > 0) {
+            const ok = window.confirm(
+              `${runningCount} active ${runningCount === 1 ? "process" : "processes"} detected in this space. ` +
+                "Moving it to another window keeps the tabs, but terminal sessions restart there. Continue?",
+            );
+            if (!ok) return;
+          }
+
+          await flushNow();
+          detachTabsForSpace(spaceId);
+          await state.assignSpaceToWindow(spaceId, plan.to);
+          await invoke("open_space_window", { spaceId });
+        } catch (e) {
+          console.error("[terax] open space window failed:", e);
+          try {
+            await state.assignSpaceToWindow(spaceId, plan.from);
+            if (snapshot.length > 0) {
+              const { serializeTabs, hydrateTabs } = await import(
+                "@/modules/spaces/lib/serialize"
+              );
+              const restored = hydrateTabs(
+                serializeTabs(snapshot),
+                spaceId,
+                allocId,
+              );
+              attachTabsForSpace(spaceId, restored);
+            }
+          } catch (rollbackError) {
+            console.error(
+              "[terax] open space window rollback failed:",
+              rollbackError,
+            );
+          }
+        }
+      })();
+    },
+    [windowLabel, flushNow, detachTabsForSpace, attachTabsForSpace, tabs, allocId],
+  );
+
+  useEffect(() => {
+    if (!spacesHydrated) return;
+    let disposed = false;
+    const unlisteners: Array<() => void> = [];
+
+    const refreshRegistry = async () => {
+      try {
+        const { loadMergedRegistry } = await import(
+          "@/modules/spaces/lib/crossWindowSync"
+        );
+        const spaces = await loadMergedRegistry(useSpaces.getState().spaces);
+        if (disposed) return;
+        useSpaces.setState((s) => ({ spaces, hydrated: s.hydrated }));
+      } catch (e) {
+        console.error("[terax] spaces registry sync failed:", e);
+      }
+    };
+
+    void (async () => {
+      const {
+        SPACE_DELETED_EVENT,
+        SPACE_META_CHANGED_EVENT,
+        SPACE_HOST_CHANGED_EVENT,
+        applyHostChanged,
+        applyDeletedSpace,
+      } = await import("@/modules/spaces/lib/crossWindowSync");
+      const subs = await Promise.all([
+        listen(SPACE_META_CHANGED_EVENT, () => void refreshRegistry()),
+        listen<{ spaceId: string; hostWindowLabel: string; updatedAt?: number }>(
+          SPACE_HOST_CHANGED_EVENT,
+          (event) => {
+            const payload = event.payload;
+            if (!payload?.spaceId || !payload.hostWindowLabel) {
+              void refreshRegistry();
+              return;
+            }
+            void (async () => {
+              try {
+                const { loadAll, saveSpacesList } = await import(
+                  "@/modules/spaces/lib/store"
+                );
+                const { spaces, states } = await loadAll();
+                const prev = spaces.find((s) => s.id === payload.spaceId);
+                const merged = applyHostChanged(spaces, {
+                  spaceId: payload.spaceId,
+                  hostWindowLabel: payload.hostWindowLabel,
+                  updatedAt: payload.updatedAt ?? Date.now(),
+                });
+                // Single writer: only the window that now hosts the space
+                // persists, so every window receiving the broadcast can't race
+                // on the same registry file.
+                if (payload.hostWindowLabel === windowLabel) {
+                  await saveSpacesList(merged);
+                }
+                if (disposed) return;
+                useSpaces.setState((s) => ({
+                  spaces: merged,
+                  hydrated: s.hydrated,
+                }));
+
+                const movedToThisWindow = payload.hostWindowLabel === windowLabel;
+                const cameFromElsewhere =
+                  (prev?.hostWindowLabel ?? "main") !== windowLabel;
+                if (movedToThisWindow && cameFromElsewhere) {
+                  const state = states.get(payload.spaceId);
+                  if (!state?.tabs?.length || disposed) {
+                    useSpaces.getState().setActive(payload.spaceId);
+                    return;
+                  }
+                  const { hydrateTabs } = await import(
+                    "@/modules/spaces/lib/serialize"
+                  );
+                  const hydrated = hydrateTabs(state.tabs, payload.spaceId, allocId);
+                  if (!hydrated.length || disposed) {
+                    useSpaces.getState().setActive(payload.spaceId);
+                    return;
+                  }
+                  attachTabsForSpace(payload.spaceId, hydrated);
+                  const idx = Math.min(
+                    Math.max(0, state.activeTabIndex ?? 0),
+                    hydrated.length - 1,
+                  );
+                  setActiveId(hydrated[idx]?.id ?? hydrated[0].id);
+                  useSpaces.getState().setActive(payload.spaceId);
+                }
+              } catch (e) {
+                console.error("[terax] spaces host sync failed:", e);
+                void refreshRegistry();
+              }
+            })();
+          },
+        ),
+        listen<{ spaceId: string }>(SPACE_DELETED_EVENT, (event) => {
+          const id = event.payload?.spaceId;
+          if (!id) {
+            void refreshRegistry();
+            return;
+          }
+          useSpaces.setState((s) => ({
+            spaces: applyDeletedSpace(s.spaces, id),
+            hydrated: s.hydrated,
+          }));
+        }),
+      ]);
+      if (disposed) {
+        for (const un of subs) un();
+        return;
+      }
+      unlisteners.push(...subs);
+    })();
+
+    return () => {
+      disposed = true;
+      for (const un of unlisteners) un();
+    };
+  }, [spacesHydrated, windowLabel, allocId, attachTabsForSpace, setActiveId]);
+
   const handleMoveTab = useCallback(
     (tabId: number, targetSpaceId: string) => {
+      const target = useSpaces
+        .getState()
+        .spaces.find((s) => s.id === targetSpaceId);
+      if (target && (target.hostWindowLabel ?? "main") !== windowLabel) {
+        toast("That space is open in another window", {
+          description: "Switch to its window to move tabs there.",
+        });
+        return;
+      }
       if (moveTabToSpace(tabId, targetSpaceId)) {
         useSpaces.getState().setActive(targetSpaceId);
       }
     },
-    [moveTabToSpace],
+    [moveTabToSpace, windowLabel],
   );
 
   const handleReorderTab = useCallback(
@@ -1273,6 +1485,7 @@ export default function App() {
       tabs={tabs}
       onNewSpace={() => void handleNewSpace()}
       onDeleteSpace={handleDeleteSpace}
+      onOpenSpaceInWindow={handleOpenSpaceInWindow}
       onNewTabInSpace={handleNewTabInSpace}
       onJumpTab={jumpToTab}
       onCloseTab={handleClose}

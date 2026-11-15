@@ -8,9 +8,46 @@ import {
   deleteSpaceData,
   newSpaceId,
   saveActiveId,
+  saveActiveIdForWindow,
   saveSpacesList,
   type SpaceMeta,
 } from "./store";
+import {
+  SPACE_DELETED_EVENT,
+  SPACE_META_CHANGED_EVENT,
+} from "./crossWindowSync";
+
+async function emitMetaChanged(): Promise<void> {
+  try {
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit(SPACE_META_CHANGED_EVENT);
+  } catch {
+    // Non-Tauri/test environments have no event bus.
+  }
+}
+
+async function emitDeleted(id: string): Promise<void> {
+  try {
+    const { emit } = await import("@tauri-apps/api/event");
+    await emit(SPACE_DELETED_EVENT, { spaceId: id });
+  } catch {
+    // Non-Tauri/test environments have no event bus.
+  }
+}
+
+async function persistSpaces(spaces: SpaceMeta[]): Promise<void> {
+  await saveSpacesList(spaces);
+  await emitMetaChanged();
+}
+
+export function selectHostedSpaces(
+  spaces: SpaceMeta[],
+  windowLabel: string,
+): SpaceMeta[] {
+  return spaces.filter(
+    (s) => (s.hostWindowLabel ?? "main") === windowLabel,
+  );
+}
 
 type CreateInput = {
   id?: string;
@@ -23,6 +60,8 @@ type State = {
   spaces: SpaceMeta[];
   activeId: string | null;
   hydrated: boolean;
+  // Webview label for this window; set on boot. "main" is the default.
+  windowLabel: string;
   // Per-space active tab index loaded from disk, so persistence preserves it
   // for spaces the user never visits this session.
   initialActiveIndex: Record<string, number>;
@@ -38,12 +77,17 @@ type State = {
   reorder: (orderedIds: string[]) => void;
   remove: (id: string) => string | null;
   setActive: (id: string) => void;
+  assignSpaceToWindow: (
+    id: string,
+    hostWindowLabel: string | null,
+  ) => Promise<void>;
 };
 
 export const useSpaces = create<State>((set, get) => ({
   spaces: [],
   activeId: null,
   hydrated: false,
+  windowLabel: "main",
   initialActiveIndex: {},
 
   hydrate: (spaces, activeId, initialActiveIndex = {}) => {
@@ -61,12 +105,13 @@ export const useSpaces = create<State>((set, get) => ({
         parseWorkspaceScopeKey(
           usePreferencesStore.getState().defaultWorkspaceEnv,
         ),
+      hostWindowLabel: get().windowLabel || "main",
       createdAt: now,
       updatedAt: now,
     };
     const spaces = [...get().spaces, meta];
     set({ spaces });
-    void saveSpacesList(spaces);
+    persistSpaces(spaces);
     return meta;
   },
 
@@ -75,7 +120,7 @@ export const useSpaces = create<State>((set, get) => ({
       s.id === id ? { ...s, name, updatedAt: Date.now() } : s,
     );
     set({ spaces });
-    void saveSpacesList(spaces);
+    persistSpaces(spaces);
   },
 
   setEnv: (id, env) => {
@@ -83,7 +128,7 @@ export const useSpaces = create<State>((set, get) => ({
       s.id === id ? { ...s, env, updatedAt: Date.now() } : s,
     );
     set({ spaces });
-    void saveSpacesList(spaces);
+    persistSpaces(spaces);
   },
 
   setColor: (id, color) => {
@@ -91,7 +136,7 @@ export const useSpaces = create<State>((set, get) => ({
       s.id === id ? { ...s, color, updatedAt: Date.now() } : s,
     );
     set({ spaces });
-    void saveSpacesList(spaces);
+    persistSpaces(spaces);
   },
 
   reorder: (orderedIds) => {
@@ -106,7 +151,7 @@ export const useSpaces = create<State>((set, get) => ({
     }
     if (next.length !== get().spaces.length) return;
     set({ spaces: next });
-    void saveSpacesList(next);
+    persistSpaces(next);
   },
 
   remove: (id) => {
@@ -115,8 +160,9 @@ export const useSpaces = create<State>((set, get) => ({
     let activeId = prev.activeId;
     if (activeId === id) activeId = spaces[0]?.id ?? null;
     set({ spaces, activeId });
-    void saveSpacesList(spaces);
+    persistSpaces(spaces);
     void deleteSpaceData(id);
+    void emitDeleted(id);
     if (activeId !== prev.activeId) void saveActiveId(activeId);
     return activeId;
   },
@@ -124,6 +170,18 @@ export const useSpaces = create<State>((set, get) => ({
   setActive: (id) => {
     if (get().activeId === id) return;
     set({ activeId: id });
+    const label = get().windowLabel || "main";
     void saveActiveId(id);
+    void saveActiveIdForWindow(label, id);
+  },
+
+  assignSpaceToWindow: async (id, hostWindowLabel) => {
+    const spaces = get().spaces.map((s) =>
+      s.id === id
+        ? { ...s, hostWindowLabel: hostWindowLabel ?? "main", updatedAt: Date.now() }
+        : s,
+    );
+    set({ spaces });
+    await persistSpaces(spaces);
   },
 }));

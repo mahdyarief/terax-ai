@@ -10,6 +10,7 @@ import { labelFor, type Tab, TabIcon } from "@/modules/tabs";
 import {
   ArrowDown01Icon,
   ArrowRight01Icon,
+  ArrowUpRight02Icon,
   Cancel01Icon,
   Delete02Icon,
   PencilEdit02Icon,
@@ -30,6 +31,7 @@ type Props = {
   tabs: Tab[];
   onNewSpace: () => void;
   onDeleteSpace: (id: string) => void;
+  onOpenSpaceInWindow: (id: string) => void;
   onNewTabInSpace: (spaceId: string) => void;
   onJumpTab: (id: number) => void;
   onCloseTab: (id: number) => void;
@@ -77,6 +79,7 @@ export function SpaceSwitcher({
   tabs,
   onNewSpace,
   onDeleteSpace,
+  onOpenSpaceInWindow,
   onNewTabInSpace,
   onJumpTab,
   onCloseTab,
@@ -88,6 +91,7 @@ export function SpaceSwitcher({
   const activeId = useSpaces((s) => s.activeId);
   const setActive = useSpaces((s) => s.setActive);
   const rename = useSpaces((s) => s.rename);
+  const windowLabel = useSpaces((s) => s.windowLabel);
   const shortcut = useShortcutLabel("space.overview");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() =>
@@ -292,6 +296,8 @@ export function SpaceSwitcher({
               }}
               onCancelRename={() => setEditingId(null)}
               onDelete={() => onDeleteSpace(sp.id)}
+              onOpenInWindow={() => onOpenSpaceInWindow(sp.id)}
+              windowLabel={windowLabel}
               onNewTab={() => onNewTabInSpace(sp.id)}
               onJumpTab={onJumpTab}
               onCloseTab={onCloseTab}
@@ -354,6 +360,8 @@ type SpaceRowProps = {
   onCommitRename: (name: string) => void;
   onCancelRename: () => void;
   onDelete: () => void;
+  onOpenInWindow: () => void;
+  windowLabel: string;
   onNewTab: () => void;
   onJumpTab: (id: number) => void;
   onCloseTab: (id: number) => void;
@@ -378,10 +386,14 @@ function SpaceRow({
   onCommitRename,
   onCancelRename,
   onDelete,
+  onOpenInWindow,
+  windowLabel,
   onNewTab,
   onJumpTab,
   onCloseTab,
 }: SpaceRowProps) {
+  const host = space.hostWindowLabel ?? "main";
+  const hostedHere = host === windowLabel;
   const isDragging = dragging?.kind === "space" && dragging.id === space.id;
   const moveTarget = drop?.kind === "into-space" && drop.spaceId === space.id;
   const reorderEdge =
@@ -458,6 +470,11 @@ function SpaceRow({
                 icon={PencilEdit02Icon}
                 label="Rename space"
                 onClick={onStartRename}
+              />
+              <RowAction
+                icon={ArrowUpRight02Icon}
+                label={hostedHere ? "Open in new window" : "Focus window"}
+                onClick={onOpenInWindow}
               />
               <RowAction icon={PlusSignIcon} label="New tab" onClick={onNewTab} />
               {canDelete && (
