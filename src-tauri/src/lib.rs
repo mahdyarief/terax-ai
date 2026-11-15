@@ -102,6 +102,19 @@ fn can_open_space_window(label: &str) -> bool {
     label == "main"
 }
 
+fn can_focus_space_window(_caller: &str, target: &str) -> bool {
+    space_id_from_label(target).is_some()
+}
+
+#[tauri::command]
+async fn focus_space_window(app: tauri::AppHandle, space_id: String) -> Result<(), String> {
+    let label = space_window_label(&space_id);
+    let window = app
+        .get_webview_window(&label)
+        .ok_or_else(|| "space window is not open".to_string())?;
+    window.set_focus().map_err(|error| error.to_string())
+}
+
 /// Opens (or focuses) the window dedicated to one space. Idempotent so a
 /// double click can't spawn two windows for the same space.
 #[tauri::command]
@@ -479,6 +492,7 @@ pub fn run() {
             get_launch_files,
             open_settings_window,
             open_space_window,
+            focus_space_window,
             agent::agent_enable_hooks,
             agent::agent_disable_hooks,
             agent::agent_hooks_plan,
@@ -656,7 +670,8 @@ mod launch_target_tests {
 #[cfg(test)]
 mod space_window_tests {
     use super::{
-        can_open_space_window, space_id_from_label, space_window_label,
+        can_focus_space_window, can_open_space_window, space_id_from_label,
+        space_window_label,
     };
 
     #[test]
@@ -677,5 +692,13 @@ mod space_window_tests {
         assert!(can_open_space_window("main"));
         assert!(!can_open_space_window("space-abc"));
         assert!(!can_open_space_window("settings"));
+    }
+
+    #[test]
+    fn any_window_can_focus_an_existing_space_window() {
+        assert!(can_focus_space_window("main", "space-abc"));
+        assert!(can_focus_space_window("space-abc", "space-abc"));
+        assert!(can_focus_space_window("space-abc", "space-def"));
+        assert!(!can_focus_space_window("main", "main"));
     }
 }

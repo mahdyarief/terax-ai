@@ -1274,7 +1274,7 @@ export default function App() {
       if (!plan) return;
 
       if (plan.kind === "focus") {
-        void invoke("open_space_window", { spaceId }).catch((e) => {
+        void invoke("focus_space_window", { spaceId }).catch((e) => {
           console.error("[terax] focus space window failed:", e);
         });
         return;
