@@ -1,4 +1,8 @@
-import { highlightingFor, syntaxTree } from "@codemirror/language";
+import {
+  ensureSyntaxTree,
+  highlightingFor,
+  syntaxTree,
+} from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { highlightTree } from "@lezer/highlight";
 import { describe, expect, it } from "vitest";
@@ -18,9 +22,11 @@ describe("resolveDisplayName", () => {
         doc: code,
         extensions: [result.ext, EDITOR_THEME_EXT.atomone],
       });
+      const tree =
+        ensureSyntaxTree(state, state.doc.length, 5_000) ?? syntaxTree(state);
       const highlighted: string[] = [];
       highlightTree(
-        syntaxTree(state),
+        tree,
         { style: (tags) => highlightingFor(state, tags) },
         (from, to) => highlighted.push(code.slice(from, to)),
       );
@@ -81,7 +87,9 @@ describe("resolveDisplayName", () => {
       doc: "{#if ready}<button on:click={run}>{label}</button>{/if}",
       extensions: [result.ext],
     });
-    const tree = syntaxTree(state).toString();
+    const parsed =
+      ensureSyntaxTree(state, state.doc.length, 5_000) ?? syntaxTree(state);
+    const tree = parsed.toString();
     expect(tree).toContain("IfBlock");
     expect(tree).toContain("DirectiveOn");
   });
@@ -131,9 +139,11 @@ describe("JavaScript and TypeScript highlighting", () => {
           doc: code,
           extensions: [result.ext, themeExt],
         });
+        const parsed =
+          ensureSyntaxTree(state, state.doc.length, 5_000) ?? syntaxTree(state);
         const spans: { from: number; to: number; classes: string }[] = [];
         highlightTree(
-          syntaxTree(state),
+          parsed,
           { style: (tags) => highlightingFor(state, tags) },
           (from, to, classes) => spans.push({ from, to, classes }),
         );
@@ -149,7 +159,7 @@ describe("JavaScript and TypeScript highlighting", () => {
         expect(styleAt("const")).not.toBe(styleAt('"hello"'));
         if (ext.endsWith("x")) expect(styleAt("div")).toBeTruthy();
         if (code.includes(": string")) {
-          expect(syntaxTree(state).toString()).toContain("TypeAnnotation");
+          expect(parsed.toString()).toContain("TypeAnnotation");
         }
       },
     );

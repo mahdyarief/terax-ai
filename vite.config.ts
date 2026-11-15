@@ -226,6 +226,10 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => ({
   define: {
     __TERAX_BENCH__: JSON.stringify(process.env.TERAX_BENCH === "1"),
   },
+  test: {
+    testTimeout: 20_000,
+    hookTimeout: 20_000,
+  },
   clearScreen: false,
   server: {
     headers: { "Content-Security-Policy": "frame-ancestors 'none'" },
