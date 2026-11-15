@@ -196,13 +196,15 @@ export function SpaceSwitcher({
       return;
     }
     const rect = hit.getBoundingClientRect();
-    const edge: Edge = e.clientY < rect.top + rect.height / 2 ? "top" : "bottom";
+    const edge: Edge =
+      e.clientY < rect.top + rect.height / 2 ? "top" : "bottom";
     const kind = hit.getAttribute("data-drop");
     let next: DropTarget | null = null;
     if (st.kind === "space") {
       if (kind === "space") {
         const spaceId = hit.getAttribute("data-space-id");
-        if (spaceId && spaceId !== st.id) next = { kind: "space", spaceId, edge };
+        if (spaceId && spaceId !== st.id)
+          next = { kind: "space", spaceId, edge };
       }
     } else if (kind === "tab") {
       const tabId = Number(hit.getAttribute("data-tab-id"));
@@ -414,7 +416,9 @@ function SpaceRow({
         data-space-id={space.id}
         role="button"
         tabIndex={editing ? -1 : 0}
-        onPointerDown={editing ? undefined : (e) => onPointerDown(e, "space", space.id)}
+        onPointerDown={
+          editing ? undefined : (e) => onPointerDown(e, "space", space.id)
+        }
         onPointerMove={onPointerMove}
         onPointerUp={editing ? undefined : (e) => onPointerUp(e, onSwitch)}
         onPointerCancel={(e) => onPointerUp(e)}
@@ -465,23 +469,22 @@ function SpaceRow({
         )}
         {!editing && (
           <>
-            <span className="shrink-0 px-1 text-[10px] tabular-nums text-muted-foreground/50 group-hover:hidden">
+            <span className="shrink-0 px-1 text-[10px] tabular-nums text-muted-foreground/50">
               {tabs.length}
             </span>
-            <div
-              data-no-drag
-              className="hidden shrink-0 items-center gap-0.5 group-hover:flex"
-            >
+            <div data-no-drag className="flex shrink-0 items-center gap-0.5">
               <RowAction
                 icon={PencilEdit02Icon}
                 label="Rename space"
                 onClick={onStartRename}
               />
-              <RowAction
-                icon={ArrowUpRight02Icon}
-                label={hostedHere ? "Open in new window" : "Focus window"}
-                onClick={onOpenInWindow}
-              />
+              {windowLabel === "main" && (
+                <RowAction
+                  icon={ArrowUpRight02Icon}
+                  label={hostedHere ? "Open in new window" : "Focus window"}
+                  onClick={onOpenInWindow}
+                />
+              )}
               {!hostedHere && windowLabel === "main" && (
                 <RowAction
                   icon={ArrowLeft02Icon}
@@ -489,7 +492,11 @@ function SpaceRow({
                   onClick={onBringBack}
                 />
               )}
-              <RowAction icon={PlusSignIcon} label="New tab" onClick={onNewTab} />
+              <RowAction
+                icon={PlusSignIcon}
+                label="New tab"
+                onClick={onNewTab}
+              />
               {canDelete && (
                 <RowAction
                   icon={Delete02Icon}

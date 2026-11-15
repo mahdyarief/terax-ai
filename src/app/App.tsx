@@ -1271,6 +1271,7 @@ export default function App() {
         },
         windowLabel,
       );
+      if (!plan) return;
 
       if (plan.kind === "focus") {
         void invoke("open_space_window", { spaceId }).catch((e) => {

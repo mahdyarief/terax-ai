@@ -19,4 +19,10 @@ describe("planSpaceHandoff", () => {
       planSpaceHandoff({ spaceId: "b", hostWindowLabel: null }, "main"),
     ).toEqual({ kind: "handoff", spaceId: "b", from: "main", to: "space-b" });
   });
+
+  it("does not hand off a space from another space window", () => {
+    expect(
+      planSpaceHandoff({ spaceId: "a", hostWindowLabel: "space-a" }, "space-a"),
+    ).toBeNull();
+  });
 });

@@ -98,10 +98,21 @@ fn space_id_from_label(label: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+fn can_open_space_window(label: &str) -> bool {
+    label == "main"
+}
+
 /// Opens (or focuses) the window dedicated to one space. Idempotent so a
 /// double click can't spawn two windows for the same space.
 #[tauri::command]
-async fn open_space_window(app: tauri::AppHandle, space_id: String) -> Result<(), String> {
+async fn open_space_window(
+    window: tauri::WebviewWindow,
+    app: tauri::AppHandle,
+    space_id: String,
+) -> Result<(), String> {
+    if !can_open_space_window(window.label()) {
+        return Err("space windows can only be opened from the main window".into());
+    }
     let label = space_window_label(&space_id);
 
     if let Some(window) = app.get_webview_window(&label) {
@@ -644,7 +655,9 @@ mod launch_target_tests {
 
 #[cfg(test)]
 mod space_window_tests {
-    use super::{space_id_from_label, space_window_label};
+    use super::{
+        can_open_space_window, space_id_from_label, space_window_label,
+    };
 
     #[test]
     fn space_window_label_round_trips() {
@@ -657,5 +670,12 @@ mod space_window_tests {
     fn space_id_from_label_ignores_non_space_labels() {
         assert_eq!(space_id_from_label("settings"), None);
         assert_eq!(space_id_from_label("space-"), Some(String::new()));
+    }
+
+    #[test]
+    fn only_main_can_open_space_windows() {
+        assert!(can_open_space_window("main"));
+        assert!(!can_open_space_window("space-abc"));
+        assert!(!can_open_space_window("settings"));
     }
 }
