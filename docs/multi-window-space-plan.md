@@ -265,6 +265,7 @@ Update checklist ini saat implementasi berjalan. Satu item selesai = centang + c
 - [x] `useSpacePersistence` hanya menulis space yang punya tab di window ini
 - [x] Flush eksplisit sebelum handoff (`flushNow()` awaitable)
 - [x] Tes regresi restore single-window (focused suite hijau)
+- [x] Reclaim orphan space saat cold start `main` (`reclaimOrphanSpaces`, cek `WebviewWindow.getByLabel`): space yang masih ter-host di `space-*` yang sudah tidak ada direbut ke `"main"` sehingga survive restart; space di window yang masih hidup tidak disentuh (aman saat reload `main`)
 
 ### Fase 4 — Backend window
 - [x] Command `open_space_window` (idempotent: focus jika sudah ada)

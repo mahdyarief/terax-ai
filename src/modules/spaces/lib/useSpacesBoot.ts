@@ -17,6 +17,47 @@ export function spacesForWindow(
   return selectHostedSpaces(spaces, windowLabel);
 }
 
+/**
+ * Move spaces hosted by a window that no longer exists back to "main". A cold
+ * start only reopens "main", so without this a full restart leaves those
+ * spaces invisible with no window to show them. Returns the same array when
+ * nothing was orphaned so callers can skip the registry write.
+ */
+export function reclaimOrphanSpaces(
+  spaces: SpaceMeta[],
+  isAlive: (label: string) => boolean,
+  now: number,
+): SpaceMeta[] {
+  let changed = false;
+  const next = spaces.map((s) => {
+    const host = s.hostWindowLabel ?? "main";
+    if (host === "main" || isAlive(host)) return s;
+    changed = true;
+    return { ...s, hostWindowLabel: "main", updatedAt: now };
+  });
+  return changed ? next : spaces;
+}
+
+/**
+ * Which of these webview labels currently exist. Returns null when the window
+ * layer is unavailable (tests, non-Tauri) so callers never reclaim on a guess.
+ */
+async function liveWindowLabels(
+  labels: string[],
+): Promise<Set<string> | null> {
+  if (labels.length === 0) return new Set();
+  try {
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+    const alive = new Set<string>();
+    for (const label of labels) {
+      if (await WebviewWindow.getByLabel(label)) alive.add(label);
+    }
+    return alive;
+  } catch {
+    return null;
+  }
+}
+
 type Params = {
   ready: boolean;
   launchCwd: string | null;
@@ -62,12 +103,13 @@ export function useSpacesBoot({
     void (async () => {
       try {
         const { spaces, activeIdByWindow, states } = await loadAll();
-        const hosted = spacesForWindow(spaces, windowLabel);
+        let registry = spaces;
+        let hosted = spacesForWindow(registry, windowLabel);
 
         useSpaces.setState({ windowLabel });
 
         if (hosted.length === 0) {
-          if (spaces.length === 0) {
+          if (registry.length === 0) {
             // First run: there is no persisted space at all. Create the default
             // space for this window (home window is "main").
             const meta: SpaceMeta = {
@@ -87,11 +129,38 @@ export function useSpacesBoot({
             useSpaces.getState().hydrate([meta], DEFAULT_SPACE_ID);
             return;
           }
-          // No space is hosted here yet. Keep the full registry for the
-          // switcher, but render an empty tab list until a handoff arrives.
-          useSpaces.getState().hydrate(spaces, null, {});
-          setActiveSpaceForNewTabs("");
-          return;
+          if (windowLabel === "main") {
+            // Cold start only creates "main". Reclaim spaces assigned to space
+            // windows that no longer exist so hosting survives a full restart,
+            // while leaving spaces in live windows (main reload) untouched.
+            const hosts = [
+              ...new Set(
+                registry
+                  .map((s) => s.hostWindowLabel ?? "main")
+                  .filter((label) => label !== "main"),
+              ),
+            ];
+            const alive = await liveWindowLabels(hosts);
+            if (alive) {
+              const reclaimed = reclaimOrphanSpaces(
+                registry,
+                (label) => alive.has(label),
+                Date.now(),
+              );
+              if (reclaimed !== registry) {
+                registry = reclaimed;
+                await saveSpacesList(registry);
+                hosted = spacesForWindow(registry, windowLabel);
+              }
+            }
+          }
+          if (hosted.length === 0) {
+            // No space is hosted here yet. Keep the full registry for the
+            // switcher, but render an empty tab list until a handoff arrives.
+            useSpaces.getState().hydrate(registry, null, {});
+            setActiveSpaceForNewTabs("");
+            return;
+          }
         }
 
         const restored: Tab[] = [];
@@ -102,7 +171,7 @@ export function useSpacesBoot({
         }
 
         const perWindow = activeIdByWindow[windowLabel] ?? null;
-        const saveActive = spaces.some((s) => s.id === perWindow)
+        const saveActive = registry.some((s) => s.id === perWindow)
           ? perWindow!
           : hosted[0].id;
         setActiveSpaceForNewTabs(saveActive);
@@ -129,7 +198,7 @@ export function useSpacesBoot({
         }
         // Registry keeps every space (the switcher needs to show spaces hosted
         // by other windows); only this window's tabs were restored above.
-        useSpaces.getState().hydrate(spaces, saveActive, initialActiveIndex);
+        useSpaces.getState().hydrate(registry, saveActive, initialActiveIndex);
 
         const inActive = restored.filter((t) => t.spaceId === saveActive);
         const idx = states.get(saveActive)?.activeTabIndex ?? 0;
