@@ -1610,6 +1610,7 @@ export default function App() {
                         onOpenCommitFile={openCommitFileDiffTab}
                         onGitHistorySearchHandle={setGitHistoryHandle}
                         onSetMarkdownView={setMarkdownView}
+                        workspaceRoot={explorerRoot}
                         secondaryActiveId={secondaryTabId}
                         secondaryActiveTab={secondaryActiveTab}
                         onCloseSecondary={() => setSecondaryTabId(null)}

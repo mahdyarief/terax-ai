@@ -102,6 +102,8 @@ type Props = {
   onSaved?: () => void;
   onClose?: () => void;
   mediaActive?: boolean;
+  /** Workspace root for scoping local assets in HTML previews. */
+  workspaceRoot?: string | null;
 };
 
 // Above this, syntax highlighting and LSP are disabled: a multi-MB lezer
@@ -125,6 +127,7 @@ export const EditorPane = memo(
       onSaved,
       onClose,
       mediaActive = true,
+      workspaceRoot = null,
     } = props;
 
     const { doc, onChange, save, reload, adoptDiskText, openAnyway } =
@@ -713,7 +716,7 @@ export const EditorPane = memo(
         )}
         {isHtml && !htmlSource ? (
           <div className="h-full min-h-0 flex-1">
-            <HtmlPreview html={doc.content} />
+            <HtmlPreview html={doc.content} path={path} workspaceRoot={workspaceRoot} />
           </div>
         ) : (
           <CodeMirror

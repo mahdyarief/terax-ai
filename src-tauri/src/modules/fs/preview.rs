@@ -14,11 +14,14 @@ use tauri::{Manager, Runtime, UriSchemeContext, UriSchemeResponder};
 const MAX_PREVIEW_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PREVIEWS: usize = 32;
 
-/// No network, no parent access, no forms, no plugins. Inline scripts stay
-/// allowed so a local report can draw its own charts, but the frame's opaque
-/// origin plus `default-src 'none'` keeps them away from Tauri IPC, storage and
-/// filesystem resources.
-const CSP: &str = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'";
+/// Scripts stay inline-only (`'unsafe-inline' 'unsafe-eval'`) and there is no
+/// `connect-src`, so the frame cannot reach Tauri IPC, storage, the filesystem,
+/// or exfiltrate data over the network. Forms, frames, objects and `base` are
+/// also blocked. Stylesheets are the one deliberate relaxation: real HTML
+/// reports reference remote CDN stylesheets (and the fonts/images those pull in),
+/// so `style-src`/`font-src`/`img-src` permit `https:` in addition to inline
+/// data. This is what makes `terax-doc` previews render styled instead of bare.
+const CSP: &str = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline' https:; font-src data: https:; img-src data: blob: https:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'";
 
 struct Preview {
     owner: String,
@@ -224,5 +227,21 @@ mod tests {
         assert!(CSP.contains("connect-src 'none'"));
         assert!(CSP.contains("frame-src 'none'"));
         assert!(CSP.contains("object-src 'none'"));
+    }
+
+    #[test]
+    fn csp_allows_remote_stylesheets_but_not_remote_scripts() {
+        // Real HTML reports load their look from CDN stylesheets; blocking them
+        // rendered previews unstyled.
+        assert!(CSP.contains("style-src 'unsafe-inline' https:"));
+        assert!(CSP.contains("font-src data: https:"));
+        assert!(CSP.contains("img-src data: blob: https:"));
+        // Scripts must stay inline-only: no remote script origin is allowed.
+        let script_src = CSP
+            .split(';')
+            .find(|directive| directive.trim_start().starts_with("script-src"))
+            .expect("script-src directive");
+        assert!(!script_src.contains("https:"));
+        assert!(!script_src.contains("http:"));
     }
 }

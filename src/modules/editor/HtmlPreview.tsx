@@ -1,10 +1,45 @@
+import { checkReadable } from "@/modules/ai/lib/security";
+import { previewBoundary } from "@/modules/markdown/lib/assetPath";
+import { currentWorkspaceEnv } from "@/modules/workspace";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
+import { maybeInlineHtmlAssets } from "./lib/inlineHtmlAssets";
 import { createHtmlPreviewPublisher } from "./lib/htmlPreview";
 
 type Props = {
   html: string;
+  /** Absolute path of the HTML file, used to resolve relative assets (CSS, images). */
+  path?: string | null;
+  /** Folder tree local assets may be inlined from; defaults to the doc folder. */
+  workspaceRoot?: string | null;
 };
+
+type ReadResult =
+  | { kind: "text"; content: string }
+  | { kind: "binary"; size: number }
+  | { kind: "toolarge"; size: number; limit: number };
+
+type ReadBinaryResult =
+  | { kind: "binary"; content: string; size: number }
+  | { kind: "toolarge"; size: number; limit: number };
+
+async function readTextForPreview(path: string): Promise<string> {
+  const result = await invoke<ReadResult>("fs_read_file", {
+    path,
+    workspace: currentWorkspaceEnv(),
+  });
+  if (result.kind === "text") return result.content;
+  throw new Error(result.kind === "binary" ? "binary file" : "file too large");
+}
+
+async function readBinaryForPreview(path: string): Promise<string> {
+  const result = await invoke<ReadBinaryResult>("fs_read_binary", {
+    path,
+    workspace: currentWorkspaceEnv(),
+  });
+  if (result.kind === "binary") return result.content;
+  throw new Error("file too large");
+}
 
 /**
  * Renders HTML from the live editor buffer in an isolated frame.
@@ -13,17 +48,37 @@ type Props = {
  * `sandbox` omits `allow-same-origin`, so the frame gets an opaque origin and
  * its scripts cannot reach this window, Tauri IPC, or storage.
  */
-export function HtmlPreview({ html }: Props) {
+export function HtmlPreview({ html, path, workspaceRoot }: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const publisher = useRef<ReturnType<typeof createHtmlPreviewPublisher> | null>(
     null,
   );
+  const pathRef = useRef(path);
+  pathRef.current = path;
+  const workspaceRootRef = useRef(workspaceRoot);
+  workspaceRootRef.current = workspaceRoot;
 
   useEffect(() => {
     const instance = createHtmlPreviewPublisher({
-      publish: (source) =>
-        invoke<string>("fs_publish_html", { html: source }),
+      publish: async (source) => {
+        const docPath = pathRef.current;
+        const inlined = await maybeInlineHtmlAssets(
+          source,
+          docPath,
+          {
+            readText: readTextForPreview,
+            readBinary: readBinaryForPreview,
+          },
+          docPath
+            ? {
+                boundary: previewBoundary(docPath, workspaceRootRef.current ?? null),
+                isReadable: (abs) => checkReadable(abs).ok,
+              }
+            : undefined,
+        );
+        return invoke<string>("fs_publish_html", { html: inlined });
+      },
       drop: async (token) => {
         try {
           await invoke("fs_drop_html", { token });
@@ -46,7 +101,7 @@ export function HtmlPreview({ html }: Props) {
 
   useEffect(() => {
     publisher.current?.request(html);
-  }, [html]);
+  }, [html, path, workspaceRoot]);
 
   if (error) {
     return (

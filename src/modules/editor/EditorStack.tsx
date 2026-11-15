@@ -12,6 +12,8 @@ type Props = {
   registerHandle: (id: number, handle: EditorPaneHandle | null) => void;
   onCloseTab: (id: number) => void;
   onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
+  /** Workspace root used to scope local assets in HTML previews. */
+  workspaceRoot?: string | null;
 };
 
 export function EditorStack({
@@ -21,6 +23,7 @@ export function EditorStack({
   registerHandle,
   onCloseTab,
   onSetMarkdownView,
+  workspaceRoot,
 }: Props) {
   const editors = tabs.filter(
     (t): t is EditorTab => t.kind === "editor" && !t.cold,
@@ -121,6 +124,7 @@ export function EditorStack({
                 onDirtyChange={getDirtyCallback(t.id)}
                 onClose={getCloseCallback(t.id)}
                 mediaActive={visible && !windowInactive}
+                workspaceRoot={workspaceRoot}
               />
             </div>
           </div>
