@@ -8,9 +8,9 @@ use modules::{
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 #[cfg(target_os = "macos")]
-use tauri::{PhysicalPosition, WindowEvent};
+use tauri::PhysicalPosition;
 use tauri_plugin_window_state::StateFlags;
 
 /// Drained on first read so HMR / re-mounts can't replay the launch dir.
@@ -299,7 +299,6 @@ pub fn run() {
             if let Err(error) = control::start(_app.handle().clone(), control_for_setup.clone()) {
                 log::warn!("could not start Terax control server: {error}");
             }
-            #[cfg(target_os = "macos")]
             if let Some(main) = _app.get_webview_window("main") {
                 let handle = _app.handle().clone();
                 main.on_window_event(move |event| {
@@ -307,6 +306,20 @@ pub fn run() {
                     if matches!(event, WindowEvent::Destroyed) {
                         if let Some(settings) = handle.get_webview_window("settings") {
                             let _ = settings.destroy();
+                        }
+                        // Closing main ends the session: tear down every space
+                        // window too. Their own Destroyed events run the
+                        // per-label PTY cleanup, so nothing is handled here.
+                        let labels: Vec<String> = handle
+                            .webview_windows()
+                            .keys()
+                            .filter(|label| label.starts_with("space-"))
+                            .cloned()
+                            .collect();
+                        for label in &labels {
+                            if let Some(window) = handle.get_webview_window(label) {
+                                let _ = window.destroy();
+                            }
                         }
                     }
                 });

@@ -268,6 +268,9 @@ export default function App() {
   });
 
   const activeSpaceId = useSpaces((s) => s.activeId);
+  const activeSpaceName = useSpaces(
+    (s) => s.spaces.find((sp) => sp.id === s.activeId)?.name ?? null,
+  );
   const spacesHydrated = useSpaces((s) => s.hydrated);
   const activeSpaceIdRef = useRef(activeSpaceId);
   useLayoutEffect(() => {
@@ -412,7 +415,11 @@ export default function App() {
     launchCwd ?? home,
   );
 
-  useWindowTitle(activeTab, explorerRoot);
+  useWindowTitle(
+    activeTab,
+    explorerRoot,
+    windowLabel !== "main" ? activeSpaceName : null,
+  );
 
   useEffect(() => {
     setActiveSearchAddon(
@@ -1265,6 +1272,7 @@ export default function App() {
 
       void (async () => {
         const snapshot = tabs.filter((t) => t.spaceId === spaceId);
+        let detached = false;
         try {
           const leaves = snapshot.flatMap((t) =>
             t.kind === "terminal" ? leafIds(t.paneTree) : [],
@@ -1283,13 +1291,14 @@ export default function App() {
 
           await flushNow();
           detachTabsForSpace(spaceId);
+          detached = true;
           await state.assignSpaceToWindow(spaceId, plan.to);
           await invoke("open_space_window", { spaceId });
         } catch (e) {
           console.error("[terax] open space window failed:", e);
           try {
             await state.assignSpaceToWindow(spaceId, plan.from);
-            if (snapshot.length > 0) {
+            if (detached && snapshot.length > 0) {
               const { serializeTabs, hydrateTabs } = await import(
                 "@/modules/spaces/lib/serialize"
               );
@@ -1524,6 +1533,7 @@ export default function App() {
             openKeyboardShortcuts: () => void openSettingsWindow("shortcuts"),
             spaces: useSpaces.getState().spaces,
             activeSpaceId,
+            windowLabel,
             openSpacesOverview: () => setSwitcherOpen(true),
             newSpace: () => void handleNewSpace(),
             switchSpace: (id) => useSpaces.getState().setActive(id),

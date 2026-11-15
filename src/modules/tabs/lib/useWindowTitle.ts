@@ -21,29 +21,30 @@ function tabLabel(tab: Tab | undefined): string {
 }
 
 /**
- * Drives the OS window title from the focused tab + project folder, the way
- * Spotify shows the current track instead of just the app name. Without this
- * the window keeps the build-time default ("Tauri App" on Linux).
+ * Drives the OS window title from the focused tab + project/space context.
+ * Without this the window keeps the build-time default ("Tauri App" on Linux).
  *
- * Format: `<project> — <tab>` (e.g. `terax-ai — src`), collapsing to just the
- * project when the focused terminal sits at the project root. Falls back to the
- * app name when there's nothing to show.
+ * Main window format: `<project> — <tab>` (e.g. `terax-ai — src`).
+ * Space window format: `<space> — <tab>` so detached spaces are identifiable
+ * in the OS taskbar/switcher.
  */
 export function useWindowTitle(
   activeTab: Tab | undefined,
   explorerRoot: string | null,
+  spaceName?: string | null,
 ): void {
   const project = explorerRoot ? basename(explorerRoot) : "";
   const label = tabLabel(activeTab);
+  const scope = spaceName?.trim() || project;
 
   useEffect(() => {
     let title: string;
-    if (project && label && label !== project) title = `${project} — ${label}`;
-    else title = project || label || APP_NAME;
+    if (scope && label && label !== scope) title = `${scope} — ${label}`;
+    else title = scope || label || APP_NAME;
 
     document.title = title;
     void getCurrentWindow()
       .setTitle(title)
       .catch(() => {});
-  }, [project, label]);
+  }, [scope, label]);
 }

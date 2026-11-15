@@ -257,7 +257,7 @@ Update checklist ini saat implementasi berjalan. Satu item selesai = centang + c
 ### Fase 2 — Tab scoping
 - [x] `useTabs`: guard scoped ke hosted spaces (`setTabHostingGuard`)
 - [x] `detachTabsForSpace` / `attachTabsForSpace` (pure helper + hook action)
-- [ ] Filter tab switcher/HUD/command palette — belum eksplisit; switcher/HUD sudah membaca `tabs` yang memang hanya berisi tab lokal
+- [x] Filter tab switcher/HUD/command palette — `commands.ts` kini men-disabled switch ke space yang di-host window lain ("Open in another window"); switcher/HUD membaca `tabs` yang memang hanya berisi tab lokal
 - [x] Tes unit detach/attach
 
 ### Fase 3 — Boot & persistence
@@ -287,7 +287,7 @@ Update checklist ini saat implementasi berjalan. Satu item selesai = centang + c
 
 ### Fase 7 — Close semantics
 - [x] Reclaim space ke `"main"` saat space window ditutup
-- [ ] Keputusan close `"main"` + cleanup semua child window — belum ada dialog konfirmasi; child window dibiarkan dan reclaim berjalan saat ditutup
+- [x] Keputusan close `"main"` + cleanup semua child window — `main.on_window_event(Destroyed)` kini menutup semua `space-*` (tidak hanya di macOS) dengan cleanup PTY per-label via event Destroyed mereka sendiri; sebelumnya terbungkus `#[cfg(target_os = "macos")]` sehingga tidak jalan di Windows/Linux
 - [x] Move tab lintas window: diblokir dengan toast (disabled by design di v1)
 
 ### Fase 8 — Opsional
@@ -303,7 +303,8 @@ Update checklist ini saat implementasi berjalan. Satu item selesai = centang + c
 - `src-tauri/src/lib.rs` juga memakai `"main"` untuk settings window dan reclaim; ini memang disengaja untuk v1.
 - Capability `default.json`, `desktop.json`, `clipboard.json` sekarang mencakup glob `space-*`.
 - `src/app/App.tsx` + `src/modules/spaces/*` sudah memakai `windowLabel`, boot scoped, persistence scoped, dan tab hosting guard.
-- Batasan v1: handoff memakai respawn mode (PTY lama didispose, tab state dipersist, target me-rehydrate cold tabs), bukan transfer live PTY. Move tab lintas window diblokir; konfirmasi foreground process bersifat best-effort.
+- Batasan v1: handoff memakai respawn mode (PTY lama didispose, tab state dipersist, target me-rehydrate cold tabs), bukan transfer live PTY. Rebind live PTY sengaja ditunda karena `owner = webview.label()` juga mengikat cleanup per label, `StreamTokens` per `(label, token)`, asset grants, dan jalur AI/control readiness; rebind parsial berisiko memutus proses atau membocorkan sesi. Move tab lintas window diblokir; konfirmasi foreground process bersifat best-effort.
+- 2026-11-15: rollback handoff kini memakai flag `detached` agar snapshot lokal tidak di-attach ulang ketika `flushNow()` gagal sebelum `detachTabsForSpace`; judul OS window `space-*` mengikuti nama space lewat argumen ketiga `useWindowTitle`.
 - Upstream sync: gunakan `git fetch upstream && git merge upstream/main` pada branch `dydev` secara berkala (merge, bukan rebase-force) agar perubahan tidak hilang.
 
 ### Log perubahan dokumen

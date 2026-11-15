@@ -104,63 +104,62 @@ export function useSpacesBoot({
       try {
         const { spaces, activeIdByWindow, states } = await loadAll();
         let registry = spaces;
-        let hosted = spacesForWindow(registry, windowLabel);
 
         useSpaces.setState({ windowLabel });
 
-        if (hosted.length === 0) {
-          if (registry.length === 0) {
-            // First run: there is no persisted space at all. Create the default
-            // space for this window (home window is "main").
-            const meta: SpaceMeta = {
-              id: DEFAULT_SPACE_ID,
-              name: "Default",
-              root: launchCwd ?? home ?? null,
-              env: parseWorkspaceScopeKey(
-                usePreferencesStore.getState().defaultWorkspaceEnv,
-              ),
-              hostWindowLabel: windowLabel || "main",
-              createdAt: Date.now(),
-              updatedAt: Date.now(),
-            };
-            await saveSpacesList([meta]);
-            await saveActiveId(DEFAULT_SPACE_ID);
-            setActiveSpaceForNewTabs(DEFAULT_SPACE_ID);
-            useSpaces.getState().hydrate([meta], DEFAULT_SPACE_ID);
-            return;
-          }
-          if (windowLabel === "main") {
-            // Cold start only creates "main". Reclaim spaces assigned to space
-            // windows that no longer exist so hosting survives a full restart,
-            // while leaving spaces in live windows (main reload) untouched.
-            const hosts = [
-              ...new Set(
-                registry
-                  .map((s) => s.hostWindowLabel ?? "main")
-                  .filter((label) => label !== "main"),
-              ),
-            ];
-            const alive = await liveWindowLabels(hosts);
-            if (alive) {
-              const reclaimed = reclaimOrphanSpaces(
-                registry,
-                (label) => alive.has(label),
-                Date.now(),
-              );
-              if (reclaimed !== registry) {
-                registry = reclaimed;
-                await saveSpacesList(registry);
-                hosted = spacesForWindow(registry, windowLabel);
-              }
+        if (registry.length === 0) {
+          // First run: there is no persisted space at all. Create the default
+          // space for this window (home window is "main").
+          const meta: SpaceMeta = {
+            id: DEFAULT_SPACE_ID,
+            name: "Default",
+            root: launchCwd ?? home ?? null,
+            env: parseWorkspaceScopeKey(
+              usePreferencesStore.getState().defaultWorkspaceEnv,
+            ),
+            hostWindowLabel: windowLabel || "main",
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+          await saveSpacesList([meta]);
+          await saveActiveId(DEFAULT_SPACE_ID);
+          setActiveSpaceForNewTabs(DEFAULT_SPACE_ID);
+          useSpaces.getState().hydrate([meta], DEFAULT_SPACE_ID);
+          return;
+        }
+
+        if (windowLabel === "main") {
+          // Cold start only creates "main". Reclaim spaces assigned to space
+          // windows that no longer exist so hosting survives a full restart,
+          // while leaving spaces in live windows (main reload) untouched.
+          const hosts = [
+            ...new Set(
+              registry
+                .map((s) => s.hostWindowLabel ?? "main")
+                .filter((label) => label !== "main"),
+            ),
+          ];
+          const alive = await liveWindowLabels(hosts);
+          if (alive) {
+            const reclaimed = reclaimOrphanSpaces(
+              registry,
+              (label) => alive.has(label),
+              Date.now(),
+            );
+            if (reclaimed !== registry) {
+              registry = reclaimed;
+              await saveSpacesList(registry);
             }
           }
-          if (hosted.length === 0) {
-            // No space is hosted here yet. Keep the full registry for the
-            // switcher, but render an empty tab list until a handoff arrives.
-            useSpaces.getState().hydrate(registry, null, {});
-            setActiveSpaceForNewTabs("");
-            return;
-          }
+        }
+
+        const hosted = spacesForWindow(registry, windowLabel);
+        if (hosted.length === 0) {
+          // No space is hosted here yet. Keep the full registry for the
+          // switcher, but render an empty tab list until a handoff arrives.
+          useSpaces.getState().hydrate(registry, null, {});
+          setActiveSpaceForNewTabs("");
+          return;
         }
 
         const restored: Tab[] = [];

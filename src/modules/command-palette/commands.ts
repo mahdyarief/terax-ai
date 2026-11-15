@@ -57,8 +57,11 @@ export type CommandPaletteActionContext = {
   askAiSelection: () => void;
   openSettings: () => void;
   openKeyboardShortcuts: () => void;
-  spaces: { id: string; name: string }[];
+  spaces: { id: string; name: string; hostWindowLabel?: string | null }[];
   activeSpaceId: string | null;
+  /** Webview label of the window rendering the palette; spaces hosted by a
+   * different window cannot be activated here. */
+  windowLabel: string;
   openSpacesOverview: () => void;
   newSpace: () => void;
   switchSpace: (id: string) => void;
@@ -126,16 +129,23 @@ export function createCommandItems(
       icon: DashboardSquare01Icon,
       run: ctx.newSpace,
     },
-    ...ctx.spaces.map((sp) => ({
-      id: `spaces.switch.${sp.id}`,
-      title: `Switch to ${sp.name}`,
-      group: "Spaces" as const,
-      keywords: ["space", "switch", "session", sp.name],
-      icon: DashboardSquare01Icon,
-      disabledReason:
-        sp.id === ctx.activeSpaceId ? "Current space" : undefined,
-      run: () => ctx.switchSpace(sp.id),
-    })),
+    ...ctx.spaces.map((sp) => {
+      const host = sp.hostWindowLabel ?? "main";
+      const hostedElsewhere = host !== ctx.windowLabel;
+      return {
+        id: `spaces.switch.${sp.id}`,
+        title: `Switch to ${sp.name}`,
+        group: "Spaces" as const,
+        keywords: ["space", "switch", "session", sp.name],
+        icon: DashboardSquare01Icon,
+        disabledReason: hostedElsewhere
+          ? "Open in another window"
+          : sp.id === ctx.activeSpaceId
+            ? "Current space"
+            : undefined,
+        run: () => ctx.switchSpace(sp.id),
+      };
+    }),
     {
       id: "tab.new",
       title: "New terminal",

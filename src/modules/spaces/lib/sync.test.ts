@@ -26,6 +26,12 @@ describe("mergeSpacesByUpdatedAt", () => {
       "c",
     ]);
   });
+
+  it("ignores stale broadcasts that arrive after newer metadata", () => {
+    const local = [{ id: "a", name: "New", updatedAt: 9 }] as any;
+    const stale = [{ id: "a", name: "Stale", updatedAt: 2 }] as any;
+    expect(mergeSpacesByUpdatedAt(local, stale)[0].name).toBe("New");
+  });
 });
 
 describe("applyDeletedSpace", () => {

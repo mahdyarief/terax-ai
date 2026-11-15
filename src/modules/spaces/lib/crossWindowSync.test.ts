@@ -53,4 +53,15 @@ describe("applyHostChanged", () => {
       }),
     ).toBe(input);
   });
+
+  it("is idempotent for a repeated broadcast", () => {
+    const payload: HostChangedPayload = {
+      spaceId: "a",
+      hostWindowLabel: "main",
+      updatedAt: 42,
+    };
+    const once = applyHostChanged(spaces(), payload);
+    const twice = applyHostChanged(once, payload);
+    expect(twice).toEqual(once);
+  });
 });

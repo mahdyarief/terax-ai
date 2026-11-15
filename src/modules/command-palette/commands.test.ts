@@ -28,6 +28,7 @@ function baseContext(
     home: "/home/me",
     spaces: [],
     activeSpaceId: null,
+    windowLabel: "main",
     openNewTab: noop,
     openNewBlock: noop,
     openNewPrivate: noop,
@@ -100,5 +101,27 @@ describe("createCommandItems", () => {
       "spaces.switch.sp1",
     );
     expect(reason).toBe("Current space");
+  });
+
+  it("disables switching to a space hosted by another window", () => {
+    const reason = reasonById(
+      {
+        windowLabel: "main",
+        spaces: [{ id: "sp2", name: "Two", hostWindowLabel: "space-sp2" }],
+      },
+      "spaces.switch.sp2",
+    );
+    expect(reason).toBe("Open in another window");
+  });
+
+  it("enables a space hosted by this window", () => {
+    const reason = reasonById(
+      {
+        windowLabel: "space-sp3",
+        spaces: [{ id: "sp3", name: "Three", hostWindowLabel: "space-sp3" }],
+      },
+      "spaces.switch.sp3",
+    );
+    expect(reason).toBeUndefined();
   });
 });
