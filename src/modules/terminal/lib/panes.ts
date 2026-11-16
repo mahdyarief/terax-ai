@@ -1,3 +1,5 @@
+import type { PtyAttachmentRef } from "./ptyHandoff";
+
 export type PaneId = number;
 
 export type SplitDir = "row" | "col";
@@ -11,7 +13,13 @@ export type PaneBounds = {
 };
 
 export type PaneNode =
-  | { kind: "leaf"; id: PaneId; slotId?: PaneId; cwd?: string }
+  | {
+      kind: "leaf";
+      id: PaneId;
+      slotId?: PaneId;
+      cwd?: string;
+      ptyAttachment?: PtyAttachmentRef;
+    }
   | {
       kind: "split";
       id: PaneId;

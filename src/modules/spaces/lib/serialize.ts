@@ -3,6 +3,7 @@ import {
   type PaneNode,
   type SplitDir,
 } from "@/modules/terminal/lib/panes";
+import type { PtyAttachmentRef } from "@/modules/terminal/lib/ptyHandoff";
 import type {
   EditorTab,
   MarkdownTab,
@@ -12,7 +13,12 @@ import type {
 } from "@/modules/tabs/lib/useTabs";
 
 type SerializedNode =
-  | { kind: "leaf"; cwd?: string; active?: boolean }
+  | {
+      kind: "leaf";
+      cwd?: string;
+      active?: boolean;
+      ptyAttachment?: PtyAttachmentRef;
+    }
   | { kind: "split"; dir: SplitDir; children: SerializedNode[] };
 
 export type SerializedTab =
@@ -45,6 +51,7 @@ function serializeNode(node: PaneNode, activeLeafId: number): SerializedNode {
       kind: "leaf",
       ...(node.cwd !== undefined && { cwd: node.cwd }),
       ...(node.id === activeLeafId && { active: true }),
+      ...(node.ptyAttachment && { ptyAttachment: node.ptyAttachment }),
     };
   }
   return {
@@ -101,6 +108,7 @@ type HydratedTree = {
   tree: PaneNode;
   activeLeafId: number;
   firstLeafCwd?: string;
+  hasPtyAttachment: boolean;
 };
 
 function hydrateNode(
@@ -115,6 +123,7 @@ function hydrateNode(
       kind: "leaf",
       id,
       ...(node.cwd !== undefined && { cwd: node.cwd }),
+      ...(node.ptyAttachment && { ptyAttachment: node.ptyAttachment }),
     };
   }
   const children = node.children.map((c) => hydrateNode(c, allocId, acc));
@@ -133,11 +142,16 @@ function hydrateTree(
   const activeLeafId = acc.activeLeafId ?? leaves[0]?.id ?? allocId();
   const firstLeafCwd =
     leaves.find((l) => l.id === activeLeafId)?.cwd ?? leaves[0]?.cwd;
-  return { tree: paneTree, activeLeafId, firstLeafCwd };
+  return {
+    tree: paneTree,
+    activeLeafId,
+    firstLeafCwd,
+    hasPtyAttachment: leaves.some((l) => l.ptyAttachment !== undefined),
+  };
 }
 
-function collectLeaves(node: PaneNode): Array<{ id: number; cwd?: string }> {
-  if (isLeaf(node)) return [{ id: node.id, cwd: node.cwd }];
+function collectLeaves(node: PaneNode): Array<Extract<PaneNode, { kind: "leaf" }>> {
+  if (isLeaf(node)) return [node];
   return node.children.flatMap(collectLeaves);
 }
 
@@ -145,10 +159,12 @@ function hydrateTab(
   s: SerializedTab,
   spaceId: string,
   allocId: () => number,
+  keepPty: boolean,
 ): Tab | null {
   switch (s.kind) {
     case "terminal": {
-      const { tree, activeLeafId, firstLeafCwd } = hydrateTree(s.tree, allocId);
+      const { tree, activeLeafId, firstLeafCwd, hasPtyAttachment } =
+        hydrateTree(s.tree, allocId);
       const title =
         s.customTitle ??
         (firstLeafCwd ? basename(firstLeafCwd) : s.blocks ? "blocks" : "shell");
@@ -156,7 +172,7 @@ function hydrateTab(
         id: allocId(),
         kind: "terminal",
         spaceId,
-        cold: true,
+        cold: !(keepPty && hasPtyAttachment),
         title,
         cwd: firstLeafCwd,
         paneTree: tree,
@@ -221,12 +237,13 @@ export function hydrateTabs(
   serialized: SerializedTab[],
   spaceId: string,
   allocId: () => number,
+  opts: { keepPty?: boolean } = {},
 ): Tab[] {
   if (!Array.isArray(serialized)) return [];
   const out: Tab[] = [];
   for (const s of serialized) {
     try {
-      const tab = hydrateTab(s, spaceId, allocId);
+      const tab = hydrateTab(s, spaceId, allocId, opts.keepPty === true);
       if (tab) out.push(tab);
     } catch {
       // Skip corrupted entries rather than failing the whole restore.

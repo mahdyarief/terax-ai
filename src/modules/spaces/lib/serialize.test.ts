@@ -143,6 +143,33 @@ describe("hydrateTabs", () => {
     ).toEqual([]);
   });
 
+  it("preserves stable PTY attachment metadata during handoff hydration", () => {
+    const tab = term({
+      paneTree: {
+        kind: "leaf",
+        id: 2,
+        cwd: "/a",
+        ptyAttachment: { ptyId: 41, checkpoint: "128", cols: 80, rows: 24 },
+      },
+    });
+    const [serialized] = serializeTabs([tab]);
+    const [hydrated] = hydrateTabs([serialized], "s1", counter(), {
+      keepPty: true,
+    });
+    const leaf = hydrated.kind === "terminal" ? hydrated.paneTree : null;
+    expect(leaf).toMatchObject({
+      kind: "leaf",
+      ptyAttachment: { ptyId: 41, checkpoint: "128", cols: 80, rows: 24 },
+    });
+    expect(hydrated.kind === "terminal" && hydrated.cold).toBe(false);
+  });
+
+  it("keeps legacy state cold when no PTY attachment exists", () => {
+    const [serialized] = serializeTabs([term({})]);
+    const [hydrated] = hydrateTabs([serialized], "s1", counter());
+    expect(hydrated.kind === "terminal" && hydrated.cold).toBe(true);
+  });
+
   it("hydrates editor/preview/markdown as cold with derived titles", () => {
     const serialized: SerializedTab[] = [
       { kind: "editor", path: "/a/foo.ts" },
