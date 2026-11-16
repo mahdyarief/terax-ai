@@ -16,6 +16,7 @@ use super::da_filter::DaFilter;
 use super::hub::{Command, Hub};
 use super::presentation::PresentationClass;
 use super::queue::{OutputQueue, QueueDiagnostics};
+use super::replay::ReplayLog;
 use super::shell_init;
 use super::terminal_colors::{ColorState, TerminalColors};
 use crate::modules::workspace::WorkspaceEnv;
@@ -64,6 +65,9 @@ pub struct Session {
     pub link: Arc<AgentLink>,
     /// One active window attachment and its writer lease.
     pub(super) attachment: RwLock<Attachment>,
+    /// Ordered record of everything the terminal emitted, so a new window can
+    /// rebuild its view without the process restarting.
+    replay: Arc<Mutex<ReplayLog>>,
     pub killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// Feeds the per-session writer thread, which keeps input ordered and off
     /// every async worker.
@@ -150,11 +154,48 @@ impl Session {
 
     pub(super) fn resize(&self, size: PtySize) -> Result<(), String> {
         let master = self.master.lock().unwrap();
-        master
+        let result = master
             .as_ref()
             .ok_or("PTY has exited")?
             .resize(size)
-            .map_err(|e| e.to_string())
+            .map_err(|e| e.to_string());
+        if result.is_ok() {
+            let _ = self
+                .replay
+                .lock()
+                .unwrap()
+                .push_resize(size.cols, size.rows);
+        }
+        result
+    }
+
+    pub(super) fn replay_all(&self) -> Result<Vec<super::replay::ReplayEvent>, super::replay::ReplayError> {
+        self.replay.lock().unwrap().replay_all()
+    }
+
+    pub(super) fn replay_after(
+        &self,
+        checkpoint: u64,
+    ) -> Result<Vec<super::replay::ReplayEvent>, super::replay::ReplayError> {
+        self.replay.lock().unwrap().replay_after(checkpoint)
+    }
+
+    pub(super) fn checkpoint(&self) -> Result<u64, super::replay::ReplayError> {
+        let replay = self.replay.lock().unwrap();
+        if !replay.is_complete() {
+            return Err(super::replay::ReplayError::Truncated);
+        }
+        Ok(replay.sequence())
+    }
+
+    #[cfg(test)]
+    pub(super) fn replay_output_for_test(&self, bytes: &[u8]) {
+        let _ = self.replay.lock().unwrap().push_output(bytes);
+    }
+
+    #[cfg(test)]
+    pub(super) fn replay_resize_for_test(&self, cols: u16, rows: u16) {
+        let _ = self.replay.lock().unwrap().push_resize(cols, rows);
     }
 
     /// Queues `bytes` for the writer thread and resolves with the result of
@@ -396,6 +437,7 @@ pub(super) fn spawn_with(
         pane_id,
         link: link.clone(),
         attachment: RwLock::new(Attachment::new(owner.clone(), token)),
+        replay: Arc::new(Mutex::new(ReplayLog::new(size.cols, size.rows))),
         killer: Mutex::new(killer),
         input: input.clone(),
         master: Arc::new(Mutex::new(Some(pair.master))),
@@ -426,6 +468,7 @@ pub(super) fn spawn_with(
 
     let spawn_at = Instant::now();
     let output_r = output.clone();
+    let replay_r = session.replay.clone();
     let reader_thread = thread::Builder::new()
         .name("terax-pty-reader".into())
         .stack_size(READER_STACK)
@@ -480,6 +523,7 @@ pub(super) fn spawn_with(
                         if chunk.is_empty() {
                             continue;
                         }
+                        let _ = replay_r.lock().unwrap().push_output(chunk);
                         if !output_r.push(chunk) {
                             #[cfg(windows)]
                             continue;
