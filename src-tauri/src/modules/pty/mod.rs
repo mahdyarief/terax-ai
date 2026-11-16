@@ -1,6 +1,5 @@
 pub(crate) mod agent_detect;
 mod attachment;
-mod replay;
 mod da_filter;
 mod foreground;
 mod gate;
@@ -9,6 +8,7 @@ mod output;
 mod presentation;
 mod protocol;
 mod queue;
+mod replay;
 mod session;
 pub(crate) mod shell_init;
 mod terminal_colors;
@@ -18,7 +18,7 @@ mod wake;
 mod wire;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 use std::thread;
 
@@ -41,7 +41,7 @@ const MAX_PRESENTATION_BATCH: usize = 4096;
 #[derive(Clone)]
 pub struct PaneTarget {
     pub pty_id: u32,
-    pub owner: Arc<str>,
+    pub host: Arc<str>,
     pub link: Arc<agent_detect::AgentLink>,
 }
 
@@ -50,6 +50,7 @@ pub struct PtyState {
     // Starts at 1 so freshly-handed-out ids are never 0, which the frontend
     // sometimes treats as "unset". Increments monotonically; never reused.
     next_id: AtomicU32,
+    next_token: AtomicU64,
     hub: Hub,
     /// Resolved from the app's config on the first `terax-pty` request.
     origins: OnceLock<gate::AllowedOrigins>,
@@ -60,6 +61,7 @@ impl Default for PtyState {
         Self {
             sessions: RwLock::new(HashMap::new()),
             next_id: AtomicU32::new(1),
+            next_token: AtomicU64::new(1),
             hub: Hub::new(),
             origins: OnceLock::new(),
         }
@@ -88,7 +90,7 @@ impl PtyState {
             .max_by_key(|(id, _)| **id)
             .map(|(id, session)| PaneTarget {
                 pty_id: *id,
-                owner: session.owner.clone(),
+                host: session.host(),
                 link: session.link.clone(),
             })
     }
@@ -101,7 +103,7 @@ impl PtyState {
             label: Arc::from(label),
         });
         for session in self.sessions.read().unwrap().values() {
-            if &*session.owner == label {
+            if &*session.host() == label {
                 session.close_output();
             }
         }
@@ -116,7 +118,7 @@ impl PtyState {
             let mut sessions = self.sessions.write().unwrap();
             let ids: Vec<u32> = sessions
                 .iter()
-                .filter(|(_, session)| &*session.owner == label)
+                .filter(|(_, session)| &*session.host() == label)
                 .map(|(id, _)| *id)
                 .collect();
             ids.into_iter()
@@ -196,6 +198,7 @@ pub async fn pty_open(
         pane_id.and_then(|pane_id| control.shell_env(pane_id))
     };
     let id = state.next_id.fetch_add(1, Ordering::Relaxed);
+    let token = state.next_token.fetch_add(1, Ordering::Relaxed);
     let credential = control_env.clone();
     let pending_credential = credential.as_ref().map(|env| control.pending_shell(env));
     let control_app = app.clone();
@@ -212,6 +215,7 @@ pub async fn pty_open(
         );
         session::spawn(
             id,
+            token,
             app,
             owner,
             hub,
@@ -528,7 +532,7 @@ pub fn pty_session_shell(
 ) -> Result<String, String> {
     let sessions = state.sessions.read().unwrap();
     let session = sessions.get(&id).ok_or("no session")?;
-    if session.owner.as_ref() != webview.label() {
+    if &*session.host() != webview.label() {
         return Err("session belongs to another webview".into());
     }
     Ok(session.shell_program.clone())
@@ -565,6 +569,7 @@ mod tests {
         let session = spawn_with(
             Host {
                 id,
+                token: id as u64,
                 owner: Arc::from(owner),
                 hub: state.hub.clone(),
                 class: PresentationClass::Hidden,
@@ -598,6 +603,17 @@ mod tests {
             assert!(Instant::now() < deadline, "timed out waiting for {what}");
             std::thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[test]
+    fn pty_write_uses_attachment_host_not_the_callers_webview_label() {
+        let state = Arc::new(PtyState::default());
+        let session = open(&state, 1, "main");
+        let token = session.attachment_token_for_test();
+        assert!(session.authorizes("main", token, 0));
+        assert!(!session.authorizes("space-a", token, 0));
+        assert!(!session.authorizes("main", token + 1, 0));
+        assert!(!session.authorizes("main", token, 1));
     }
 
     #[test]
@@ -638,7 +654,7 @@ mod tests {
         let respawn = open_in_pane(&state, 4, "main", Some(7));
         let target = state.pane_target(7).unwrap();
         assert_eq!(target.pty_id, 4);
-        assert_eq!(&*target.owner, "main");
+        assert_eq!(&*target.host, "main");
         assert!(std::sync::Arc::ptr_eq(&target.link, &respawn.link));
 
         // A closed or finished terminal is no longer reachable.

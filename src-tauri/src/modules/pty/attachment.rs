@@ -188,6 +188,34 @@ impl Attachment {
         Ok(restored)
     }
 
+    pub(super) fn host(&self) -> Arc<str> {
+        self.host.clone()
+    }
+
+    pub(super) fn token(&self) -> AttachToken {
+        self.token
+    }
+
+    pub(super) fn epoch(&self) -> LeaseEpoch {
+        self.epoch
+    }
+
+    pub(super) fn phase(&self) -> AttachmentPhase {
+        self.phase
+    }
+
+    pub(super) fn checkpoint(&self) -> u64 {
+        self.checkpoint
+    }
+
+    pub(super) fn handoff(&self) -> Option<&Handoff> {
+        self.handoff.as_deref()
+    }
+
+    pub(super) fn handoff_id(&self) -> Option<HandoffId> {
+        self.handoff.as_ref().map(|handoff| handoff.id)
+    }
+
     /// True only for the one host holding the current token and epoch.
     pub(super) fn authorizes(&self, host: &str, token: AttachToken, epoch: LeaseEpoch) -> bool {
         matches!(

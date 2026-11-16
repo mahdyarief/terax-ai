@@ -1,6 +1,6 @@
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11,6 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 use super::agent_detect::{
     AgentDetector, AgentLink, AgentSignal, Signal, TerminalNotificationEvent,
 };
+use super::attachment::{AttachToken, Attachment, LeaseEpoch};
 use super::da_filter::DaFilter;
 use super::hub::{Command, Hub};
 use super::presentation::PresentationClass;
@@ -61,8 +62,8 @@ pub struct Session {
     pub pane_id: Option<u32>,
     /// Agent state shared with the control server's structured hooks.
     pub link: Arc<AgentLink>,
-    /// Label of the webview that opened this PTY and receives its output.
-    pub owner: Arc<str>,
+    /// One active window attachment and its writer lease.
+    pub(super) attachment: RwLock<Attachment>,
     pub killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// Feeds the per-session writer thread, which keeps input ordered and off
     /// every async worker.
@@ -73,6 +74,29 @@ pub struct Session {
     colors: Arc<ColorState>,
     // Set only after output drains, so registration cannot reap a live queue.
     pub(super) finished: Arc<AtomicBool>,
+}
+
+#[allow(dead_code)]
+impl Session {
+    pub(super) fn host(&self) -> Arc<str> {
+        self.attachment.read().unwrap().host()
+    }
+
+    pub(super) fn authorizes(&self, host: &str, token: AttachToken, epoch: LeaseEpoch) -> bool {
+        self.attachment
+            .read()
+            .unwrap()
+            .authorizes(host, token, epoch)
+    }
+
+    pub(super) fn replace_attachment(&self, attachment: Attachment) {
+        *self.attachment.write().unwrap() = attachment;
+    }
+
+    #[cfg(test)]
+    fn attachment_token_for_test(&self) -> AttachToken {
+        self.attachment.read().unwrap().token()
+    }
 }
 
 impl Drop for Session {
@@ -218,6 +242,7 @@ impl Drop for ChildKillGuard {
 /// Everything a PTY needs from the host that is not the shell itself.
 pub(super) struct Host {
     pub id: u32,
+    pub token: AttachToken,
     pub owner: Arc<str>,
     pub hub: Hub,
     pub class: PresentationClass,
@@ -236,6 +261,7 @@ pub(super) struct Host {
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
     id: u32,
+    token: AttachToken,
     app: AppHandle,
     owner: Arc<str>,
     hub: Hub,
@@ -255,6 +281,7 @@ pub fn spawn(
     spawn_with(
         Host {
             id,
+            token,
             owner,
             hub,
             class,
@@ -295,6 +322,7 @@ pub(super) fn spawn_with(
 
     let Host {
         id,
+        token,
         owner,
         hub,
         class,
@@ -367,7 +395,7 @@ pub(super) fn spawn_with(
         shell_program,
         pane_id,
         link: link.clone(),
-        owner,
+        attachment: RwLock::new(Attachment::new(owner.clone(), token)),
         killer: Mutex::new(killer),
         input: input.clone(),
         master: Arc::new(Mutex::new(Some(pair.master))),
@@ -652,6 +680,7 @@ mod tests {
         (
             Host {
                 id,
+                token: id as u64,
                 owner: Arc::from("main"),
                 hub: hub.clone(),
                 class: PresentationClass::Focused,

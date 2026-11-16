@@ -225,9 +225,9 @@ impl ControlState {
                     .ready_windows
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .contains(target.owner.as_ref())
+                    .contains(target.host.as_ref())
                 {
-                    return Ok(target.owner.to_string());
+                    return Ok(target.host.to_string());
                 }
                 return Err("frontend_not_ready");
             }
@@ -1636,7 +1636,7 @@ mod tests {
         let host = FakeHost::new(true);
         *host.live.lock().expect("fake host live") = Some(PaneTarget {
             pty_id: 9,
-            owner: Arc::from("space-alpha"),
+            host: Arc::from("space-alpha"),
             link: crate::modules::pty::agent_detect::AgentLink::new(),
         });
 

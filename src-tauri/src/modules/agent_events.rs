@@ -469,9 +469,9 @@ fn handle_impl(
 
     let wait = params
         .wait_secs
-        .filter(|_| facts.decision_capable && state.broker.ui_ready(&target.owner))
+        .filter(|_| facts.decision_capable && state.broker.ui_ready(&target.host))
         .map(|secs| Duration::from_secs(u64::from(secs.min(MAX_DECISION_SECS))));
-    let pending = wait.and_then(|wait| match state.broker.register(pane_id, &target.owner) {
+    let pending = wait.and_then(|wait| match state.broker.register(pane_id, &target.host) {
         Ok((id, receiver)) => Some((wait, id, receiver)),
         Err(_) => None,
     });
@@ -488,7 +488,7 @@ fn handle_impl(
         at: now_ms(),
     };
     let preview = facts.permission.clone();
-    host.emit_event(&target.owner, &event(facts));
+    host.emit_event(&target.host, &event(facts));
     for transition in transitions {
         host.emit_signal(transition.into_signal(target.pty_id));
     }
@@ -500,7 +500,7 @@ fn handle_impl(
         Verdict::Cancelled(Cancel::AgentGone)
     } else {
         await_decision(&receiver, wait, DECISION_POLL, || {
-            if !state.broker.ui_ready(&target.owner) {
+            if !state.broker.ui_ready(&target.host) {
                 Some(Cancel::UiGone)
             } else if host
                 .pane(pane_id)
@@ -535,7 +535,7 @@ fn handle_impl(
         permission.outcome = Some(outcome.to_string());
         permission
     });
-    host.emit_event(&target.owner, &event(resolved));
+    host.emit_event(&target.host, &event(resolved));
     accepted(request, Some(decision))
 }
 
@@ -578,7 +578,7 @@ pub(crate) mod test_host {
             Arc::new(Self {
                 live: Mutex::new(pane_open.then(|| PaneTarget {
                     pty_id: 9,
-                    owner: Arc::from("main"),
+                    host: Arc::from("main"),
                     link: AgentLink::new(),
                 })),
                 events: Mutex::new(Vec::new()),
