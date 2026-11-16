@@ -67,7 +67,7 @@ pub struct Session {
     pub(super) attachment: RwLock<Attachment>,
     /// Ordered record of everything the terminal emitted, so a new window can
     /// rebuild its view without the process restarting.
-    replay: Arc<Mutex<ReplayLog>>,
+    pub(super) replay: Arc<Mutex<ReplayLog>>,
     pub killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// Feeds the per-session writer thread, which keeps input ordered and off
     /// every async worker.
@@ -169,7 +169,9 @@ impl Session {
         result
     }
 
-    pub(super) fn replay_all(&self) -> Result<Vec<super::replay::ReplayEvent>, super::replay::ReplayError> {
+    pub(super) fn replay_all(
+        &self,
+    ) -> Result<Vec<super::replay::ReplayEvent>, super::replay::ReplayError> {
         self.replay.lock().unwrap().replay_all()
     }
 
@@ -188,14 +190,8 @@ impl Session {
         Ok(replay.sequence())
     }
 
-    #[cfg(test)]
-    pub(super) fn replay_output_for_test(&self, bytes: &[u8]) {
-        let _ = self.replay.lock().unwrap().push_output(bytes);
-    }
-
-    #[cfg(test)]
-    pub(super) fn replay_resize_for_test(&self, cols: u16, rows: u16) {
-        let _ = self.replay.lock().unwrap().push_resize(cols, rows);
+    pub(super) fn size(&self) -> (u16, u16) {
+        self.replay.lock().unwrap().size()
     }
 
     /// Queues `bytes` for the writer thread and resolves with the result of

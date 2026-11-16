@@ -1,7 +1,4 @@
 //! Bounded, sequence-zero replay log for one live PTY.
-//!
-//! Consumed by `Session` in Task 4; the allow disappears once it is wired.
-#![allow(dead_code)]
 
 pub(super) const MAX_REPLAY_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const MAX_REPLAY_EVENTS: usize = 65_536;
@@ -82,6 +79,17 @@ impl ReplayLog {
         self.events.iter().map(ReplayEvent::sequence_len).sum()
     }
 
+    pub(super) fn size(&self) -> (u16, u16) {
+        self.events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                ReplayEvent::Resize { cols, rows } => Some((*cols, *rows)),
+                ReplayEvent::Output { .. } => None,
+            })
+            .unwrap_or((self.creation_cols, self.creation_rows))
+    }
+
     pub(super) fn is_complete(&self) -> bool {
         self.complete
     }
@@ -141,6 +149,15 @@ mod tests {
             }
         ));
         assert!(matches!(&events[2], ReplayEvent::Output { bytes } if bytes == b"two"));
+    }
+
+    #[test]
+    fn size_tracks_the_last_resize_event() {
+        let mut log = ReplayLog::new(80, 24);
+        assert_eq!(log.size(), (80, 24));
+        log.push_resize(120, 40).unwrap();
+        log.push_output(b"output").unwrap();
+        assert_eq!(log.size(), (120, 40));
     }
 
     #[test]

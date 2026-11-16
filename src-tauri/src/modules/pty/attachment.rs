@@ -5,9 +5,6 @@
 //! failed attempt rolls the source attachment back with fresh credentials.
 //! This module performs no I/O: it only validates transitions and returns the
 //! next state.
-//!
-//! Consumed by the handoff commands in Task 5; the allow disappears once wired.
-#![allow(dead_code)]
 
 use std::sync::Arc;
 
@@ -184,7 +181,15 @@ impl Attachment {
         restored.token = token;
         restored.epoch = epoch;
         restored.phase = AttachmentPhase::Attached;
-        restored.handoff = None;
+        // A repeated rollback needs to recognize this exact handoff; a
+        // successful commit still clears the marker and rejects rollback.
+        restored.handoff = Some(Box::new(Handoff {
+            id,
+            from: handoff.from.clone(),
+            to: handoff.from.clone(),
+            checkpoint: handoff.checkpoint,
+            source: restored.clone(),
+        }));
         Ok(restored)
     }
 
@@ -208,12 +213,21 @@ impl Attachment {
         self.checkpoint
     }
 
-    pub(super) fn handoff(&self) -> Option<&Handoff> {
-        self.handoff.as_deref()
-    }
-
     pub(super) fn handoff_id(&self) -> Option<HandoffId> {
         self.handoff.as_ref().map(|handoff| handoff.id)
+    }
+
+    pub(super) fn handoff_from(&self) -> Option<Arc<str>> {
+        self.handoff.as_ref().map(|handoff| handoff.from.clone())
+    }
+
+    pub(super) fn handoff_to(&self) -> Option<Arc<str>> {
+        self.handoff.as_ref().map(|handoff| handoff.to.clone())
+    }
+
+    /// Drops the marker left by a rollback so the same handoff id can be retried.
+    pub(super) fn clear_handoff(&mut self) {
+        self.handoff = None;
     }
 
     /// True only for the one host holding the current token and epoch.

@@ -3,6 +3,7 @@ mod attachment;
 mod da_filter;
 mod foreground;
 mod gate;
+mod handoff;
 mod hub;
 mod output;
 mod presentation;
@@ -20,6 +21,9 @@ mod wire;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
+
+use base64::Engine;
+use serde::Serialize;
 use std::thread;
 
 use portable_pty::PtySize;
@@ -43,6 +47,87 @@ pub struct PaneTarget {
     pub pty_id: u32,
     pub host: Arc<str>,
     pub link: Arc<agent_detect::AgentLink>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyHandoffCheckpoint {
+    pty_id: u32,
+    checkpoint: String,
+    cols: u16,
+    rows: u16,
+    attach_token: String,
+}
+
+#[derive(Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyLeaseAck {
+    pub pty_id: u32,
+    pub attach_token: String,
+    pub lease_epoch: String,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum PtyReplayEvent {
+    Output { data: String },
+    Resize { cols: u16, rows: u16 },
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyReplayPayload {
+    pty_id: u32,
+    cols: u16,
+    rows: u16,
+    attach_token: String,
+    lease_epoch: String,
+    events: Vec<PtyReplayEvent>,
+}
+
+/// Decimals cross IPC as strings so a token or epoch above 2^53 keeps every
+/// digit; a JS number would silently round it and break the lease check.
+fn parse_handoff(value: &str) -> Result<u64, String> {
+    value
+        .parse()
+        .map_err(|_| format!("invalid handoff id: {value}"))
+}
+
+fn parse_leases(leases: &[PtyLeaseAck]) -> Result<Vec<(u32, u64, u64)>, String> {
+    leases
+        .iter()
+        .map(|lease| {
+            let token = lease
+                .attach_token
+                .parse()
+                .map_err(|_| format!("invalid attach token for terminal {}", lease.pty_id))?;
+            let epoch = lease
+                .lease_epoch
+                .parse()
+                .map_err(|_| format!("invalid lease epoch for terminal {}", lease.pty_id))?;
+            Ok((lease.pty_id, token, epoch))
+        })
+        .collect()
+}
+
+fn to_replay_payload(replay: handoff::Replay) -> PtyReplayPayload {
+    PtyReplayPayload {
+        pty_id: replay.pty_id,
+        cols: replay.cols,
+        rows: replay.rows,
+        attach_token: replay.token.to_string(),
+        lease_epoch: replay.epoch.to_string(),
+        events: replay
+            .events
+            .into_iter()
+            .map(|event| match event {
+                replay::ReplayEvent::Output { bytes } => PtyReplayEvent::Output {
+                    data: base64::engine::general_purpose::STANDARD.encode(bytes),
+                },
+                replay::ReplayEvent::Resize { cols, rows } => PtyReplayEvent::Resize { cols, rows },
+            })
+            .collect(),
+    }
 }
 
 pub struct PtyState {
@@ -437,6 +522,99 @@ pub fn pty_close_all(state: tauri::State<PtyState>) -> Result<usize, String> {
 /// invoke commands, so other frames and origins cannot read terminal output
 /// even though the custom protocol is reachable from any frame. Reopening
 /// supersedes the previous stream and detaches its terminals.
+#[tauri::command]
+pub async fn pty_prepare_handoff(
+    state: tauri::State<'_, PtyState>,
+    webview: tauri::Webview,
+    handoff_id: String,
+    ids: Vec<u32>,
+    to: String,
+) -> Result<Vec<PtyHandoffCheckpoint>, String> {
+    let handoff_id = parse_handoff(&handoff_id)?;
+    let checkpoints = handoff::handoff_prepare(&state, handoff_id, &ids, webview.label(), &to)?;
+    Ok(checkpoints
+        .into_iter()
+        .map(|checkpoint| PtyHandoffCheckpoint {
+            pty_id: checkpoint.pty_id,
+            checkpoint: checkpoint.checkpoint.to_string(),
+            cols: checkpoint.cols,
+            rows: checkpoint.rows,
+            attach_token: checkpoint.token.to_string(),
+        })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn pty_detach(
+    state: tauri::State<'_, PtyState>,
+    webview: tauri::Webview,
+    handoff_id: String,
+    ids: Vec<u32>,
+) -> Result<(), String> {
+    handoff::handoff_detach(&state, parse_handoff(&handoff_id)?, &ids, webview.label())
+}
+
+#[tauri::command]
+pub async fn pty_attach(
+    state: tauri::State<'_, PtyState>,
+    webview: tauri::Webview,
+    handoff_id: String,
+    ids: Vec<u32>,
+) -> Result<Vec<PtyReplayPayload>, String> {
+    handoff::handoff_attach(&state, parse_handoff(&handoff_id)?, &ids, webview.label())
+        .map(|replays| replays.into_iter().map(to_replay_payload).collect())
+}
+
+#[tauri::command]
+pub async fn pty_commit_handoff(
+    state: tauri::State<'_, PtyState>,
+    webview: tauri::Webview,
+    handoff_id: String,
+    leases: Vec<PtyLeaseAck>,
+) -> Result<(), String> {
+    let handoff_id = parse_handoff(&handoff_id)?;
+    let leases = parse_leases(&leases)?;
+    for (id, _, _) in &leases {
+        let session = state
+            .sessions
+            .read()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| format!("no terminal {id}"))?;
+        if session.host().as_ref() != webview.label() {
+            return Err(format!("terminal {id} is not attached to this window"));
+        }
+    }
+    handoff::handoff_commit(&state, handoff_id, &leases)
+}
+
+#[tauri::command]
+pub async fn pty_rollback_handoff(
+    state: tauri::State<'_, PtyState>,
+    webview: tauri::Webview,
+    handoff_id: String,
+    ids: Vec<u32>,
+) -> Result<Vec<PtyReplayPayload>, String> {
+    let handoff_id = parse_handoff(&handoff_id)?;
+    for id in &ids {
+        let session = state
+            .sessions
+            .read()
+            .unwrap()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| format!("no terminal {id}"))?;
+        if session.host().as_ref() != webview.label()
+            && session.attachment.read().unwrap().handoff_id() != Some(handoff_id)
+        {
+            return Err(format!("terminal {id} does not belong to this handoff"));
+        }
+    }
+    handoff::handoff_rollback(&state, handoff_id, &ids)
+        .map(|replays| replays.into_iter().map(to_replay_payload).collect())
+}
+
 #[tauri::command]
 pub async fn pty_stream_open(
     webview: tauri::Webview,
