@@ -1,5 +1,6 @@
 pub(crate) mod agent_detect;
 mod attachment;
+mod replay;
 mod da_filter;
 mod foreground;
 mod gate;

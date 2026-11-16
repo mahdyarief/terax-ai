@@ -5,6 +5,9 @@
 //! failed attempt rolls the source attachment back with fresh credentials.
 //! This module performs no I/O: it only validates transitions and returns the
 //! next state.
+//!
+//! Consumed by the handoff commands in Task 5; the allow disappears once wired.
+#![allow(dead_code)]
 
 use std::sync::Arc;
 
