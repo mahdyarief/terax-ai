@@ -6,7 +6,7 @@
 //! Request body (`POST /poll` and `POST /ack`):
 //!
 //! ```text
-//! [u64 token][u32 count] then count x [u32 pty_id][u64 cumulative_parsed_bytes]
+//! [u64 token][u64 epoch][u32 count] then count x [u32 pty_id][u64 cumulative_parsed_bytes]
 //! ```
 //!
 //! Response body (`/poll`), frames back to back:
@@ -37,7 +37,7 @@ pub(super) const RESPONSE_CAP: usize = 1024 * 1024;
 const CONTROL_RESERVE: usize = 16 * 1024;
 const MAX_REASON_BYTES: usize = 200;
 
-pub(super) const REQUEST_HEADER_LEN: usize = 12;
+pub(super) const REQUEST_HEADER_LEN: usize = 20;
 pub(super) const ACK_ENTRY_LEN: usize = 12;
 /// Wire maximum. The frontend sends at most 64 per request so a request body
 /// stays below 1 KiB, which WebKitGTK's body reader handles in one pass.
@@ -54,6 +54,10 @@ pub(super) struct Ack {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct StreamRequest {
     pub token: u64,
+    /// Lease generation of the window that is polling. A stale epoch belongs to
+    /// a window the terminal has already moved away from, even when its stream
+    /// token is still the live one for that label.
+    pub epoch: u64,
     pub acks: Vec<Ack>,
 }
 
@@ -93,7 +97,8 @@ pub(super) fn decode_request(body: &[u8]) -> Result<StreamRequest, WireError> {
         return Err(WireError::Truncated);
     };
     let token = u64::from_le_bytes(header[..8].try_into().expect("8-byte slice"));
-    let count = u32::from_le_bytes(header[8..].try_into().expect("4-byte slice")) as usize;
+    let epoch = u64::from_le_bytes(header[8..16].try_into().expect("8-byte slice"));
+    let count = u32::from_le_bytes(header[16..].try_into().expect("4-byte slice")) as usize;
     if count > MAX_ACKS_PER_REQUEST {
         return Err(WireError::TooManyAcks);
     }
@@ -109,13 +114,14 @@ pub(super) fn decode_request(body: &[u8]) -> Result<StreamRequest, WireError> {
             bytes: u64::from_le_bytes(entry[4..].try_into().expect("8-byte slice")),
         })
         .collect();
-    Ok(StreamRequest { token, acks })
+    Ok(StreamRequest { token, epoch, acks })
 }
 
 #[cfg(test)]
-pub(super) fn encode_request(token: u64, acks: &[Ack]) -> Vec<u8> {
+pub(super) fn encode_request(token: u64, epoch: u64, acks: &[Ack]) -> Vec<u8> {
     let mut body = Vec::with_capacity(REQUEST_HEADER_LEN + acks.len() * ACK_ENTRY_LEN);
     body.extend_from_slice(&token.to_le_bytes());
+    body.extend_from_slice(&epoch.to_le_bytes());
     body.extend_from_slice(&(acks.len() as u32).to_le_bytes());
     for ack in acks {
         body.extend_from_slice(&ack.id.to_le_bytes());
@@ -302,6 +308,20 @@ mod tests {
     }
 
     #[test]
+    fn request_carries_the_lease_epoch_after_the_token() {
+        let acks = [Ack { id: 1, bytes: 3 }];
+        let body = encode_request(0xDEAD_BEEF_0123_4567, u64::MAX, &acks);
+        assert_eq!(body.len(), REQUEST_HEADER_LEN + ACK_ENTRY_LEN);
+        assert_eq!(REQUEST_HEADER_LEN, 20);
+        assert_eq!(&body[8..16], &u64::MAX.to_le_bytes());
+        assert_eq!(&body[16..20], &(acks.len() as u32).to_le_bytes());
+        let decoded = decode_request(&body).unwrap();
+        assert_eq!(decoded.token, 0xDEAD_BEEF_0123_4567);
+        assert_eq!(decoded.epoch, u64::MAX);
+        assert_eq!(decoded.acks, acks);
+    }
+
+    #[test]
     fn request_round_trips_many_acknowledgements() {
         let acks = [
             Ack { id: 1, bytes: 0 },
@@ -311,19 +331,20 @@ mod tests {
             },
             Ack { id: 7, bytes: 4096 },
         ];
-        let body = encode_request(0xDEAD_BEEF_0123_4567, &acks);
+        let body = encode_request(0xDEAD_BEEF_0123_4567, 0, &acks);
         assert_eq!(body.len(), REQUEST_HEADER_LEN + 3 * ACK_ENTRY_LEN);
         let decoded = decode_request(&body).unwrap();
         assert_eq!(decoded.token, 0xDEAD_BEEF_0123_4567);
         assert_eq!(decoded.acks, acks);
-        assert_eq!(decode_request(&encode_request(9, &[])).unwrap().acks, []);
+        assert_eq!(decode_request(&encode_request(9, 0, &[])).unwrap().acks, []);
     }
 
     #[test]
     fn malformed_requests_are_errors_and_never_panic() {
-        let good = encode_request(1, &[Ack { id: 2, bytes: 3 }]);
+        let good = encode_request(1, 0, &[Ack { id: 2, bytes: 3 }]);
         assert_eq!(decode_request(&[]), Err(WireError::Truncated));
         assert_eq!(decode_request(&good[..11]), Err(WireError::Truncated));
+        assert_eq!(decode_request(&good[..19]), Err(WireError::Truncated));
         assert_eq!(
             decode_request(&good[..good.len() - 1]),
             Err(WireError::LengthMismatch)
@@ -332,10 +353,10 @@ mod tests {
         trailing.push(0);
         assert_eq!(decode_request(&trailing), Err(WireError::LengthMismatch));
         let mut huge = good.clone();
-        huge[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+        huge[16..20].copy_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(decode_request(&huge), Err(WireError::TooManyAcks));
-        let mut over = encode_request(1, &[]);
-        over[8..12].copy_from_slice(&(MAX_ACKS_PER_REQUEST as u32 + 1).to_le_bytes());
+        let mut over = encode_request(1, 0, &[]);
+        over[16..20].copy_from_slice(&(MAX_ACKS_PER_REQUEST as u32 + 1).to_le_bytes());
         assert_eq!(decode_request(&over), Err(WireError::TooManyAcks));
         // Exhaustively truncated and bit-flipped prefixes must fail cleanly.
         for len in 0..good.len() {

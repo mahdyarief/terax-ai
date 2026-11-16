@@ -55,13 +55,15 @@ pub(super) enum Endpoint {
 }
 
 pub(super) enum Command {
-    /// A page (re)attaches: new token, previous held poll released, and every
-    /// PTY of the webview detached until the new page acknowledges it. When no
-    /// unguessable token can be made the stream stays closed and the reply
-    /// carries why.
+    /// A page (re)attaches with a caller-minted token and lease epoch, its
+    /// previous held poll released, and every PTY of the webview detached
+    /// until the new page acknowledges it. A zero token is refused: it is not
+    /// a credential the gate can ever authorize.
     OpenStream {
         label: Arc<str>,
-        reply: Box<dyn FnOnce(Result<u64, &'static str>) + Send>,
+        token: u64,
+        epoch: u64,
+        reply: Box<dyn FnOnce(Result<(), &'static str>) + Send>,
     },
     /// The page navigated away. Its token dies with it.
     ResetWebview {
@@ -165,6 +167,7 @@ struct Held {
 #[derive(Default)]
 struct Stream {
     token: Option<u64>,
+    epoch: Option<u64>,
     held: Option<Held>,
     /// Native window occlusion or sleep (and any frontend-reported equivalent
     /// for the whole window) overrides every per-PTY class.
@@ -188,25 +191,21 @@ struct Entry {
     nudged: Option<(u64, u64)>,
 }
 
-pub(super) type TokenSource = Box<dyn FnMut() -> Result<u64, &'static str> + Send>;
-
 pub(super) struct HubCore {
     streams: HashMap<Arc<str>, Stream>,
     entries: HashMap<u32, Entry>,
-    next_token: TokenSource,
-    /// Mirror of every stream's token for the request handler, which rejects
-    /// bad tokens without waking this thread. Updated before the page learns
-    /// a token and as soon as one dies.
+    /// Mirror of every stream's token and lease epoch for the request handler,
+    /// which rejects bad credentials without waking this thread. Updated
+    /// before the page learns a token and as soon as one dies.
     tokens: Arc<StreamTokens>,
     stats: Arc<HubStats>,
 }
 
 impl HubCore {
-    pub fn new(next_token: TokenSource, tokens: Arc<StreamTokens>, stats: Arc<HubStats>) -> Self {
+    pub fn new(tokens: Arc<StreamTokens>, stats: Arc<HubStats>) -> Self {
         Self {
             streams: HashMap::new(),
             entries: HashMap::new(),
-            next_token,
             tokens,
             stats,
         }
@@ -214,20 +213,23 @@ impl HubCore {
 
     pub fn apply(&mut self, command: Command, now: Instant) {
         match command {
-            Command::OpenStream { label, reply } => {
-                let token = match (self.next_token)() {
-                    Ok(token) => token,
-                    Err(reason) => {
-                        reply(Err(reason));
-                        return;
-                    }
-                };
+            Command::OpenStream {
+                label,
+                token,
+                epoch,
+                reply,
+            } => {
+                if token == 0 {
+                    reply(Err("invalid stream token"));
+                    return;
+                }
                 let stream = self.streams.entry(label.clone()).or_default();
                 release(stream.held.take(), STATUS_SUPERSEDED);
                 stream.token = Some(token);
-                self.tokens.publish(&label, token);
+                stream.epoch = Some(epoch);
+                self.tokens.publish(&label, token, epoch);
                 self.detach(&label);
-                reply(Ok(token));
+                reply(Ok(()));
             }
             Command::ResetWebview { label } => self.reset(&label),
             Command::RemoveWebview { label } => {
@@ -298,6 +300,7 @@ impl HubCore {
         self.tokens.revoke(label);
         if let Some(stream) = self.streams.get_mut(label) {
             stream.token = None;
+            stream.epoch = None;
             release(stream.held.take(), STATUS_GONE);
         }
         self.detach(label);
@@ -318,10 +321,9 @@ impl HubCore {
         reply: Box<dyn Reply>,
         now: Instant,
     ) {
-        let authorized = self
-            .streams
-            .get(label)
-            .is_some_and(|stream| stream.token == Some(request.token));
+        let authorized = self.streams.get(label).is_some_and(|stream| {
+            stream.token == Some(request.token) && stream.epoch == Some(request.epoch)
+        });
         if !authorized {
             HubStats::bump(&self.stats.rejected_requests, 1);
             reply.send(STATUS_FORBIDDEN, b"stale or missing stream token".to_vec());
@@ -658,16 +660,12 @@ fn random_token<E>(mut fill: impl FnMut(&mut [u8]) -> Result<(), E>) -> Result<u
     Err(TOKEN_UNAVAILABLE)
 }
 
-fn os_token() -> Result<u64, &'static str> {
+pub(super) fn os_token() -> Result<u64, &'static str> {
     random_token(getrandom::fill)
 }
 
 fn run(shared: Arc<Shared>) {
-    let mut core = HubCore::new(
-        Box::new(os_token),
-        shared.tokens.clone(),
-        shared.stats.clone(),
-    );
+    let mut core = HubCore::new(shared.tokens.clone(), shared.stats.clone());
     loop {
         let commands =
             std::mem::take(&mut *shared.inbox.lock().unwrap_or_else(PoisonError::into_inner));
@@ -704,6 +702,7 @@ mod tests {
     struct Harness {
         core: HubCore,
         tokens: Arc<StreamTokens>,
+        epoch: u64,
         now: Instant,
         replies: Captured,
     }
@@ -712,19 +711,11 @@ mod tests {
 
     impl Harness {
         fn new() -> Self {
-            let source = Arc::new(Mutex::new(1000u64));
-            Self::with_source(Box::new(move || {
-                let mut next = source.lock().unwrap();
-                *next += 1;
-                Ok(*next)
-            }))
-        }
-
-        fn with_source(source: TokenSource) -> Self {
             let tokens = Arc::new(StreamTokens::default());
             Self {
-                core: HubCore::new(source, tokens.clone(), Arc::new(HubStats::default())),
+                core: HubCore::new(tokens.clone(), Arc::new(HubStats::default())),
                 tokens,
+                epoch: 0,
                 now: Instant::now(),
                 replies: Arc::new(Mutex::new(Vec::new())),
             }
@@ -734,21 +725,27 @@ mod tests {
             Arc::from(LABEL)
         }
 
-        fn try_open(&mut self) -> Result<u64, &'static str> {
+        fn try_open(&mut self, token: u64, epoch: u64) -> Result<u64, &'static str> {
             let (tx, rx) = mpsc::channel();
             self.core.apply(
                 Command::OpenStream {
                     label: self.label(),
-                    reply: Box::new(move |token| tx.send(token).unwrap()),
+                    token,
+                    epoch,
+                    reply: Box::new(move |result| tx.send(result).unwrap()),
                 },
                 self.now,
             );
             self.step();
-            rx.recv().unwrap()
+            let result = rx.recv().unwrap();
+            if result.is_ok() {
+                self.epoch = epoch;
+            }
+            result.map(|()| token)
         }
 
-        fn open(&mut self) -> u64 {
-            self.try_open().unwrap()
+        fn open(&mut self, token: u64, epoch: u64) -> u64 {
+            self.try_open(token, epoch).unwrap()
         }
 
         fn register(&mut self, id: u32, class: PresentationClass) -> Arc<OutputQueue> {
@@ -770,13 +767,25 @@ mod tests {
         }
 
         fn request(&mut self, endpoint: Endpoint, token: u64, acks: &[Ack]) -> Option<u16> {
+            self.request_with(LABEL, endpoint, token, self.epoch, acks)
+        }
+
+        fn request_with(
+            &mut self,
+            label: &str,
+            endpoint: Endpoint,
+            token: u64,
+            epoch: u64,
+            acks: &[Ack],
+        ) -> Option<u16> {
             let before = self.replies.lock().unwrap().len();
             self.core.apply(
                 Command::Request {
-                    label: self.label(),
+                    label: Arc::from(label),
                     endpoint,
                     request: StreamRequest {
                         token,
+                        epoch,
                         acks: acks.to_vec(),
                     },
                     reply: Box::new(Capture(self.replies.clone())),
@@ -848,7 +857,7 @@ mod tests {
     #[test]
     fn a_held_poll_is_answered_exactly_at_the_focused_deadline() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         assert!(h.responses().is_empty());
@@ -874,7 +883,7 @@ mod tests {
             (PresentationClass::Occluded, 250),
         ] {
             let mut h = Harness::new();
-            let token = h.open();
+            let token = h.open(100, 0);
             let queue = h.register(1, class);
             h.attach(token, &[1]);
             h.push(&queue, b"x");
@@ -889,7 +898,7 @@ mod tests {
     #[test]
     fn sustained_focused_output_uses_the_display_cadence() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.push(&queue, b"a");
@@ -909,7 +918,7 @@ mod tests {
     #[test]
     fn a_large_queue_is_due_immediately_even_when_hidden() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Occluded);
         h.attach(token, &[1]);
         h.push(&queue, &vec![7; IMMEDIATE_BYTES]);
@@ -919,7 +928,7 @@ mod tests {
         assert_eq!(frames[0], (1, format!("data@0+{MAX_FRAME_PAYLOAD}")));
         // One byte short of the threshold still waits out the class deadline.
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Occluded);
         h.attach(token, &[1]);
         h.push(&queue, &vec![7; IMMEDIATE_BYTES - 1]);
@@ -930,7 +939,7 @@ mod tests {
     #[test]
     fn wakeups_align_across_ptys_within_one_interactive_tick() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let a = h.register(1, PresentationClass::Focused);
         let b = h.register(2, PresentationClass::Visible);
         let c = h.register(3, PresentationClass::Hidden);
@@ -956,7 +965,7 @@ mod tests {
     #[test]
     fn a_pty_due_within_one_tick_is_pulled_forward_and_a_later_one_is_not() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let a = h.register(1, PresentationClass::Focused);
         let b = h.register(2, PresentationClass::Visible);
         let c = h.register(3, PresentationClass::Visible);
@@ -977,7 +986,7 @@ mod tests {
     #[test]
     fn every_class_is_served_in_priority_order_within_a_response() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let hidden = h.register(1, PresentationClass::Hidden);
         let focused = h.register(2, PresentationClass::Focused);
         h.attach(token, &[1, 2]);
@@ -993,7 +1002,7 @@ mod tests {
     #[test]
     fn window_occlusion_overrides_the_per_pty_class() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.core.apply(
@@ -1030,7 +1039,7 @@ mod tests {
     #[test]
     fn presentation_updates_apply_only_to_ptys_the_webview_owns() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.core.apply(
@@ -1100,7 +1109,7 @@ mod tests {
     #[test]
     fn a_late_presentation_report_cannot_undo_a_newer_one() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         // Reports 2 (focused) and 1 (hidden) arrive in the wrong order.
@@ -1119,7 +1128,7 @@ mod tests {
     #[test]
     fn presentation_order_is_tracked_per_terminal_so_overlapping_batches_compose() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let first = h.register(1, PresentationClass::Focused);
         let second = h.register(2, PresentationClass::Focused);
         h.attach(token, &[1, 2]);
@@ -1134,7 +1143,7 @@ mod tests {
     #[test]
     fn an_unattached_pty_is_not_delivered_until_its_receiver_announces_itself() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.poll(token, &[]);
         h.push(&queue, b"early");
@@ -1151,7 +1160,7 @@ mod tests {
     fn requests_with_a_stale_or_missing_token_are_refused_without_effects() {
         let mut h = Harness::new();
         assert_eq!(h.request(Endpoint::Poll, 5, &[]), Some(STATUS_FORBIDDEN));
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.push(&queue, b"x");
@@ -1172,10 +1181,10 @@ mod tests {
     #[test]
     fn reopening_the_stream_resets_the_generation_and_detaches_every_pty() {
         let mut h = Harness::new();
-        let first = h.open();
+        let first = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(first, &[1]);
-        let second = h.open();
+        let second = h.open(101, 1);
         assert_ne!(first, second);
         // The held poll of the old generation was released as superseded.
         let responses = h.responses();
@@ -1198,7 +1207,7 @@ mod tests {
     #[test]
     fn page_reload_drops_the_held_responder_and_invalidates_the_token() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.core
@@ -1218,47 +1227,29 @@ mod tests {
     #[test]
     fn issued_tokens_are_published_to_the_request_handler_and_revoked_with_the_stream() {
         let mut h = Harness::new();
-        assert!(!h.tokens.authorizes(LABEL, 1001));
-        let first = h.open();
-        assert!(h.tokens.authorizes(LABEL, first));
-        let second = h.open();
-        assert!(!h.tokens.authorizes(LABEL, first), "reopening supersedes");
-        assert!(h.tokens.authorizes(LABEL, second));
-        assert!(!h.tokens.authorizes("settings", second));
+        assert!(!h.tokens.authorizes(LABEL, 1001, 0));
+        h.open(100, 1);
+        assert!(h.tokens.authorizes(LABEL, 100, 1));
+        h.open(101, 2);
+        assert!(!h.tokens.authorizes(LABEL, 100, 1), "reopening supersedes");
+        assert!(h.tokens.authorizes(LABEL, 101, 2));
+        assert!(!h.tokens.authorizes("settings", 101, 2));
         h.core
             .apply(Command::ResetWebview { label: h.label() }, h.now);
-        assert!(!h.tokens.authorizes(LABEL, second), "reload revokes");
-        let third = h.open();
-        assert!(h.tokens.authorizes(LABEL, third));
+        assert!(!h.tokens.authorizes(LABEL, 101, 2), "reload revokes");
+        h.open(102, 3);
+        assert!(h.tokens.authorizes(LABEL, 102, 3));
         h.core
             .apply(Command::RemoveWebview { label: h.label() }, h.now);
-        assert!(!h.tokens.authorizes(LABEL, third), "destruction revokes");
+        assert!(!h.tokens.authorizes(LABEL, 102, 3), "destruction revokes");
     }
 
     #[test]
-    fn a_stream_is_refused_when_the_system_cannot_supply_entropy() {
-        let mut h = Harness::with_source(Box::new(|| Err("no entropy")));
-        assert_eq!(h.try_open(), Err("no entropy"));
-        assert!(!h.tokens.authorizes(LABEL, 0));
+    fn a_zero_token_is_never_published_as_a_valid_credential() {
+        let mut h = Harness::new();
+        assert_eq!(h.try_open(0, 0), Err("invalid stream token"));
+        assert!(!h.tokens.authorizes(LABEL, 0, 0));
         assert_eq!(h.request(Endpoint::Poll, 0, &[]), Some(STATUS_FORBIDDEN));
-    }
-
-    #[test]
-    fn a_failed_reopen_leaves_the_existing_stream_untouched() {
-        let mut calls = 0;
-        let mut h = Harness::with_source(Box::new(move || {
-            calls += 1;
-            if calls == 1 {
-                Ok(0xFEED)
-            } else {
-                Err("no entropy")
-            }
-        }));
-        let token = h.open();
-        h.attach(token, &[]);
-        assert!(h.try_open().is_err());
-        assert!(h.tokens.authorizes(LABEL, token));
-        assert_eq!(h.request(Endpoint::Ack, token, &[]), Some(STATUS_OK));
     }
 
     #[test]
@@ -1306,7 +1297,7 @@ mod tests {
     #[test]
     fn removing_a_webview_forgets_its_ptys_and_streams() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.core
@@ -1320,7 +1311,7 @@ mod tests {
     #[test]
     fn a_second_poll_supersedes_the_first() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.poll(token, &[]);
@@ -1332,7 +1323,7 @@ mod tests {
     #[test]
     fn credit_caps_in_flight_bytes_and_acknowledgements_resume_delivery() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         // 1.5 MiB pending: the window releases 1 MiB, the rest waits for acks.
@@ -1381,7 +1372,7 @@ mod tests {
     #[test]
     fn duplicate_and_forged_acknowledgements_grant_no_credit() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.push(&queue, b"abc");
@@ -1415,9 +1406,51 @@ mod tests {
     }
 
     #[test]
+    fn a_request_with_a_stale_epoch_is_refused_without_effects() {
+        let mut h = Harness::new();
+        let token = h.open(100, 1);
+        let queue = h.register(1, PresentationClass::Focused);
+        h.attach(token, &[1]);
+        h.push(&queue, b"x");
+        h.advance(ms(4));
+        assert_eq!(h.frames().len(), 1);
+        assert_eq!(
+            h.request_with(LABEL, Endpoint::Ack, token, 0, &[ack(1, 1)]),
+            Some(STATUS_FORBIDDEN)
+        );
+        assert_eq!(queue.summary().acknowledged, 0);
+        assert_eq!(
+            h.request(Endpoint::Ack, token, &[ack(1, 1)]),
+            Some(STATUS_OK)
+        );
+        assert_eq!(queue.summary().acknowledged, 1);
+    }
+
+    #[test]
+    fn acknowledgements_from_another_label_are_ignored() {
+        let mut h = Harness::new();
+        let token = h.open(100, 1);
+        let queue = h.register(1, PresentationClass::Focused);
+        h.attach(token, &[1]);
+        h.push(&queue, b"x");
+        h.advance(ms(4));
+        assert_eq!(h.frames().len(), 1);
+        assert_eq!(
+            h.request_with("settings", Endpoint::Ack, token, 1, &[ack(1, 1)]),
+            Some(STATUS_FORBIDDEN)
+        );
+        assert_eq!(queue.summary().acknowledged, 0);
+        assert_eq!(
+            h.request(Endpoint::Ack, token, &[ack(1, 1)]),
+            Some(STATUS_OK)
+        );
+        assert_eq!(queue.summary().acknowledged, 1);
+    }
+
+    #[test]
     fn unknown_and_foreign_acknowledgements_are_ignored() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.push(&queue, b"abc");
@@ -1433,7 +1466,7 @@ mod tests {
     #[test]
     fn a_response_is_capped_and_the_remainder_follows_in_the_next_poll() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queues: Vec<_> = (1..=4)
             .map(|id| h.register(id, PresentationClass::Focused))
             .collect();
@@ -1470,7 +1503,7 @@ mod tests {
     #[test]
     fn exit_follows_all_data_and_only_after_the_final_acknowledgement() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.push(&queue, b"bye\n");
@@ -1496,7 +1529,7 @@ mod tests {
     #[test]
     fn exit_after_acknowledged_data_needs_no_nudge() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.push(&queue, b"x");
@@ -1512,7 +1545,7 @@ mod tests {
     #[test]
     fn exit_is_never_reordered_before_unsent_data() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Hidden);
         h.attach(token, &[1]);
         h.push(&queue, b"tail");
@@ -1529,7 +1562,7 @@ mod tests {
     #[test]
     fn a_stalled_frontend_gets_exit_minus_one_after_the_drain_deadline() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.push(&queue, b"data");
@@ -1555,7 +1588,7 @@ mod tests {
     #[test]
     fn reader_failure_is_reported_once_as_a_failed_frame() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         queue.fail_reading();
@@ -1569,7 +1602,7 @@ mod tests {
     #[test]
     fn credit_blocked_ptys_nudge_the_frontend_once_per_state() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.push(&queue, &vec![1; MAX_IN_FLIGHT_BYTES]);
@@ -1604,7 +1637,7 @@ mod tests {
     #[test]
     fn an_idle_stream_sends_a_keepalive_every_thirty_seconds() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         let next = h.step().unwrap();
@@ -1621,7 +1654,7 @@ mod tests {
     #[test]
     fn closing_the_last_pty_releases_the_held_poll() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.core.apply(Command::Unregister { id: 1 }, h.now);
@@ -1634,7 +1667,7 @@ mod tests {
     #[test]
     fn a_closed_session_is_forgotten_even_without_an_unregister() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         queue.close();
@@ -1645,7 +1678,7 @@ mod tests {
     #[test]
     fn one_flooding_pty_cannot_fill_a_response_so_the_next_batch_pipelines() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         h.push(&queue, &vec![3; MAX_IN_FLIGHT_BYTES]);
@@ -1669,7 +1702,7 @@ mod tests {
     /// Returns `(responses, chunks)` over `seconds` of virtual time.
     fn spinner_workload(classes: &[PresentationClass], seconds: u64) -> (u64, u64) {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queues: Vec<_> = classes
             .iter()
             .enumerate()
@@ -1743,7 +1776,7 @@ mod tests {
     /// polls again at once.
     fn burst_latency(class: PresentationClass, idle: Duration) -> Duration {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, class);
         h.attach(token, &[1]);
         // A previous burst the frontend fully acknowledged.
@@ -1778,7 +1811,7 @@ mod tests {
     #[test]
     fn the_sustained_cadence_never_outlives_the_output_that_caused_it() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, PresentationClass::Focused);
         h.attach(token, &[1]);
         let mut sent = 0u64;
@@ -1807,7 +1840,7 @@ mod tests {
     fn keystroke_echo_is_delivered_within_the_sustained_deadline_at_any_typing_speed() {
         for gap in [5u64, 20, 33, 40, 41, 80, 250] {
             let mut h = Harness::new();
-            let token = h.open();
+            let token = h.open(100, 0);
             let queue = h.register(1, PresentationClass::Focused);
             h.attach(token, &[1]);
             let mut acked = 0u64;
@@ -1835,7 +1868,7 @@ mod tests {
     #[test]
     fn a_hidden_flood_does_not_delay_the_focused_terminal_beyond_its_own_deadline() {
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let flood = h.register(1, PresentationClass::Hidden);
         let typed = h.register(2, PresentationClass::Focused);
         h.attach(token, &[1, 2]);
@@ -2044,7 +2077,7 @@ mod tests {
     ) -> (u64, u64) {
         use super::super::output::MAX_BUFFERED_BYTES;
         let mut h = Harness::new();
-        let token = h.open();
+        let token = h.open(100, 0);
         let queue = h.register(1, class);
         let mut fe = Frontend::new(token, 1, parse_per_ms);
         fe.issue_poll(&mut h);
@@ -2052,7 +2085,10 @@ mod tests {
         let (mut produced, mut elapsed) = (0u64, 0u64);
         while fe.exit.is_none() {
             elapsed += 1;
-            assert!(elapsed < 20_000, "no exit frame within 20 s of virtual time");
+            assert!(
+                elapsed < 20_000,
+                "no exit frame within 20 s of virtual time"
+            );
             h.advance(ms(1));
             if produced < total {
                 let n = produce_per_ms.min(total - produced);

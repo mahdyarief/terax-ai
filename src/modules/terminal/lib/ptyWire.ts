@@ -2,7 +2,7 @@
 // src-tauri/src/modules/pty/wire.rs; all integers are little-endian.
 //
 // Request body (`POST poll` and `POST ack`):
-//   [u64 token][u32 count] then count x [u32 pty_id][u64 cumulative_parsed_bytes]
+//   [u64 token][u64 epoch][u32 count] then count x [u32 pty_id][u64 cumulative_parsed_bytes]
 // Response body (`poll`): frames back to back:
 //   [u32 pty_id][u8 kind][u32 len][payload]
 //     data   (1): [u64 start_offset][bytes]
@@ -17,7 +17,7 @@ const KIND_SYNC = 4;
 
 const FRAME_HEADER_BYTES = 9;
 const DATA_PREFIX_BYTES = 8;
-const REQUEST_HEADER_BYTES = 12;
+const REQUEST_HEADER_BYTES = 20;
 const ACK_ENTRY_BYTES = 12;
 const TOKEN_BYTES = 8;
 
@@ -57,8 +57,23 @@ export function encodeRequest(
   token: Uint8Array,
   acks: readonly PtyAck[],
 ): Uint8Array<ArrayBuffer> {
+  return encodeRequestWithEpoch(token, 0n, acks);
+}
+
+/**
+ * A window that moved onto a terminal keeps its stream token but must name the
+ * lease epoch it was handed; a stale epoch is refused even when the token is
+ * still current.
+ */
+export function encodeRequestWithEpoch(
+  token: Uint8Array,
+  epoch: bigint,
+  acks: readonly PtyAck[],
+): Uint8Array<ArrayBuffer> {
   if (token.length !== TOKEN_BYTES)
     throw new PtyWireError("invalid stream token");
+  if (epoch < 0n || epoch > 0xffff_ffff_ffff_ffffn)
+    throw new PtyWireError("lease epoch out of range");
   if (acks.length > MAX_ACKS_PER_REQUEST)
     throw new PtyWireError("too many acknowledgements in one request");
   const body = new Uint8Array(
@@ -66,7 +81,8 @@ export function encodeRequest(
   );
   const view = new DataView(body.buffer);
   body.set(token, 0);
-  view.setUint32(8, acks.length, true);
+  view.setBigUint64(8, epoch, true);
+  view.setUint32(16, acks.length, true);
   let at = REQUEST_HEADER_BYTES;
   for (const ack of acks) {
     if (!Number.isSafeInteger(ack.bytes) || ack.bytes < 0)

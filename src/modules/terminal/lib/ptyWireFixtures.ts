@@ -53,11 +53,13 @@ export function encodeFrames(frames: readonly PtyFrame[]): Uint8Array {
 
 export function decodeRequest(body: Uint8Array): {
   token: string;
+  epoch: bigint;
   acks: PtyAck[];
 } {
   const view = new DataView(body.buffer, body.byteOffset, body.byteLength);
-  const count = view.getUint32(8, true);
-  if (body.length !== 12 + count * 12)
+  const epoch = view.getBigUint64(8, true);
+  const count = view.getUint32(16, true);
+  if (body.length !== 20 + count * 12)
     throw new Error(
       `malformed request: ${body.length} bytes for ${count} acks`,
     );
@@ -67,12 +69,12 @@ export function decodeRequest(body: Uint8Array): {
     .join("");
   const acks: PtyAck[] = [];
   for (let index = 0; index < count; index++) {
-    const at = 12 + index * 12;
+    const at = 20 + index * 12;
     acks.push({
       id: view.getUint32(at, true),
       bytes:
         view.getUint32(at + 4, true) + view.getUint32(at + 8, true) * 2 ** 32,
     });
   }
-  return { token, acks };
+  return { token, epoch, acks };
 }

@@ -620,14 +620,20 @@ pub async fn pty_stream_open(
     webview: tauri::Webview,
     state: tauri::State<'_, PtyState>,
 ) -> Result<String, String> {
-    let (reply, token) = tokio::sync::oneshot::channel();
+    let token = hub::os_token().map_err(|reason| {
+        log::error!("pty_stream_open refused: {reason}");
+        reason.to_string()
+    })?;
+    let (reply, result) = tokio::sync::oneshot::channel();
     state.hub.submit(Command::OpenStream {
         label: Arc::from(webview.label()),
-        reply: Box::new(move |token| {
-            let _ = reply.send(token);
+        token,
+        epoch: 0,
+        reply: Box::new(move |result_value| {
+            let _ = reply.send(result_value);
         }),
     });
-    let token = token
+    result
         .await
         .map_err(|_| "PTY stream is unavailable".to_string())?
         .map_err(|reason| {

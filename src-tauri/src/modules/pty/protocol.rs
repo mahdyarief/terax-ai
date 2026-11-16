@@ -207,13 +207,16 @@ mod tests {
         call_as(hub, "main", method, path, Some(APP), body)
     }
 
-    fn open_stream(hub: &Hub, label: &str) -> u64 {
+    fn open_stream(hub: &Hub, label: &str, token: u64, epoch: u64) -> (u64, u64) {
         let (tx, rx) = mpsc::channel();
         hub.submit(Command::OpenStream {
             label: Arc::from(label),
-            reply: Box::new(move |token| tx.send(token).unwrap()),
+            token,
+            epoch,
+            reply: Box::new(move |result| tx.send(result).unwrap()),
         });
-        rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap()
+        rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
+        (token, epoch)
     }
 
     #[test]
@@ -269,7 +272,7 @@ mod tests {
     #[test]
     fn malformed_bodies_are_rejected_at_the_boundary_without_reaching_the_hub() {
         let hub = Hub::new();
-        let good = encode_request(7, &[Ack { id: 1, bytes: 2 }]);
+        let good = encode_request(7, 0, &[Ack { id: 1, bytes: 2 }]);
         for body in [
             Vec::new(),
             good[..11].to_vec(),
@@ -290,20 +293,22 @@ mod tests {
     #[test]
     fn refused_requests_never_wake_the_hub() {
         let hub = Hub::new();
-        let token = open_stream(&hub, "main");
+        let (token, epoch) = open_stream(&hub, "main", 21, 0);
         let wakeups = || hub.diagnostics().wakeups;
         let settled = {
             std::thread::sleep(Duration::from_millis(100));
             wakeups()
         };
-        let valid = encode_request(token, &[Ack { id: 1, bytes: 0 }]);
-        let wrong_token = encode_request(token ^ 1, &[Ack { id: 1, bytes: 0 }]);
+        let valid = encode_request(token, epoch, &[Ack { id: 1, bytes: 0 }]);
+        let wrong_token = encode_request(token ^ 1, epoch, &[Ack { id: 1, bytes: 0 }]);
+        let stale_epoch = encode_request(token, epoch ^ 1, &[Ack { id: 1, bytes: 0 }]);
         let too_long = vec![0u8; MAX_REQUEST_LEN + 1];
         type Case<'a> = (&'a str, Option<&'a [u8]>, &'a [u8], u16);
-        let cases: [Case<'_>; 6] = [
+        let cases: [Case<'_>; 7] = [
             ("main", Some(b"https://evil.example"), &valid, 403),
             ("main", Some(b"null"), &valid, 403),
             ("main", Some(APP), &wrong_token, 403),
+            ("main", Some(APP), &stale_epoch, 403),
             ("settings", Some(APP), &valid, 403),
             ("main", Some(APP), &too_long, 413),
             ("main", Some(APP), &[1, 2, 3], 400),
@@ -328,7 +333,7 @@ mod tests {
     #[test]
     fn a_well_formed_request_without_a_valid_token_is_forbidden() {
         let hub = Hub::new();
-        let body = encode_request(0xABCD, &[Ack { id: 99, bytes: 5 }]);
+        let body = encode_request(0xABCD, 0, &[Ack { id: 99, bytes: 5 }]);
         assert_eq!(call(&hub, Method::POST, "/ack", &body).0, 403);
         assert_eq!(call(&hub, Method::POST, "/poll", &body).0, 403);
         assert!(!hub.started());
@@ -337,8 +342,8 @@ mod tests {
     #[test]
     fn a_valid_token_authorizes_ack_requests_and_unknown_ids_are_ignored() {
         let hub = Hub::new();
-        let token = open_stream(&hub, "main");
-        let body = encode_request(token, &[Ack { id: 99, bytes: 5 }]);
+        let (token, epoch) = open_stream(&hub, "main", 21, 0);
+        let body = encode_request(token, epoch, &[Ack { id: 99, bytes: 5 }]);
         assert_eq!(call(&hub, Method::POST, "/ack", &body), (200, Vec::new()));
         // Another webview cannot use this token.
         let other = call_as(&hub, "settings", Method::POST, "/ack", Some(APP), &body);
@@ -351,14 +356,14 @@ mod tests {
     #[test]
     fn a_revoked_token_is_refused_at_the_gate() {
         let hub = Hub::new();
-        let token = open_stream(&hub, "main");
-        let body = encode_request(token, &[]);
+        let (token, epoch) = open_stream(&hub, "main", 21, 0);
+        let body = encode_request(token, epoch, &[]);
         assert_eq!(call(&hub, Method::POST, "/ack", &body).0, 200);
         hub.submit(Command::ResetWebview {
             label: Arc::from("main"),
         });
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while hub.tokens().authorizes("main", token) {
+        while hub.tokens().authorizes("main", token, epoch) {
             assert!(std::time::Instant::now() < deadline, "token never revoked");
             std::thread::sleep(Duration::from_millis(5));
         }

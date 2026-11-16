@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   decodeFrames,
   encodeRequest,
+  encodeRequestWithEpoch,
   MAX_ACKS_PER_REQUEST,
   PtyWireError,
   tokenBytes,
@@ -11,7 +12,7 @@ import { decodeRequest, encodeFrames } from "./ptyWireFixtures";
 describe("PTY stream wire format", () => {
   const token = tokenBytes("0123456789abcdef");
 
-  it("encodes the token little-endian and round-trips requests", () => {
+  it("encodes the token, lease epoch, and count little-endian", () => {
     expect([...token]).toEqual([
       0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 0x01,
     ]);
@@ -20,16 +21,37 @@ describe("PTY stream wire format", () => {
       { id: 0xffff_ffff, bytes: 2 ** 40 + 12345 },
       { id: 7, bytes: Number.MAX_SAFE_INTEGER },
     ];
-    const body = encodeRequest(token, acks);
-    expect(body.length).toBe(12 + 3 * 12);
-    expect(decodeRequest(body)).toEqual({ token: "0123456789abcdef", acks });
-    expect(decodeRequest(encodeRequest(token, [])).acks).toEqual([]);
+    const body = encodeRequestWithEpoch(
+      token,
+      0xffff_ffff_ffff_ffffn,
+      acks,
+    );
+    expect(body.length).toBe(20 + 3 * 12);
+    expect([...body.subarray(8, 16)]).toEqual(Array(8).fill(0xff));
+    expect(new DataView(body.buffer).getUint32(16, true)).toBe(3);
+    expect(decodeRequest(body)).toEqual({
+      token: "0123456789abcdef",
+      epoch: 0xffff_ffff_ffff_ffffn,
+      acks,
+    });
+  });
+
+  it("defaults the lease epoch to zero for the current stream API", () => {
+    expect(decodeRequest(encodeRequest(token, []))).toEqual({
+      token: "0123456789abcdef",
+      epoch: 0n,
+      acks: [],
+    });
   });
 
   it("rejects values native would refuse", () => {
     expect(() => tokenBytes("zz")).toThrow(PtyWireError);
     expect(() => tokenBytes("0123456789abcde")).toThrow(PtyWireError);
     expect(() => encodeRequest(token.subarray(1), [])).toThrow(PtyWireError);
+    expect(() => encodeRequestWithEpoch(token, -1n, [])).toThrow(PtyWireError);
+    expect(() =>
+      encodeRequestWithEpoch(token, 0x1_0000_0000_0000_0000n, []),
+    ).toThrow(PtyWireError);
     expect(() => encodeRequest(token, [{ id: 1, bytes: -1 }])).toThrow(
       PtyWireError,
     );

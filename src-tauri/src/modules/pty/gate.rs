@@ -16,20 +16,20 @@ use tauri::Url;
 use super::hub::Endpoint;
 use super::wire::{decode_request, StreamRequest, MAX_REQUEST_LEN};
 
-/// The stream token of each webview, published by the hub thread (which owns
-/// issuing and revoking them) so request handlers can reject a missing or
-/// stale token without a round trip to it.
+/// The stream token and lease epoch of each webview, published by the hub
+/// thread (which owns issuing and revoking them) so request handlers can
+/// reject missing or stale credentials without a round trip to it.
 #[derive(Default)]
 pub(super) struct StreamTokens {
-    by_label: RwLock<HashMap<Arc<str>, u64>>,
+    by_label: RwLock<HashMap<Arc<str>, (u64, u64)>>,
 }
 
 impl StreamTokens {
-    pub fn publish(&self, label: &Arc<str>, token: u64) {
+    pub fn publish(&self, label: &Arc<str>, token: u64, epoch: u64) {
         self.by_label
             .write()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(label.clone(), token);
+            .insert(label.clone(), (token, epoch));
     }
 
     pub fn revoke(&self, label: &str) {
@@ -39,12 +39,14 @@ impl StreamTokens {
             .remove(label);
     }
 
-    pub fn authorizes(&self, label: &str, token: u64) -> bool {
+    pub fn authorizes(&self, label: &str, token: u64, epoch: u64) -> bool {
         self.by_label
             .read()
             .unwrap_or_else(PoisonError::into_inner)
             .get(label)
-            .is_some_and(|issued| ct_eq(*issued, token))
+            .is_some_and(|(issued_token, issued_epoch)| {
+                ct_eq(*issued_token, token) && ct_eq(*issued_epoch, epoch)
+            })
     }
 }
 
@@ -178,7 +180,7 @@ pub(super) fn admit(
         Ok(request) => request,
         Err(error) => return refuse(StatusCode::BAD_REQUEST, error.message()),
     };
-    if !tokens.authorizes(incoming.label, request.token) {
+    if !tokens.authorizes(incoming.label, request.token, request.epoch) {
         return refuse(StatusCode::FORBIDDEN, "stale or missing stream token");
     }
     Admission::Forward {
@@ -203,7 +205,7 @@ mod tests {
 
     fn tokens(token: u64) -> StreamTokens {
         let tokens = StreamTokens::default();
-        tokens.publish(&Arc::from("main"), token);
+        tokens.publish(&Arc::from("main"), token, 0);
         tokens
     }
 
@@ -283,17 +285,17 @@ mod tests {
     #[test]
     fn tokens_authorize_only_their_own_webview_and_can_be_revoked() {
         let tokens = StreamTokens::default();
-        tokens.publish(&Arc::from("main"), 0xAB);
-        assert!(tokens.authorizes("main", 0xAB));
-        assert!(!tokens.authorizes("main", 0xAC));
-        assert!(!tokens.authorizes("main", 0));
-        assert!(!tokens.authorizes("settings", 0xAB));
-        tokens.publish(&Arc::from("main"), 0xCD);
-        assert!(!tokens.authorizes("main", 0xAB));
-        assert!(tokens.authorizes("main", 0xCD));
+        tokens.publish(&Arc::from("main"), 0xAB, 0);
+        assert!(tokens.authorizes("main", 0xAB, 0));
+        assert!(!tokens.authorizes("main", 0xAC, 0));
+        assert!(!tokens.authorizes("main", 0, 0));
+        assert!(!tokens.authorizes("settings", 0xAB, 0));
+        tokens.publish(&Arc::from("main"), 0xCD, 0);
+        assert!(!tokens.authorizes("main", 0xAB, 0));
+        assert!(tokens.authorizes("main", 0xCD, 0));
         tokens.revoke("main");
-        assert!(!tokens.authorizes("main", 0xCD));
-        assert!(!tokens.authorizes("never-opened", 0));
+        assert!(!tokens.authorizes("main", 0xCD, 0));
+        assert!(!tokens.authorizes("never-opened", 0, 0));
     }
 
     #[test]
@@ -314,7 +316,7 @@ mod tests {
 
     #[test]
     fn a_valid_request_is_forwarded_naming_the_app_origin() {
-        let body = encode_request(7, &[Ack { id: 3, bytes: 9 }]);
+        let body = encode_request(7, 0, &[Ack { id: 3, bytes: 9 }]);
         for endpoint in ["/poll", "/ack"] {
             let admission = admit(
                 &origins(),
@@ -340,7 +342,7 @@ mod tests {
 
     #[test]
     fn a_foreign_origin_is_refused_even_with_a_valid_token_and_names_no_origin() {
-        let body = encode_request(7, &[]);
+        let body = encode_request(7, 0, &[]);
         for origin in [
             &b"https://evil.example"[..],
             b"null",
@@ -363,7 +365,7 @@ mod tests {
 
     #[test]
     fn a_wrong_or_missing_token_is_forbidden_before_the_hub_is_involved() {
-        let wrong = encode_request(8, &[Ack { id: 1, bytes: 1 }]);
+        let wrong = encode_request(8, 0, &[Ack { id: 1, bytes: 1 }]);
         let admission = admit(
             &origins(),
             &tokens(7),
@@ -376,7 +378,7 @@ mod tests {
         let admission = admit(
             &origins(),
             &none,
-            &incoming(&Method::POST, "/poll", None, &encode_request(7, &[])),
+            &incoming(&Method::POST, "/poll", None, &encode_request(7, 0, &[])),
         );
         assert_eq!(rejected(admission).0, StatusCode::FORBIDDEN);
         let other_webview = Incoming {
@@ -390,8 +392,21 @@ mod tests {
     }
 
     #[test]
+    fn a_valid_token_with_a_stale_epoch_is_forbidden() {
+        let tokens = StreamTokens::default();
+        tokens.publish(&Arc::from("main"), 21, 1);
+        let stale = encode_request(21, 0, &[Ack { id: 1, bytes: 0 }]);
+        let admission = admit(
+            &origins(),
+            &tokens,
+            &incoming(&Method::POST, "/poll", None, &stale),
+        );
+        assert_eq!(rejected(admission).0, StatusCode::FORBIDDEN);
+    }
+
+    #[test]
     fn oversized_bodies_are_refused_without_being_decoded() {
-        let at_limit = encode_request(7, &vec![Ack { id: 1, bytes: 1 }; MAX_ACKS_PER_REQUEST]);
+        let at_limit = encode_request(7, 0, &vec![Ack { id: 1, bytes: 1 }; MAX_ACKS_PER_REQUEST]);
         assert_eq!(at_limit.len(), MAX_REQUEST_LEN);
         assert!(matches!(
             admit(
@@ -426,7 +441,7 @@ mod tests {
 
     #[test]
     fn malformed_bodies_are_bad_requests() {
-        let good = encode_request(7, &[Ack { id: 1, bytes: 2 }]);
+        let good = encode_request(7, 0, &[Ack { id: 1, bytes: 2 }]);
         for body in [
             Vec::new(),
             good[..11].to_vec(),
@@ -444,7 +459,7 @@ mod tests {
 
     #[test]
     fn routes_and_preflights() {
-        let body = encode_request(7, &[]);
+        let body = encode_request(7, 0, &[]);
         let status = |method: &Method, path, origin| {
             rejected(admit(
                 &origins(),
