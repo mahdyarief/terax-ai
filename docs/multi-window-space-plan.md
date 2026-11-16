@@ -172,14 +172,13 @@ Catatan: detail `transparent/decorations/title_bar_style` harus **disamakan deng
 
 ### 4.4 PTY/Hub/Workspace backend
 
-- **Tidak perlu ubah protokol stream** untuk kasus dasar jika invariant "PTY milik window host" dijaga: window baru `pty_open` PTY-nya sendiri (owner = label baru) dan mendapat token sendiri.
-- Jika dipilih **mode transfer live PTY** (kompleks):
-  - Tambah API rebind, mis. `pty_rebind_owner(ids, new_label)`:
-    - Update `session.owner`.
-    - Pindahkan registrasi `Hub`/`StreamTokens` dari label lama ke baru (revoke/publish).
-    - Pastikan tidak ada output drop saat transisi; otorisasi ketat.
-  - `reset_webview/destroy_webview` harus idempotent dan aman saat transfer.
-- **Mode rekomendasi awal (aman): respawn, bukan transfer live**. Saat space dipindah ke window baru: PTY proses di window lama di-close, tab di window baru membuat session baru (cwd/shell dari state leaf). Kehilangan proses berjalan di terminal tersebut, tetapi tanpa perubahan besar pada PTY core. Harus dikomunikasikan jelas di UX.
+- **Draft awal (v1, sudah usang):** tidak mengubah protokol stream dan memakai respawn. PTY proses di window lama di-close, tab di window baru membuat session baru (cwd/shell dari state leaf).
+- **Fase 1 (2026-11-16, aktif):** transfer live PTY lewat attachment protocol, bukan rebind owner sederhana. Detail spec: [`2026-11-16-pty-single-state-handoff-design.md`](superpowers/specs/2026-11-16-pty-single-state-handoff-design.md).
+  - Header request stream kini `[token][leaseEpoch][ackCount]`; `StreamTokens` dan `Hub` memvalidasi token **dan** epoch.
+  - Session punya attachment state machine `Attached → Preparing → Detached → Attaching → Attached`; `pty_prepare_handoff`, `pty_detach`, `pty_attach`, `pty_commit_handoff`, `pty_rollback_handoff` menggantikan `pty_rebind_owner`.
+  - Proses, writer, replay log (output + resize) tetap milik backend; WebView hanya view yang bisa attach/detach tanpa menutup PTY.
+  - Target membangun model Ghostty baru dari checkpoint + replay; proses dan history output tetap hidup, tetapi TUI interaktif mungkin perlu redraw karena emulator baru tidak menjawab query terminal.
+  - `destroy_webview`/`reset_webview` aman saat transaksi; cleanup window saat handoff tidak membunuh sesine.
 - `WorkspaceRegistry` (global app state Rust) sudah shared — aman; pastikan `workspaceAuthorize` tetap dipanggil untuk cwd di window mana pun.
 ## 5. Sinkronisasi antar-window
 
@@ -290,20 +289,21 @@ Update checklist ini saat implementasi berjalan. Satu item selesai = centang + c
 - [x] Keputusan close `"main"` + cleanup semua child window — `main.on_window_event(Destroyed)` kini menutup semua `space-*` (tidak hanya di macOS) dengan cleanup PTY per-label via event Destroyed mereka sendiri; sebelumnya terbungkus `#[cfg(target_os = "macos")]` sehingga tidak jalan di Windows/Linux
 - [x] Move tab lintas window via respawn: tab diserialisasi, dikirim ke window host lewat event `spaces:tabs-moved`, lalu di-hydrate di sana; window sumber menutup tab dan mematikan PTY-nya (sesi terminal restart di tujuan)
 
-### Fase 8 — Opsional
-- [ ] Transfer live PTY / hub rebind (v1 memakai respawn mode)
+### Fase 8 — PTY live handoff
+- [x] Transfer live PTY / attachment lease (implementasi Fase 1 2026-11-16). Detail: [`2026-11-16-pty-single-state-handoff-design.md`](superpowers/specs/2026-11-16-pty-single-state-handoff-design.md).
+
 ## 10. Context & keputusan (untuk sesi berikutnya)
 
 - User trigger: **tombol "Open in new window" di space** (bukan "New space").
 - Goal: split screen antar space berbeda, state tetap saling sync.
-- Keputusan: 1 space = 1 host window; state persisten tetap `terax-spaces.json`; sinkronisasi via Tauri events; PTY fase awal **respawn**, bukan transfer live.
+- Keputusan: 1 space = 1 host window; state persisten tetap `terax-spaces.json`; sinkronisasi via Tauri events. PTY v1 memakai respawn; sejak 2026-11-16 Fase 1 menggantikannya dengan **live handoff** (satu PTY state, satu attachment aktif). Detail: [`2026-11-16-pty-single-state-handoff-design.md`](superpowers/specs/2026-11-16-pty-single-state-handoff-design.md).
 - Catatan penting: `src/main.tsx:30` memanggil `pty_close_all` saat startup. Perilaku ini harus tetap scoped ke webview/window yang bersangkutan (bukan global lintas window), kalau tidak window baru akan mematikan PTY window lain.
-- `src-tauri/src/modules/pty/mod.rs:200` mengikat `owner` ke `webview.label()` — jangan diubah sampai fase transfer live PTY.
+- `src-tauri/src/modules/pty` dulu mengikat `owner` ke `webview.label()`. Sejak 2026-11-16 ikatan itu digantikan attachment record + token/epoch lease; cleanup per-label tetap berlaku untuk view, bukan untuk proses yang sedang di-handoff.
 - Audit 2026-11-15: `control.rs` semula mengirim request ke `"main"` dan readiness-nya global. Sudah diperbaiki menjadi readiness per-window, routing ke owner pane bila ada, fallback ke window terakhir yang fokus, dan error `target_required` untuk CLI eksternal yang ambigu. `agent_events.rs` masih memakai `"main"` hanya di test FakeHost; jalur produksi `emit_to(owner, ...)` sudah window-aware.
 - `src-tauri/src/lib.rs` juga memakai `"main"` untuk settings window dan reclaim; ini memang disengaja untuk v1.
 - Capability `default.json`, `desktop.json`, `clipboard.json` sekarang mencakup glob `space-*`.
 - `src/app/App.tsx` + `src/modules/spaces/*` sudah memakai `windowLabel`, boot scoped, persistence scoped, dan tab hosting guard.
-- Batasan v1: handoff memakai respawn mode (PTY lama didispose, tab state dipersist, target me-rehydrate cold tabs), bukan transfer live PTY. Rebind live PTY sengaja ditunda karena `owner = webview.label()` juga mengikat cleanup per label, `StreamTokens` per `(label, token)`, asset grants, dan jalur AI/control readiness; rebind parsial berisiko memutus proses atau membocorkan sesi. Move tab lintas window juga memakai respawn (serialize → `spaces:tabs-moved` → hydrate), jadi proses yang berjalan di tab tersebut berhenti; konfirmasi foreground process bersifat best-effort.
+- Batasan Fase 1 (2026-11-16): transfer live PTY sudah aktif lewat checkpoint/replay, bukan object transplantation Wasm. Satu attachment aktif saja (token + lease epoch); tidak ada multi-writer, mirror read-only, daemon eksternal, atau survivability restart aplikasi. TUI interaktif boleh meminta redraw. Detail dan kontrak: [`2026-11-16-pty-single-state-handoff-design.md`](superpowers/specs/2026-11-16-pty-single-state-handoff-design.md). Catatan historis: v1 dulu memakai respawn dan rebind parsial sengaja ditunda karena `owner = webview.label()`, `StreamTokens` per `(label, token)`, asset grants, dan jalur AI/control readiness.
 - Kontrol host manual: aksi "Bring back to this window" hanya tersedia di `main` karena handler `Destroyed` backend selalu mengembalikan space yang window-nya ditutup ke `"main"`. Alurnya: `main` mengirim `spaces:reclaim-request` ke host, host `flushNow()` → detach tab → `destroy()` window-nya, lalu broadcast `host-changed` memicu `main` hydrate dari snapshot di disk.
 - Geometri window `space-*` sudah dipulihkan otomatis oleh `tauri-plugin-window-state` per label; tidak ada kode geometri tambahan.
 - 2026-11-15: rollback handoff kini memakai flag `detached` agar snapshot lokal tidak di-attach ulang ketika `flushNow()` gagal sebelum `detachTabsForSpace`; judul OS window `space-*` mengikuti nama space lewat argumen ketiga `useWindowTitle`.
