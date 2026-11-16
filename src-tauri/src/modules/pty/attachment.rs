@@ -44,11 +44,11 @@ pub(super) struct Attachment {
 
 #[derive(Clone, Debug)]
 pub(super) struct Handoff {
-    id: HandoffId,
-    from: Arc<str>,
-    to: Arc<str>,
-    checkpoint: u64,
-    source: Attachment,
+    pub(super) id: HandoffId,
+    pub(super) from: Arc<str>,
+    pub(super) to: Arc<str>,
+    pub(super) checkpoint: u64,
+    pub(super) source: Attachment,
 }
 
 impl Attachment {
@@ -187,8 +187,10 @@ impl Attachment {
 
     /// True only for the one host holding the current token and epoch.
     pub(super) fn authorizes(&self, host: &str, token: AttachToken, epoch: LeaseEpoch) -> bool {
-        self.phase == AttachmentPhase::Attached
-            && &*self.host == host
+        matches!(
+            self.phase,
+            AttachmentPhase::Attached | AttachmentPhase::Preparing
+        ) && &*self.host == host
             && self.token == token
             && self.epoch == epoch
     }
@@ -242,6 +244,17 @@ mod tests {
             .and_then(|a| a.attach(7, Arc::from("space-a"), 12, 1))
             .and_then(|a| a.commit(7, 12, 1))
             .expect("complete handoff")
+    }
+
+    #[test]
+    fn source_keeps_its_lease_until_detach() {
+        let origin = source();
+        let preparing = origin
+            .prepare(handoff(7, "space-a", 42, origin.clone()))
+            .expect("prepare");
+        assert!(preparing.authorizes("main", 11, 0));
+        let detached = preparing.detach(7, 11, 0).expect("detach");
+        assert!(!detached.authorizes("main", 11, 0));
     }
 
     #[test]
