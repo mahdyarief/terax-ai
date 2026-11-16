@@ -107,6 +107,7 @@ import {
 } from "@/modules/spaces/lib/windowReady";
 import {
   buildAttachHandoff,
+  type PtyHandoffCheckpoint,
   type PtyReplayPayload,
 } from "@/modules/terminal/lib/ptyHandoff";
 import { StatusBar } from "@/modules/statusbar";
@@ -205,16 +206,10 @@ function restoreHandoffSource(
   snapshot: Tab[],
   spaceId: string,
   replays: PtyReplayPayload[],
+  checkpoints: PtyHandoffCheckpoint[],
   leafPtyIds: Array<number | null>,
   allocId: () => number,
 ): Tab[] {
-  const checkpoints = replays.map((replay) => ({
-    ptyId: replay.ptyId,
-    checkpoint: replay.leaseEpoch,
-    cols: replay.cols,
-    rows: replay.rows,
-    attachToken: replay.attachToken,
-  }));
   for (const replay of replays) queueHandoffReplay(replay);
   const serialized = stampHandoffAttachments(
     serializeTabs(snapshot),
@@ -1341,6 +1336,7 @@ export default function App() {
         let detached = false;
         let leafPtyIdsSnapshot: Array<number | null> = [];
         let rollbackReplays: PtyReplayPayload[] = [];
+        let rollbackCheckpoints: PtyHandoffCheckpoint[] = [];
         try {
           const leaves = snapshot.flatMap((t) =>
             t.kind === "terminal" ? leafIds(t.paneTree) : [],
@@ -1378,8 +1374,9 @@ export default function App() {
             emitTo,
             waitForAttach: createAttachWaiter({ listen: tauriAttachListen })
               .waitForAttach,
-            onRollback: (replays) => {
+            onRollback: (replays, checkpoints) => {
               rollbackReplays = replays;
+              rollbackCheckpoints = checkpoints;
             },
           });
           if (!result.ok) throw new Error(result.error);
@@ -1393,6 +1390,7 @@ export default function App() {
                 snapshot,
                 spaceId,
                 rollbackReplays,
+                rollbackCheckpoints,
                 leafPtyIdsSnapshot,
                 allocId,
               );
@@ -1527,6 +1525,7 @@ export default function App() {
                 const serialized = serializeTabs(snapshot);
                 const { ptyIds, leafPtyIds } = detachTabsForHandoff(spaceId);
                 let rollbackReplays: PtyReplayPayload[] = [];
+                let rollbackCheckpoints: PtyHandoffCheckpoint[] = [];
                 const result = await moveTabsAcrossWindows({
                   handoffId: handoffId ?? nextHandoffId(),
                   tabs: serialized,
@@ -1540,8 +1539,9 @@ export default function App() {
                   waitForAttach: createAttachWaiter({
                     listen: tauriAttachListen,
                   }).waitForAttach,
-                  onRollback: (replays) => {
+                  onRollback: (replays, checkpoints) => {
                     rollbackReplays = replays;
+                    rollbackCheckpoints = checkpoints;
                   },
                 });
                 if (!result.ok) {
@@ -1549,6 +1549,7 @@ export default function App() {
                     snapshot,
                     spaceId,
                     rollbackReplays,
+                    rollbackCheckpoints,
                     leafPtyIds,
                     allocId,
                   );
@@ -1693,6 +1694,7 @@ export default function App() {
               [tabId],
             );
             let rollbackReplays: PtyReplayPayload[] = [];
+            let rollbackCheckpoints: PtyHandoffCheckpoint[] = [];
             const result = await moveTabsAcrossWindows({
               handoffId: nextHandoffId(),
               tabs: serialized,
@@ -1705,8 +1707,9 @@ export default function App() {
               emitTo,
               waitForAttach: createAttachWaiter({ listen: tauriAttachListen })
                 .waitForAttach,
-              onRollback: (replays) => {
+              onRollback: (replays, checkpoints) => {
                 rollbackReplays = replays;
+                rollbackCheckpoints = checkpoints;
               },
             });
             if (!result.ok) {
@@ -1714,6 +1717,7 @@ export default function App() {
                 [tab],
                 targetSpaceId,
                 rollbackReplays,
+                rollbackCheckpoints,
                 leafPtyIds,
                 allocId,
               );

@@ -154,6 +154,6 @@ describe("moveTabsAcrossWindows", () => {
       onRollback,
     });
     expect(result.ok).toBe(false);
-    expect(onRollback).toHaveBeenCalledWith(replays);
+    expect(onRollback).toHaveBeenCalledWith(replays, checkpoints);
   });
 });

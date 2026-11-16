@@ -139,6 +139,8 @@ export async function openPty(
   let released = false;
   let notice: string | number | undefined;
   let progress: ((processedBytes: number) => void) | null = null;
+  let attachToken: string | null = null;
+  let attachEpoch = "0";
   const receiver = new PtyOutputReceiver(
     (bytes) => {
       if (id !== null) usePtyActivityStore.getState().markRunning(id);
@@ -198,20 +200,25 @@ export async function openPty(
   try {
     await ensureAgentActivityListener();
     await stream.ensureStream();
-    id =
-      attached !== undefined
-        ? attached.ptyId
-        : await invoke<number>("pty_open", {
-            cols,
-            rows,
-            cwd: cwd ?? null,
-            workspace: currentWorkspaceEnv(),
-            blocks: blocks ?? false,
-            shell: shell ?? null,
-            paneId: paneId ?? null,
-            presentation: presentation ?? null,
-            colors: colors ?? null,
-          });
+    if (attached !== undefined) {
+      id = attached.ptyId;
+      attachToken = attached.attachToken;
+      attachEpoch = attached.leaseEpoch;
+    } else {
+      const opened = await invoke<{ id: number; token: string }>("pty_open", {
+        cols,
+        rows,
+        cwd: cwd ?? null,
+        workspace: currentWorkspaceEnv(),
+        blocks: blocks ?? false,
+        shell: shell ?? null,
+        paneId: paneId ?? null,
+        presentation: presentation ?? null,
+        colors: colors ?? null,
+      });
+      id = opened.id;
+      attachToken = opened.token;
+    }
     if (attached !== undefined)
       applyReplayEvents(
         {
@@ -221,6 +228,8 @@ export async function openPty(
               id: attached.ptyId,
               cols: colsValue,
               rows: rowsValue,
+              token: Number(attachToken),
+              epoch: Number(attachEpoch),
             }),
         },
         attached.events,
@@ -246,12 +255,7 @@ export async function openPty(
           releaseHandlers();
         }
       },
-      attached
-        ? {
-            token: attached.attachToken,
-            epoch: attached.leaseEpoch,
-          }
-        : { token: "0", epoch: "0" },
+      { token: attachToken ?? "0", epoch: attachEpoch },
     ).progress;
     if (paneId !== undefined && presentation !== undefined)
       bindLeafPty(paneId, sessionId, presentation);
@@ -259,15 +263,16 @@ export async function openPty(
   receiver.start();
 
   let closed = false;
-  const headers = { "x-pty-id": String(sessionId) };
-  const streamIdentity = stream.identity();
-  const identity = attached
-    ? {
-        id: sessionId,
-        token: attached.attachToken,
-        epoch: attached.leaseEpoch,
-      }
-    : { id: sessionId, token: streamIdentity.token, epoch: streamIdentity.epoch };
+  const headers = {
+    "x-pty-id": String(sessionId),
+    "x-pty-token": attachToken ?? "0",
+    "x-pty-epoch": attachEpoch,
+  };
+  const identity = {
+    id: sessionId,
+    token: attachToken ?? "0",
+    epoch: attachEpoch,
+  };
 
   return {
     id: sessionId,
@@ -278,7 +283,14 @@ export async function openPty(
         typeof data === "string" ? textEncoder.encode(data) : data,
         { headers },
       ),
-    resize: (c, r) => invoke("pty_resize", { id: sessionId, cols: c, rows: r }),
+    resize: (c, r) =>
+      invoke("pty_resize", {
+        id: sessionId,
+        cols: c,
+        rows: r,
+        token: Number(attachToken ?? "0"),
+        epoch: Number(attachEpoch),
+      }),
     setColors: (next) =>
       closed
         ? Promise.resolve()

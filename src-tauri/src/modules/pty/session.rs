@@ -101,9 +101,13 @@ impl Session {
         *self.attachment.write().unwrap() = attachment;
     }
 
+    pub(super) fn attachment_token(&self) -> AttachToken {
+        self.attachment.read().unwrap().token()
+    }
+
     #[cfg(test)]
     fn attachment_token_for_test(&self) -> AttachToken {
-        self.attachment.read().unwrap().token()
+        self.attachment_token()
     }
 }
 

@@ -36,7 +36,10 @@ type Options = {
   invoke: Invoke;
   emitTo: (window: string, event: string, payload: unknown) => Promise<void>;
   waitForAttach: (handoffId: string) => Promise<TabsAttachedPayload>;
-  onRollback?: (replays: PtyReplayPayload[]) => void;
+  onRollback?: (
+    replays: PtyReplayPayload[],
+    checkpoints: PtyHandoffCheckpoint[],
+  ) => void;
 };
 
 export async function moveTabsAcrossWindows({
@@ -107,7 +110,7 @@ export async function moveTabsAcrossWindows({
         "pty_rollback_handoff",
         buildRollbackHandoff(handoffId, ptyIds),
       )) as PtyReplayPayload[] | undefined;
-      if (replays) onRollback?.(replays);
+      if (replays) onRollback?.(replays, checkpoints);
     } catch {
       // The source window is gone; nobody can resume these sessions, so close
       // them here rather than leaving orphaned native processes behind.

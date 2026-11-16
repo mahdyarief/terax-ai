@@ -34,6 +34,7 @@ use crate::modules::workspace::{user_spawn_cwd_or_home, WorkspaceEnv, WorkspaceR
 use hub::{Command, Hub};
 pub use presentation::PresentationClass;
 pub use protocol::stream_protocol;
+use attachment::{AttachToken, LeaseEpoch};
 use session::Session;
 use terminal_colors::TerminalColors;
 
@@ -284,6 +285,12 @@ fn reap(id: u32, session: Arc<Session>, reason: &str) {
         .expect("spawn pty drop thread");
 }
 
+#[derive(serde::Serialize)]
+pub struct PtyOpenResult {
+    pub id: u32,
+    pub token: String,
+}
+
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn pty_open(
@@ -300,7 +307,7 @@ pub async fn pty_open(
     pane_id: Option<u32>,
     presentation: Option<PresentationClass>,
     colors: Option<TerminalColors>,
-) -> Result<u32, String> {
+) -> Result<PtyOpenResult, String> {
     let workspace = WorkspaceEnv::from_option(workspace);
     let blocks = blocks.unwrap_or(false);
     // A Windows helper cannot execute inside WSL without explicit path and
@@ -353,6 +360,7 @@ pub async fn pty_open(
         log::error!("pty_open failed: {e}");
         e
     })?;
+    let attachment_token = session.attachment_token().to_string();
     state.sessions.write().unwrap().insert(id, session);
     if let Some(env) = credential {
         control.activate_shell(
@@ -381,13 +389,14 @@ pub async fn pty_open(
         }
     }
     log::info!("pty opened id={id} cols={cols} rows={rows}");
-    Ok(id)
+    Ok(PtyOpenResult { id, token: attachment_token })
 }
 
 // Input is the latency-critical path: raw body + id header skips JSON
 // serialization of every keystroke on both sides of the IPC boundary.
 #[tauri::command]
 pub async fn pty_write(
+    webview: tauri::Webview,
     state: tauri::State<'_, PtyState>,
     request: tauri::ipc::Request<'_>,
 ) -> Result<(), String> {
@@ -397,6 +406,18 @@ pub async fn pty_write(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse().ok())
         .ok_or_else(|| "pty_write: missing x-pty-id header".to_string())?;
+    let token: AttachToken = request
+        .headers()
+        .get("x-pty-token")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| "pty_write: missing x-pty-token header".to_string())?;
+    let epoch: LeaseEpoch = request
+        .headers()
+        .get("x-pty-epoch")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| "pty_write: missing x-pty-epoch header".to_string())?;
     let tauri::ipc::InvokeBody::Raw(bytes) = request.body() else {
         return Err("pty_write: expected raw body".to_string());
     };
@@ -410,6 +431,10 @@ pub async fn pty_write(
             log::warn!("pty_write: unknown id={id}");
             "no session".to_string()
         })?;
+    if !session.authorizes(webview.label(), token, epoch) {
+        log::warn!("pty_write: unauthorized write id={id}");
+        return Err("pty_write: not the active attachment".to_string());
+    }
     // One ordered queue per session feeds a dedicated writer thread: no task
     // spawn or lock per keystroke, and the result is the real pipe write's.
     session.write(bytes.clone()).await.map_err(|e| {
@@ -420,10 +445,13 @@ pub async fn pty_write(
 
 #[tauri::command]
 pub fn pty_resize(
+    webview: tauri::Webview,
     state: tauri::State<PtyState>,
     id: u32,
     cols: u16,
     rows: u16,
+    token: u64,
+    epoch: u64,
 ) -> Result<(), String> {
     let session = state
         .sessions
@@ -435,6 +463,10 @@ pub fn pty_resize(
             log::warn!("pty_resize: unknown id={id}");
             "no session".to_string()
         })?;
+    if !session.authorizes(webview.label(), token, epoch) {
+        log::warn!("pty_resize: unauthorized resize id={id}");
+        return Err("pty_resize: not the active attachment".to_string());
+    }
     let result = session
         .resize(PtySize {
             rows,

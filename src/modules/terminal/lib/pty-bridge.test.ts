@@ -98,7 +98,8 @@ function nativeInvoke(firstId = 41) {
   mocks.invoke.mockImplementation((command: string) => {
     if (command === "pty_stream_open")
       return Promise.resolve("00000000000000aa");
-    if (command === "pty_open") return Promise.resolve(nextId++);
+    if (command === "pty_open")
+      return Promise.resolve({ id: nextId++, token: "7" });
     return Promise.resolve();
   });
 }
@@ -131,7 +132,7 @@ describe("PTY bridge over the multiplexed stream", () => {
         return Promise.resolve("00000000000000aa");
       if (command === "pty_open") {
         expect(mocks.signal).not.toBeNull();
-        return Promise.resolve(nextId++);
+        return Promise.resolve({ id: nextId++, token: "7" });
       }
       return Promise.resolve();
     });
@@ -319,7 +320,7 @@ describe("PTY bridge over the multiplexed stream", () => {
     );
     expect(session.identity()).toEqual({
       id: 41,
-      token: "00000000000000aa",
+      token: "7",
       epoch: "0",
     });
   });
@@ -361,6 +362,8 @@ describe("PTY bridge over the multiplexed stream", () => {
       id: 77,
       cols: 90,
       rows: 30,
+      token: Number("00000000000000cc"),
+      epoch: 7,
     });
     expect(mocks.invoke).not.toHaveBeenCalledWith("pty_open", expect.anything());
   });
