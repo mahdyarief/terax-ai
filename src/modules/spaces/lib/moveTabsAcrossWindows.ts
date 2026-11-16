@@ -19,6 +19,13 @@ export type TabsAttachedPayload = {
 
 export const SPACE_TABS_ATTACHED_EVENT = "spaces:tabs-attached";
 
+class SourceUnavailableError extends Error {
+  constructor() {
+    super("source-unavailable");
+    this.name = "SourceUnavailableError";
+  }
+}
+
 type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 
 type Options = {
@@ -88,7 +95,18 @@ export async function moveTabsAcrossWindows({
         emitTo(targetWindow, SPACE_TABS_MOVED_EVENT, correction),
       ).catch(() => {});
     }
-    await invoke("pty_rollback_handoff", { handoffId }).catch(() => {});
+    try {
+      await invoke("pty_rollback_handoff", { handoffId });
+    } catch {
+      // The source window is gone; nobody can resume these sessions, so close
+      // them here rather than leaving orphaned native processes behind.
+      await Promise.all(
+        checkpoints.map((checkpoint) =>
+          invoke("pty_close", { id: checkpoint.ptyId }).catch(() => {}),
+        ),
+      );
+      return { ok: false, error: new SourceUnavailableError().message };
+    }
     return { ok: false, error: reason };
   }
 }

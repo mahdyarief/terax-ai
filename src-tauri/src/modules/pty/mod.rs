@@ -130,6 +130,13 @@ fn to_replay_payload(replay: handoff::Replay) -> PtyReplayPayload {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CleanupReason {
+    Navigation,
+    WindowDestroyed,
+    AppShutdown,
+}
+
 pub struct PtyState {
     sessions: RwLock<HashMap<u32, Arc<Session>>>,
     // Starts at 1 so freshly-handed-out ids are never 0, which the frontend
@@ -184,35 +191,12 @@ impl PtyState {
     /// and its terminals stop producing output until the new page's
     /// `pty_close_all` reaps them, exactly as when their channel went away.
     pub fn reset_webview(&self, label: &str) {
-        self.hub.submit(Command::ResetWebview {
-            label: Arc::from(label),
-        });
-        for session in self.sessions.read().unwrap().values() {
-            if &*session.host() == label {
-                session.close_output();
-            }
-        }
+        cleanup_webview(self, label, CleanupReason::Navigation);
     }
 
     /// The webview is gone: close every terminal it owned.
     pub fn destroy_webview(&self, label: &str) {
-        self.hub.submit(Command::RemoveWebview {
-            label: Arc::from(label),
-        });
-        let owned: Vec<(u32, Arc<Session>)> = {
-            let mut sessions = self.sessions.write().unwrap();
-            let ids: Vec<u32> = sessions
-                .iter()
-                .filter(|(_, session)| &*session.host() == label)
-                .map(|(id, _)| *id)
-                .collect();
-            ids.into_iter()
-                .filter_map(|id| sessions.remove(&id).map(|session| (id, session)))
-                .collect()
-        };
-        for (id, session) in owned {
-            reap(id, session, "webview destroyed");
-        }
+        cleanup_webview(self, label, CleanupReason::WindowDestroyed);
     }
 
     /// Native window occlusion or system sleep: every terminal of the window
@@ -223,6 +207,50 @@ impl PtyState {
             hidden,
         });
     }
+}
+
+/// Unifies page-navigation, window-destruction and shutdown cleanup. A
+/// destroyed source window must not kill terminals already frozen for a
+/// handoff: the target window is about to attach them.
+pub fn cleanup_webview(state: &PtyState, label: &str, reason: CleanupReason) -> usize {
+    match reason {
+        CleanupReason::Navigation => {
+            state.hub.submit(Command::ResetWebview {
+                label: Arc::from(label),
+            });
+            for session in state.sessions.read().unwrap().values() {
+                if &*session.host() == label {
+                    session.close_output();
+                }
+            }
+            return 0;
+        }
+        CleanupReason::WindowDestroyed | CleanupReason::AppShutdown => {
+            state.hub.submit(Command::RemoveWebview {
+                label: Arc::from(label),
+            });
+        }
+    }
+    let owned: Vec<(u32, Arc<Session>)> = {
+        let mut sessions = state.sessions.write().unwrap();
+        let ids: Vec<u32> = sessions
+            .iter()
+            .filter(|(_, session)| {
+                &*session.host() == label
+                    && !(reason == CleanupReason::WindowDestroyed
+                        && session.attachment_phase() == attachment::AttachmentPhase::Preparing)
+            })
+            .map(|(id, _)| *id)
+            .collect();
+        ids.into_iter()
+            .filter_map(|id| sessions.remove(&id).map(|session| (id, session)))
+            .collect()
+    };
+    let count = owned.len();
+    for (id, session) in owned {
+        reap(id, session, "webview cleanup");
+    }
+    count
 }
 
 fn check_presentation_batch(ids: &[u32]) -> Result<(), String> {
@@ -798,6 +826,23 @@ mod tests {
         assert!(!session.authorizes("space-a", token, 0));
         assert!(!session.authorizes("main", token + 1, 0));
         assert!(!session.authorizes("main", token, 1));
+    }
+
+    #[test]
+    fn window_destroyed_during_handoff_does_not_kill_the_session() {
+        let state = Arc::new(PtyState::default());
+        let session = open(&state, 1, "main");
+        handoff::handoff_prepare(&state, 1, &[1], "main", "space-a").expect("prepare");
+        assert_eq!(
+            cleanup_webview(&state, "main", CleanupReason::WindowDestroyed),
+            0
+        );
+        assert!(state.sessions.read().unwrap().contains_key(&1));
+        assert!(!session.queue_closed());
+        let _ = cleanup_webview(&state, "main", CleanupReason::AppShutdown);
+        wait_for("shutdown to reap the frozen session", || {
+            !state.sessions.read().unwrap().contains_key(&1)
+        });
     }
 
     #[test]

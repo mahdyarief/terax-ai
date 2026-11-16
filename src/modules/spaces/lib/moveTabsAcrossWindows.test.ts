@@ -69,6 +69,26 @@ describe("moveTabsAcrossWindows", () => {
     expect(invoke).toHaveBeenCalledWith("pty_rollback_handoff", expect.anything());
   });
 
+  it("closes PTYs explicitly when rollback cannot restore the source", async () => {
+    const invoke = vi.fn(async (cmd: string) => {
+      if (cmd === "pty_prepare_handoff") return checkpoints;
+      if (cmd === "pty_detach") throw new Error("source window gone");
+      if (cmd === "pty_rollback_handoff") throw new Error("source unavailable");
+      return undefined;
+    });
+    const result = await moveTabsAcrossWindows({
+      handoffId: "h4",
+      tabs,
+      targetWindow: "space-a",
+      spaceId: "s",
+      invoke,
+      emitTo: vi.fn(),
+      waitForAttach: vi.fn(),
+    });
+    expect(result).toEqual({ ok: false, error: "source-unavailable" });
+    expect(invoke).toHaveBeenCalledWith("pty_close", { id: 1 });
+  });
+
   it("rolls back and sends a correction when attach reports an error", async () => {
     const invoke = vi.fn(async (cmd: string) => {
       if (cmd === "pty_prepare_handoff") return checkpoints;

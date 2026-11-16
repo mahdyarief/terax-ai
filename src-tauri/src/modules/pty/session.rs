@@ -93,6 +93,10 @@ impl Session {
             .authorizes(host, token, epoch)
     }
 
+    pub(super) fn attachment_phase(&self) -> super::attachment::AttachmentPhase {
+        self.attachment.read().unwrap().phase()
+    }
+
     pub(super) fn replace_attachment(&self, attachment: Attachment) {
         *self.attachment.write().unwrap() = attachment;
     }
