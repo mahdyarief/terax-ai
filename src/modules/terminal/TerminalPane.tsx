@@ -38,6 +38,8 @@ export type TerminalPaneProps = {
   /** This leaf is the active pane within its tab and receives auto-focus. */
   focused?: boolean;
   initialCwd?: string;
+  /** PTY id carried by a handed-off leaf; enables replay adoption. */
+  ptyId?: number;
   /** Enable command-block decorations (OSC 133) for this terminal. */
   blocks?: boolean;
   onSearchReady?: (leafId: number, addon: TerminalSearchController) => void;
@@ -62,6 +64,7 @@ const GhosttyTerminalPane = memo(
       visible,
       focused = true,
       initialCwd,
+      ptyId,
       blocks = false,
       onSearchReady,
       onExit,
@@ -84,6 +87,7 @@ const GhosttyTerminalPane = memo(
       visible,
       focused,
       initialCwd,
+      ptyId,
       blocks,
       onSearchReady: (search) => onSearchReady?.(leafId, search),
       onExit: (code) => onExit?.(leafId, code),

@@ -20,6 +20,7 @@ export {
   whenSessionReady,
   writeToSession,
 } from "./lib/terminalSessionApi";
+export { queueHandoffReplay } from "./lib/handoffSession";
 export { isTerminalSurfaceTarget } from "./lib/terminalSurfaceTarget";
 export { isPtyRunning, usePtyActivityStore } from "./lib/ptyActivity";
 export {

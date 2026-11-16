@@ -87,13 +87,33 @@ import {
 import {
   reclaimHost,
   SPACE_RECLAIM_REQUEST_EVENT,
-  SPACE_TABS_MOVED_EVENT,
+  SPACE_TABS_ATTACHED_EVENT,
+  SPACE_WINDOW_READY_EVENT,
+  type TabsAttachedPayload,
+  type TabsMovedPayload,
+  type WindowReadyPayload,
 } from "@/modules/spaces/lib/crossWindowSync";
+import { createAttachWaiter } from "@/modules/spaces/lib/attachWaiter";
 import { planSpaceHandoff } from "@/modules/spaces/lib/handoff";
+import { moveTabsAcrossWindows } from "@/modules/spaces/lib/moveTabsAcrossWindows";
+import {
+  hydrateTabs,
+  serializeTabs,
+  stampHandoffAttachments,
+} from "@/modules/spaces/lib/serialize";
+import {
+  noteWindowReady,
+  waitForWindowReady,
+} from "@/modules/spaces/lib/windowReady";
+import {
+  buildAttachHandoff,
+  type PtyReplayPayload,
+} from "@/modules/terminal/lib/ptyHandoff";
 import { StatusBar } from "@/modules/statusbar";
 import {
   TabSwitcherHud,
   type CloseTabsPlan,
+  type Tab,
   useTabSwitcher,
   useTabs,
   useWindowTitle,
@@ -110,6 +130,7 @@ import {
   leafIds,
   leafHasForegroundProcess,
   navigateFocusedBlocks,
+  queueHandoffReplay,
   type PaneBounds,
   ptyIdForLeaf,
   scrollFocusedTerminalToBottom,
@@ -136,7 +157,7 @@ import {
   workspaceScopeKey,
 } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
-import { emitTo, listen } from "@tauri-apps/api/event";
+import { emit, emitTo, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   lazy,
@@ -169,6 +190,40 @@ const BenchBridge = __TERAX_BENCH__
   ? lazy(() => import("@/bench/BenchBridge"))
   : null;
 
+let handoffCounter = 0;
+function nextHandoffId(): string {
+  handoffCounter += 1;
+  return `${Date.now()}-${handoffCounter}`;
+}
+
+const tauriAttachListen = (
+  event: string,
+  fn: (event: { payload: TabsAttachedPayload }) => void,
+) => listen(event, fn);
+
+function restoreHandoffSource(
+  snapshot: Tab[],
+  spaceId: string,
+  replays: PtyReplayPayload[],
+  leafPtyIds: Array<number | null>,
+  allocId: () => number,
+): Tab[] {
+  const checkpoints = replays.map((replay) => ({
+    ptyId: replay.ptyId,
+    checkpoint: replay.leaseEpoch,
+    cols: replay.cols,
+    rows: replay.rows,
+    attachToken: replay.attachToken,
+  }));
+  for (const replay of replays) queueHandoffReplay(replay);
+  const serialized = stampHandoffAttachments(
+    serializeTabs(snapshot),
+    checkpoints,
+    leafPtyIds,
+  );
+  return hydrateTabs(serialized, spaceId, allocId, { keepPty: true });
+}
+
 export default function App() {
   const {
     tabs,
@@ -183,6 +238,7 @@ export default function App() {
     newTabInSpace,
     removeTabsForSpace,
     detachTabsForSpace,
+    detachTabsForHandoff,
     attachTabsForSpace,
     markBooted,
     setActiveSpaceForNewTabs,
@@ -1281,8 +1337,10 @@ export default function App() {
       }
 
       void (async () => {
-        const snapshot = tabs.filter((t) => t.spaceId === spaceId);
+        const snapshot = tabsRef.current.filter((t) => t.spaceId === spaceId);
         let detached = false;
+        let leafPtyIdsSnapshot: Array<number | null> = [];
+        let rollbackReplays: PtyReplayPayload[] = [];
         try {
           const leaves = snapshot.flatMap((t) =>
             t.kind === "terminal" ? leafIds(t.paneTree) : [],
@@ -1294,27 +1352,48 @@ export default function App() {
           if (runningCount > 0) {
             const ok = window.confirm(
               `${runningCount} active ${runningCount === 1 ? "process" : "processes"} detected in this space. ` +
-                "Moving it to another window keeps the tabs, but terminal sessions restart there. Continue?",
+                "Moving it to another window keeps the terminal sessions running. Continue?",
             );
             if (!ok) return;
           }
 
           await flushNow();
-          detachTabsForSpace(spaceId);
-          detached = true;
-          await state.assignSpaceToWindow(spaceId, plan.to);
           await invoke("open_space_window", { spaceId });
+          await waitForWindowReady(plan.to);
+
+          const serialized = serializeTabs(snapshot);
+          const { ptyIds, leafPtyIds } = detachTabsForHandoff(spaceId);
+          leafPtyIdsSnapshot = leafPtyIds;
+          detached = true;
+
+          const result = await moveTabsAcrossWindows({
+            handoffId: nextHandoffId(),
+            tabs: serialized,
+            ptyIds,
+            leafPtyIds,
+            targetWindow: plan.to,
+            spaceId,
+            fromWindow: windowLabel,
+            invoke,
+            emitTo,
+            waitForAttach: createAttachWaiter({ listen: tauriAttachListen })
+              .waitForAttach,
+            onRollback: (replays) => {
+              rollbackReplays = replays;
+            },
+          });
+          if (!result.ok) throw new Error(result.error);
+          await state.assignSpaceToWindow(spaceId, plan.to);
         } catch (e) {
           console.error("[terax] open space window failed:", e);
           try {
             await state.assignSpaceToWindow(spaceId, plan.from);
             if (detached && snapshot.length > 0) {
-              const { serializeTabs, hydrateTabs } = await import(
-                "@/modules/spaces/lib/serialize"
-              );
-              const restored = hydrateTabs(
-                serializeTabs(snapshot),
+              const restored = restoreHandoffSource(
+                snapshot,
                 spaceId,
+                rollbackReplays,
+                leafPtyIdsSnapshot,
                 allocId,
               );
               attachTabsForSpace(spaceId, restored);
@@ -1328,7 +1407,13 @@ export default function App() {
         }
       })();
     },
-    [windowLabel, flushNow, detachTabsForSpace, attachTabsForSpace, tabs, allocId],
+    [
+      windowLabel,
+      flushNow,
+      detachTabsForHandoff,
+      attachTabsForSpace,
+      allocId,
+    ],
   );
 
   useEffect(() => {
@@ -1424,18 +1509,56 @@ export default function App() {
             })();
           },
         ),
-        listen<{ spaceId: string; toWindow: string }>(
+        listen<{ spaceId: string; toWindow: string; handoffId?: string }>(
           SPACE_RECLAIM_REQUEST_EVENT,
           (event) => {
-            const { spaceId, toWindow } = event.payload ?? {};
-            if (!spaceId || toWindow !== "main" || windowLabel !== `space-${spaceId}`) {
+            const { spaceId, toWindow, handoffId } = event.payload ?? {};
+            if (!spaceId || !toWindow || windowLabel === toWindow) return;
+            // Only the current host answers; other windows ignore the request.
+            if (windowLabel !== `space-${spaceId}` && windowLabel !== "main") {
               return;
             }
             void (async () => {
               try {
                 await flushNow();
-                detachTabsForSpace(spaceId);
-                await getCurrentWindow().destroy();
+                const snapshot = tabsRef.current.filter(
+                  (t) => t.spaceId === spaceId,
+                );
+                const serialized = serializeTabs(snapshot);
+                const { ptyIds, leafPtyIds } = detachTabsForHandoff(spaceId);
+                let rollbackReplays: PtyReplayPayload[] = [];
+                const result = await moveTabsAcrossWindows({
+                  handoffId: handoffId ?? nextHandoffId(),
+                  tabs: serialized,
+                  ptyIds,
+                  leafPtyIds,
+                  targetWindow: toWindow,
+                  spaceId,
+                  fromWindow: windowLabel,
+                  invoke,
+                  emitTo,
+                  waitForAttach: createAttachWaiter({
+                    listen: tauriAttachListen,
+                  }).waitForAttach,
+                  onRollback: (replays) => {
+                    rollbackReplays = replays;
+                  },
+                });
+                if (!result.ok) {
+                  const restored = restoreHandoffSource(
+                    snapshot,
+                    spaceId,
+                    rollbackReplays,
+                    leafPtyIds,
+                    allocId,
+                  );
+                  attachTabsForSpace(spaceId, restored);
+                  throw new Error(result.error);
+                }
+                await useSpaces
+                  .getState()
+                  .assignSpaceToWindow(spaceId, toWindow);
+                if (windowLabel !== "main") await getCurrentWindow().destroy();
               } catch (e) {
                 console.error("[terax] reclaim handoff failed:", e);
                 void refreshRegistry();
@@ -1443,24 +1566,67 @@ export default function App() {
             })();
           },
         ),
-        listen<{
-          spaceId: string;
-          fromWindow: string;
-          toWindow: string;
-          tabs: import("@/modules/spaces/lib/serialize").SerializedTab[];
-        }>(SPACE_TABS_MOVED_EVENT, (event) => {
+        listen<TabsMovedPayload>(SPACE_TABS_MOVED_EVENT, (event) => {
           const payload = event.payload;
           if (!payload || payload.toWindow !== windowLabel) return;
+          const { handoffId } = payload;
           void (async () => {
-            const { hydrateTabs } = await import(
-              "@/modules/spaces/lib/serialize"
-            );
-            const hydrated = hydrateTabs(payload.tabs, payload.spaceId, allocId);
-            if (hydrated.length === 0) return;
-            attachTabsForSpace(payload.spaceId, hydrated);
-            setActiveId(hydrated[0].id);
-            useSpaces.getState().setActive(payload.spaceId);
+            const ack = async (
+              replays: TabsAttachedPayload["replays"],
+              error?: string,
+            ) => {
+              const body: TabsAttachedPayload = error
+                ? { handoffId, replays, error }
+                : { handoffId, replays };
+              try {
+                await emitTo(payload.fromWindow, SPACE_TABS_ATTACHED_EVENT, body);
+              } catch (e) {
+                console.error("[terax] handoff ack failed:", e);
+              }
+            };
+            try {
+              if (disposed) return;
+              const correction = payload.tabs.length === 0;
+              if (correction) {
+                // The source rolled back; drop whatever this window built.
+                detachTabsForSpace(payload.spaceId);
+                await ack([], "source rolled back");
+                return;
+              }
+
+              let replays: TabsAttachedPayload["replays"] = [];
+              if (payload.checkpoints.length > 0) {
+                const ptyIds = payload.checkpoints.map((c) => c.ptyId);
+                replays =
+                  (await invoke<PtyReplayPayload[]>(
+                    "pty_attach",
+                    buildAttachHandoff(handoffId, ptyIds),
+                  )) ?? [];
+                for (const replay of replays) queueHandoffReplay(replay);
+              }
+
+              const stamped = stampHandoffAttachments(
+                payload.tabs,
+                payload.checkpoints,
+                payload.leafPtyIds,
+              );
+              const hydrated = hydrateTabs(stamped, payload.spaceId, allocId, {
+                keepPty: true,
+              });
+              if (hydrated.length > 0 && !disposed) {
+                attachTabsForSpace(payload.spaceId, hydrated);
+                setActiveId(hydrated[0].id);
+                useSpaces.getState().setActive(payload.spaceId);
+              }
+              await ack(replays);
+            } catch (e) {
+              console.error("[terax] cross-window tab attach failed:", e);
+              await ack([], e instanceof Error ? e.message : String(e));
+            }
           })();
+        }),
+        listen<WindowReadyPayload>(SPACE_WINDOW_READY_EVENT, (event) => {
+          if (event.payload?.window) noteWindowReady(event.payload.window);
         }),
         listen<{ spaceId: string }>(SPACE_DELETED_EVENT, (event) => {
           const id = event.payload?.spaceId;
@@ -1479,13 +1645,30 @@ export default function App() {
         return;
       }
       unlisteners.push(...subs);
+      noteWindowReady(windowLabel);
+      // Announce to every other window. The global Tauri event reaches all
+      // windows except the emitter, so each peer can note our readiness.
+      void emit(SPACE_WINDOW_READY_EVENT, {
+        window: windowLabel,
+      } satisfies WindowReadyPayload).catch((e) => {
+        console.error("[terax] window-ready announce failed:", e);
+      });
     })();
 
     return () => {
       disposed = true;
       for (const un of unlisteners) un();
     };
-  }, [spacesHydrated, windowLabel, allocId, attachTabsForSpace, setActiveId]);
+  }, [
+    spacesHydrated,
+    windowLabel,
+    allocId,
+    attachTabsForSpace,
+    detachTabsForHandoff,
+    detachTabsForSpace,
+    flushNow,
+    setActiveId,
+  ]);
 
   const handleMoveTab = useCallback(
     (tabId: number, targetSpaceId: string) => {
@@ -1497,9 +1680,6 @@ export default function App() {
         const tab = tabsRef.current.find((t) => t.id === tabId);
         if (!tab) return;
         void (async () => {
-          const { serializeTabs } = await import(
-            "@/modules/spaces/lib/serialize"
-          );
           const serialized = serializeTabs([tab]);
           if (serialized.length === 0) {
             toast("This tab cannot move between windows", {
@@ -1508,12 +1688,38 @@ export default function App() {
             return;
           }
           try {
-            await emitTo(targetWindow, SPACE_TABS_MOVED_EVENT, {
+            const { ptyIds, leafPtyIds } = detachTabsForHandoff(
+              targetSpaceId,
+              [tabId],
+            );
+            let rollbackReplays: PtyReplayPayload[] = [];
+            const result = await moveTabsAcrossWindows({
+              handoffId: nextHandoffId(),
+              tabs: serialized,
+              ptyIds,
+              leafPtyIds,
+              targetWindow,
               spaceId: targetSpaceId,
               fromWindow: windowLabel,
-              toWindow: targetWindow,
-              tabs: serialized,
+              invoke,
+              emitTo,
+              waitForAttach: createAttachWaiter({ listen: tauriAttachListen })
+                .waitForAttach,
+              onRollback: (replays) => {
+                rollbackReplays = replays;
+              },
             });
+            if (!result.ok) {
+              const restored = restoreHandoffSource(
+                [tab],
+                targetSpaceId,
+                rollbackReplays,
+                leafPtyIds,
+                allocId,
+              );
+              attachTabsForSpace(targetSpaceId, restored);
+              throw new Error(result.error);
+            }
           } catch (e) {
             console.error("[terax] cross-window tab move failed:", e);
             toast("Could not move the tab", {
@@ -1521,7 +1727,6 @@ export default function App() {
             });
             return;
           }
-          closeTab(tabId);
         })();
         return;
       }
@@ -1529,7 +1734,13 @@ export default function App() {
         useSpaces.getState().setActive(targetSpaceId);
       }
     },
-    [moveTabToSpace, closeTab, windowLabel],
+    [
+      moveTabToSpace,
+      windowLabel,
+      detachTabsForHandoff,
+      attachTabsForSpace,
+      allocId,
+    ],
   );
 
   const handleBringSpaceToWindow = useCallback(
@@ -1539,15 +1750,21 @@ export default function App() {
         .spaces.find((s) => s.id === spaceId);
       const host = reclaimHost(space, windowLabel);
       if (!host) return;
-      void emitTo(host, SPACE_RECLAIM_REQUEST_EVENT, {
-        spaceId,
-        toWindow: windowLabel,
-      }).catch((e) => {
-        console.error("[terax] reclaim request failed:", e);
-        toast("Could not bring the space back", {
-          description: "Its window may have closed.",
-        });
-      });
+      void (async () => {
+        try {
+          await waitForWindowReady(host);
+          await emitTo(host, SPACE_RECLAIM_REQUEST_EVENT, {
+            spaceId,
+            toWindow: windowLabel,
+            handoffId: nextHandoffId(),
+          });
+        } catch (e) {
+          console.error("[terax] reclaim request failed:", e);
+          toast("Could not bring the space back", {
+            description: "Its window may have closed.",
+          });
+        }
+      })();
     },
     [windowLabel],
   );

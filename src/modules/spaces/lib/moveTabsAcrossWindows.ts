@@ -1,23 +1,20 @@
-import { buildCommitHandoff, type PtyHandoffCheckpoint, type PtyReplayPayload } from "@/modules/terminal/lib/ptyHandoff";
+import {
+  buildCommitHandoff,
+  buildDetachHandoff,
+  buildPrepareHandoff,
+  buildRollbackHandoff,
+  type PtyHandoffCheckpoint,
+  type PtyReplayPayload,
+} from "@/modules/terminal/lib/ptyHandoff";
 import type { SerializedTab } from "./serialize";
-import { SPACE_TABS_MOVED_EVENT } from "./crossWindowSync";
+import {
+  SPACE_TABS_MOVED_EVENT,
+  type TabsAttachedPayload,
+  type TabsMovedPayload,
+} from "./crossWindowSync";
 
-export type TabsMovedPayload = {
-  spaceId: string;
-  fromWindow: string;
-  toWindow: string;
-  handoffId: string;
-  tabs: SerializedTab[];
-  checkpoints: PtyHandoffCheckpoint[];
-};
-
-export type TabsAttachedPayload = {
-  handoffId: string;
-  replays: PtyReplayPayload[];
-  error?: string;
-};
-
-export const SPACE_TABS_ATTACHED_EVENT = "spaces:tabs-attached";
+export type { TabsAttachedPayload, TabsMovedPayload };
+export { SPACE_TABS_ATTACHED_EVENT } from "./crossWindowSync";
 
 class SourceUnavailableError extends Error {
   constructor() {
@@ -31,37 +28,46 @@ type Invoke = (command: string, args?: Record<string, unknown>) => Promise<unkno
 type Options = {
   handoffId: string;
   tabs: SerializedTab[];
+  ptyIds: number[];
+  leafPtyIds: Array<number | null>;
   targetWindow: string;
   spaceId: string;
   fromWindow?: string;
   invoke: Invoke;
   emitTo: (window: string, event: string, payload: unknown) => Promise<void>;
   waitForAttach: (handoffId: string) => Promise<TabsAttachedPayload>;
+  onRollback?: (replays: PtyReplayPayload[]) => void;
 };
 
 export async function moveTabsAcrossWindows({
   handoffId,
   tabs,
+  ptyIds,
+  leafPtyIds,
   targetWindow,
   spaceId,
   fromWindow = "main",
   invoke,
   emitTo,
   waitForAttach,
+  onRollback,
 }: Options): Promise<
   { ok: true; attached: TabsAttachedPayload } | { ok: false; error: string }
 > {
   let emitted = false;
   let checkpoints: PtyHandoffCheckpoint[] = [];
   try {
-    checkpoints = (await invoke("pty_prepare_handoff", { ids: [] })) as PtyHandoffCheckpoint[];
-    await invoke("pty_detach", { handoffId });
+    checkpoints = (await invoke("pty_prepare_handoff", {
+      ...buildPrepareHandoff(handoffId, ptyIds, targetWindow),
+    })) as PtyHandoffCheckpoint[];
+    await invoke("pty_detach", buildDetachHandoff(handoffId, ptyIds));
     const payload: TabsMovedPayload = {
       spaceId,
       fromWindow,
       toWindow: targetWindow,
       handoffId,
       tabs,
+      leafPtyIds,
       checkpoints,
     };
     await emitTo(targetWindow, SPACE_TABS_MOVED_EVENT, payload);
@@ -89,6 +95,7 @@ export async function moveTabsAcrossWindows({
         toWindow: targetWindow,
         handoffId,
         tabs: [],
+        leafPtyIds: [],
         checkpoints: [],
       };
       await Promise.resolve(
@@ -96,7 +103,11 @@ export async function moveTabsAcrossWindows({
       ).catch(() => {});
     }
     try {
-      await invoke("pty_rollback_handoff", { handoffId });
+      const replays = (await invoke(
+        "pty_rollback_handoff",
+        buildRollbackHandoff(handoffId, ptyIds),
+      )) as PtyReplayPayload[] | undefined;
+      if (replays) onRollback?.(replays);
     } catch {
       // The source window is gone; nobody can resume these sessions, so close
       // them here rather than leaving orphaned native processes behind.

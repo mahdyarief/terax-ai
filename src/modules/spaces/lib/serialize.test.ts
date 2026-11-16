@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { PaneNode } from "@/modules/terminal/lib/panes";
 import type { Tab } from "@/modules/tabs/lib/useTabs";
-import { hydrateTabs, serializeTabs, type SerializedTab } from "./serialize";
+import {
+  hydrateTabs,
+  serializeTabs,
+  stampHandoffAttachments,
+  type SerializedTab,
+} from "./serialize";
 
 function counter(start = 100): () => number {
   let n = start;
@@ -168,6 +173,39 @@ describe("hydrateTabs", () => {
     const [serialized] = serializeTabs([term({})]);
     const [hydrated] = hydrateTabs([serialized], "s1", counter());
     expect(hydrated.kind === "terminal" && hydrated.cold).toBe(true);
+  });
+
+  it("stamps prepared PTY checkpoints onto terminal leaves for handoff", () => {
+    const serialized = serializeTabs([term({})]);
+    const stamped = stampHandoffAttachments(serialized, [
+      { ptyId: 41, checkpoint: "128", cols: 80, rows: 24, attachToken: "5" },
+    ]);
+    const [hydrated] = hydrateTabs(stamped, "s1", counter(), {
+      keepPty: true,
+    });
+    const leaf = hydrated.kind === "terminal" ? hydrated.paneTree : null;
+    expect(leaf).toMatchObject({
+      kind: "leaf",
+      ptyAttachment: { ptyId: 41, checkpoint: "128", cols: 80, rows: 24 },
+    });
+    expect(hydrated.kind === "terminal" && hydrated.cold).toBe(false);
+  });
+
+  it("keeps cold leaves unattached when leaf PTY ids are known", () => {
+    const serialized = serializeTabs([term({})]);
+    const stamped = stampHandoffAttachments(
+      serialized,
+      [
+        { ptyId: 41, checkpoint: "128", cols: 80, rows: 24, attachToken: "5" },
+      ],
+      [null],
+    );
+    const [hydrated] = hydrateTabs(stamped, "s1", counter(), {
+      keepPty: true,
+    });
+    const leaf = hydrated.kind === "terminal" ? hydrated.paneTree : null;
+    expect(leaf).toMatchObject({ kind: "leaf" });
+    expect((leaf as { ptyAttachment?: unknown }).ptyAttachment).toBeUndefined();
   });
 
   it("hydrates editor/preview/markdown as cold with derived titles", () => {

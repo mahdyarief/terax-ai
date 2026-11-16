@@ -3,7 +3,10 @@ import {
   type PaneNode,
   type SplitDir,
 } from "@/modules/terminal/lib/panes";
-import type { PtyAttachmentRef } from "@/modules/terminal/lib/ptyHandoff";
+import type {
+  PtyAttachmentRef,
+  PtyHandoffCheckpoint,
+} from "@/modules/terminal/lib/ptyHandoff";
 import type {
   EditorTab,
   MarkdownTab,
@@ -231,6 +234,54 @@ export function freshTerminalTab(
     paneTree: { kind: "leaf", id: leafId, ...(cwd && { cwd }) },
     activeLeafId: leafId,
   };
+}
+
+function stampNode(
+  node: SerializedNode,
+  next: () => PtyAttachmentRef | null,
+): SerializedNode {
+  if (node.kind === "leaf") {
+    const attachment = next();
+    if (!attachment) return node;
+    return { ...node, ptyAttachment: attachment };
+  }
+  return {
+    ...node,
+    children: node.children.map((child) => stampNode(child, next)),
+  };
+}
+
+/**
+ * Attach prepared handoff checkpoints to serialized terminal leaves.
+ *
+ * `leafPtyIds` is the leaf-order PTY id list returned by
+ * `detachTabsForHandoff`; each entry names the PTY the leaf owned before the
+ * move, so cold leaves stay cold instead of inheriting a neighbour's
+ * checkpoint. Without it, checkpoints are assigned in request order.
+ */
+export function stampHandoffAttachments(
+  serialized: SerializedTab[],
+  checkpoints: PtyHandoffCheckpoint[],
+  leafPtyIds?: Array<number | null>,
+): SerializedTab[] {
+  const byPty = new Map(checkpoints.map((c) => [c.ptyId, c]));
+  const ordered = leafPtyIds
+    ? leafPtyIds.map((ptyId) => (ptyId === null ? null : byPty.get(ptyId)))
+    : checkpoints;
+  let index = 0;
+  const next = (): PtyAttachmentRef | null => {
+    const checkpoint = ordered[index++];
+    if (!checkpoint) return null;
+    return {
+      ptyId: checkpoint.ptyId,
+      checkpoint: checkpoint.checkpoint,
+      cols: checkpoint.cols,
+      rows: checkpoint.rows,
+    };
+  };
+  return serialized.map((tab) =>
+    tab.kind === "terminal" ? { ...tab, tree: stampNode(tab.tree, next) } : tab,
+  );
 }
 
 export function hydrateTabs(

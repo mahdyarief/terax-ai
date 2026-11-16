@@ -19,7 +19,11 @@ import {
   splitLeaf,
   swapLeafInDirection,
 } from "@/modules/terminal/lib/panes";
-import { disposeSession } from "@/modules/terminal/lib/terminalSessionApi";
+import {
+  disposeSession,
+  detachSessionView,
+  ptyIdForLeaf,
+} from "@/modules/terminal/lib/terminalSessionApi";
 import {
   useCallback,
   useEffect,
@@ -577,6 +581,34 @@ export function detachTabsBySpace(
   const detached = tabs.filter((t) => t.spaceId === spaceId);
   const remaining = tabs.filter((t) => t.spaceId !== spaceId);
   return { detached, remaining };
+}
+
+export function detachTabsForHandoff(
+  tabs: Tab[],
+  spaceId: string,
+  deps: {
+    ptyIdForLeaf: (leafId: number) => number | null;
+    detachGhosttyView: (leafId: number) => boolean;
+    tabIds?: number[];
+  },
+): { ptyIds: number[]; leafPtyIds: Array<number | null> } {
+  const ptyIds: number[] = [];
+  const leafPtyIds: Array<number | null> = [];
+  const tabIdFilter = deps.tabIds ? new Set(deps.tabIds) : null;
+  for (const tab of tabs) {
+    if (tab.spaceId !== spaceId || tab.kind !== "terminal") continue;
+    if (tabIdFilter && !tabIdFilter.has(tab.id)) continue;
+    // Private terminals have no serialized representation, so skipping them
+    // here keeps leaf order aligned with `serializeTabs`.
+    if (tab.private) continue;
+    for (const leafId of leafIds(tab.paneTree)) {
+      const ptyId = deps.ptyIdForLeaf(leafId);
+      leafPtyIds.push(ptyId);
+      if (ptyId !== null && !ptyIds.includes(ptyId)) ptyIds.push(ptyId);
+      deps.detachGhosttyView(leafId);
+    }
+  }
+  return { ptyIds, leafPtyIds };
 }
 
 export function attachTabsBySpace(
@@ -1579,6 +1611,43 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     [setActiveId, setTabs],
   );
 
+  const detachTabsForHandoffLocal = useCallback(
+    (
+      spaceId: string,
+      tabIds?: number[],
+    ): { ptyIds: number[]; leafPtyIds: Array<number | null> } => {
+      const { ptyIds, leafPtyIds } = detachTabsForHandoff(
+        tabsRef.current,
+        spaceId,
+        {
+          ptyIdForLeaf,
+          detachGhosttyView: detachSessionView,
+          tabIds,
+        },
+      );
+      const idFilter = tabIds ? new Set(tabIds) : null;
+      const detached = tabsRef.current.filter(
+        (t) =>
+          t.spaceId === spaceId && (!idFilter || idFilter.has(t.id)),
+      );
+      const remaining = tabsRef.current.filter(
+        (t) =>
+          t.spaceId !== spaceId || (idFilter && !idFilter.has(t.id)),
+      );
+      if (detached.length === 0) return { ptyIds, leafPtyIds };
+      const activeDetached = detached.some((t) => t.id === activeIdRef.current);
+      const nextActive = activeDetached ? (remaining[0]?.id ?? null) : null;
+      tabsRef.current = remaining;
+      setTabs(remaining);
+      if (nextActive !== null) {
+        activeIdRef.current = nextActive;
+        setActiveId(nextActive);
+      }
+      return { ptyIds, leafPtyIds };
+    },
+    [setActiveId, setTabs],
+  );
+
   const attachTabsForSpaceLocal = useCallback(
     (spaceId: string, incoming: Tab[], desiredActiveId: number | null = null) => {
       if (incoming.length === 0) return;
@@ -1612,6 +1681,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     newTabInSpace,
     removeTabsForSpace,
     detachTabsForSpace: detachTabsForSpaceLocal,
+    detachTabsForHandoff: detachTabsForHandoffLocal,
     attachTabsForSpace: attachTabsForSpaceLocal,
     markBooted,
     setActiveSpaceForNewTabs,

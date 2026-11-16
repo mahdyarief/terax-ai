@@ -24,20 +24,28 @@ describe("moveTabsAcrossWindows", () => {
       if (cmd === "pty_prepare_handoff") return checkpoints;
       return undefined;
     });
+    const emitTo = vi.fn(async () => {
+      calls.push("emit");
+    });
     const result = await moveTabsAcrossWindows({
       handoffId: "h1",
       tabs,
+      ptyIds: [1],
+      leafPtyIds: [1, null],
       targetWindow: "space-a",
       spaceId: "s",
       invoke,
-      emitTo: vi.fn(async () => {
-        calls.push("emit");
-      }),
+      emitTo,
       waitForAttach: vi.fn(async () => {
         calls.push("attached");
         return { handoffId: "h1", replays };
       }),
     });
+    expect(emitTo).toHaveBeenCalledWith(
+      "space-a",
+      "spaces:tabs-moved",
+      expect.objectContaining({ leafPtyIds: [1, null] }),
+    );
     expect(result.ok).toBe(true);
     expect(calls).toEqual([
       "pty_prepare_handoff",
@@ -58,6 +66,8 @@ describe("moveTabsAcrossWindows", () => {
     const result = await moveTabsAcrossWindows({
       handoffId: "h2",
       tabs,
+      ptyIds: [1],
+      leafPtyIds: [1],
       targetWindow: "space-a",
       spaceId: "s",
       invoke,
@@ -79,6 +89,8 @@ describe("moveTabsAcrossWindows", () => {
     const result = await moveTabsAcrossWindows({
       handoffId: "h4",
       tabs,
+      ptyIds: [1],
+      leafPtyIds: [1],
       targetWindow: "space-a",
       spaceId: "s",
       invoke,
@@ -98,6 +110,8 @@ describe("moveTabsAcrossWindows", () => {
     const result = await moveTabsAcrossWindows({
       handoffId: "h3",
       tabs,
+      ptyIds: [1],
+      leafPtyIds: [1],
       targetWindow: "space-a",
       spaceId: "s",
       invoke,
@@ -109,7 +123,37 @@ describe("moveTabsAcrossWindows", () => {
       })),
     });
     expect(result).toEqual({ ok: false, error: "attach failed" });
-    expect(invoke).toHaveBeenCalledWith("pty_rollback_handoff", { handoffId: "h3" });
+    expect(invoke).toHaveBeenCalledWith("pty_rollback_handoff", {
+      handoffId: "h3",
+      ids: [1],
+    });
     expect(emitTo).toHaveBeenCalledTimes(2);
+  });
+
+  it("hands rollback replays to the caller so the source can reattach", async () => {
+    const invoke = vi.fn(async (cmd: string) => {
+      if (cmd === "pty_prepare_handoff") return checkpoints;
+      if (cmd === "pty_rollback_handoff") return replays;
+      return undefined;
+    });
+    const onRollback = vi.fn();
+    const result = await moveTabsAcrossWindows({
+      handoffId: "h3",
+      tabs,
+      ptyIds: [1],
+      leafPtyIds: [1],
+      targetWindow: "space-a",
+      spaceId: "s",
+      invoke,
+      emitTo: vi.fn(),
+      waitForAttach: vi.fn(async () => ({
+        handoffId: "h3",
+        replays: [],
+        error: "attach failed",
+      })),
+      onRollback,
+    });
+    expect(result.ok).toBe(false);
+    expect(onRollback).toHaveBeenCalledWith(replays);
   });
 });

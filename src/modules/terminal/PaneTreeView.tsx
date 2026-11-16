@@ -53,6 +53,7 @@ export function PaneTreeView(props: Props) {
           visible={tabVisible}
           focused={focused}
           initialCwd={node.cwd}
+          ptyId={node.ptyAttachment?.ptyId}
           blocks={blocks}
           ref={b.setRef}
           onSearchReady={b.onSearchReady}

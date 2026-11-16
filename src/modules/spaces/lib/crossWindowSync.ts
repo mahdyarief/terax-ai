@@ -1,3 +1,4 @@
+import type { PtyHandoffCheckpoint, PtyReplayPayload } from "@/modules/terminal/lib/ptyHandoff";
 import type { SerializedTab } from "./serialize";
 import type { SpaceMeta } from "./store";
 import { loadAll } from "./store";
@@ -12,6 +13,17 @@ export const SPACE_DELETED_EVENT = "terax:space-deleted";
 export const SPACE_RECLAIM_REQUEST_EVENT = "spaces:reclaim-request";
 /** Serialized tabs are handed from one window to another. */
 export const SPACE_TABS_MOVED_EVENT = "spaces:tabs-moved";
+export const SPACE_TABS_ATTACHED_EVENT = "spaces:tabs-attached";
+/** A space window announces that its cross-window listeners are mounted. */
+export const SPACE_WINDOW_READY_EVENT = "spaces:window-ready";
+
+export type WindowReadyPayload = { window: string };
+
+export type TabsAttachedPayload = {
+  handoffId: string;
+  replays: PtyReplayPayload[];
+  error?: string;
+};
 
 export type HostChangedPayload = {
   spaceId: string;
@@ -30,8 +42,13 @@ export type TabsMovedPayload = {
   spaceId: string;
   fromWindow: string;
   toWindow: string;
+  handoffId: string;
   /** Serialized tab snapshot from the source window. */
   tabs: SerializedTab[];
+  /** PTY id per serialized leaf, in serialization order; null for cold leaves. */
+  leafPtyIds: Array<number | null>;
+  /** Live-PTY checkpoints; empty for a rollback/correction. */
+  checkpoints: PtyHandoffCheckpoint[];
 };
 
 /**

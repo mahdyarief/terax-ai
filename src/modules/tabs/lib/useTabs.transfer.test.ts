@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { attachTabsBySpace, detachTabsBySpace } from "./useTabs";
+import {
+  attachTabsBySpace,
+  detachTabsBySpace,
+  detachTabsForHandoff,
+} from "./useTabs";
 
 describe("detachTabsBySpace", () => {
   it("detaches all tabs for a space and keeps remaining", () => {
@@ -17,6 +21,120 @@ describe("detachTabsBySpace", () => {
     const { detached, remaining } = detachTabsBySpace(tabs, "a");
     expect(detached).toHaveLength(0);
     expect(remaining).toHaveLength(1);
+  });
+});
+
+describe("detachTabsForHandoff", () => {
+  it("collects live PTY ids and detaches views without disposing them", () => {
+    const detached: number[] = [];
+    const tabs = [
+      {
+        id: 1,
+        kind: "terminal",
+        spaceId: "a",
+        paneTree: {
+          kind: "split",
+          children: [
+            { kind: "leaf", id: 11 },
+            { kind: "leaf", id: 12 },
+          ],
+        },
+      },
+      { id: 2, kind: "editor", spaceId: "a" },
+    ] as any;
+
+    const { ptyIds, leafPtyIds } = detachTabsForHandoff(tabs, "a", {
+      ptyIdForLeaf: (leafId) => (leafId === 11 ? 41 : null),
+      detachGhosttyView: (leafId) => {
+        detached.push(leafId);
+        return true;
+      },
+    });
+
+    expect(ptyIds).toEqual([41]);
+    expect(leafPtyIds).toEqual([41, null]);
+    expect(detached).toEqual([11, 12]);
+  });
+
+  it("skips private terminal tabs so leaf order matches serialization", () => {
+    const detached: number[] = [];
+    const tabs = [
+      {
+        id: 1,
+        kind: "terminal",
+        spaceId: "a",
+        private: true,
+        paneTree: { kind: "leaf", id: 11 },
+      },
+      {
+        id: 2,
+        kind: "terminal",
+        spaceId: "a",
+        paneTree: { kind: "leaf", id: 12 },
+      },
+    ] as any;
+
+    const { ptyIds, leafPtyIds } = detachTabsForHandoff(tabs, "a", {
+      ptyIdForLeaf: (leafId) => (leafId === 11 ? 41 : 42),
+      detachGhosttyView: (leafId) => {
+        detached.push(leafId);
+        return true;
+      },
+    });
+
+    expect(ptyIds).toEqual([42]);
+    expect(leafPtyIds).toEqual([42]);
+    expect(detached).toEqual([12]);
+  });
+
+  it("only collects PTYs from the requested tab ids", () => {
+    const detached: number[] = [];
+    const tabs = [
+      {
+        id: 1,
+        kind: "terminal",
+        spaceId: "a",
+        paneTree: { kind: "leaf", id: 11 },
+      },
+      {
+        id: 2,
+        kind: "terminal",
+        spaceId: "a",
+        paneTree: { kind: "leaf", id: 12 },
+      },
+    ] as any;
+
+    const { ptyIds, leafPtyIds } = detachTabsForHandoff(tabs, "a", {
+      ptyIdForLeaf: (leafId) => (leafId === 12 ? 42 : 41),
+      detachGhosttyView: (leafId) => {
+        detached.push(leafId);
+        return true;
+      },
+      tabIds: [2],
+    });
+
+    expect(ptyIds).toEqual([42]);
+    expect(leafPtyIds).toEqual([42]);
+    expect(detached).toEqual([12]);
+  });
+
+  it("leaves other spaces untouched", () => {
+    const detached: number[] = [];
+    const tabs = [
+      { id: 1, kind: "terminal", spaceId: "b", paneTree: { kind: "leaf", id: 9 } },
+    ] as any;
+
+    const { ptyIds, leafPtyIds } = detachTabsForHandoff(tabs, "a", {
+      ptyIdForLeaf: () => 7,
+      detachGhosttyView: (leafId) => {
+        detached.push(leafId);
+        return true;
+      },
+    });
+
+    expect(ptyIds).toEqual([]);
+    expect(leafPtyIds).toEqual([]);
+    expect(detached).toEqual([]);
   });
 });
 

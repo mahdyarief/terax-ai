@@ -34,6 +34,7 @@ import {
   applyReplayEvents,
   type PtyReplayPayload,
 } from "../lib/ptyHandoff";
+import { takeHandoffReplay } from "../lib/handoffSession";
 import { writeTerminalClipboard } from "../lib/terminalClipboard";
 import { LatestClipboardWrite } from "@/modules/terminal/lib/LatestClipboardWrite";
 import { GhosttySemanticEventRouter } from "./core/GhosttySemanticEventRouter";
@@ -137,6 +138,8 @@ type Options = {
   visible: boolean;
   focused: boolean;
   initialCwd?: string;
+  /** PTY adopted from another window; a queued replay is consumed once. */
+  ptyId?: number;
   blocks?: boolean;
   onExit?: (code: number) => void;
   onCwd?: (cwd: string) => void;
@@ -150,6 +153,7 @@ export function useGhosttyTerminalSession({
   visible,
   focused,
   initialCwd,
+  ptyId,
   blocks = false,
   onSearchReady,
   onExit,
@@ -179,6 +183,7 @@ export function useGhosttyTerminalSession({
   const callbackRef = useRef({ onSearchReady, onExit, onCwd });
   callbackRef.current = { onSearchReady, onExit, onCwd };
   const initialCwdRef = useRef(initialCwd);
+  const replayConsumedRef = useRef(false);
 
   useEffect(() => {
     const session = ensureSession(
@@ -187,6 +192,11 @@ export function useGhosttyTerminalSession({
       initialCwdRef.current,
       fontRef.current,
     );
+    if (!replayConsumedRef.current) {
+      replayConsumedRef.current = true;
+      const replay = ptyId === undefined ? null : takeHandoffReplay(ptyId);
+      if (replay) session.replay = replay;
+    }
     if (blocks) ensureGhosttyBlocks(leafId);
     const node = container.current;
     session.container = node;
