@@ -20,6 +20,7 @@ import { decodeRequest, encodeFrames } from "./ptyWireFixtures";
 type Call = {
   acks: PtyAck[];
   token: string;
+  epoch: bigint;
   signal?: AbortSignal;
   settled: boolean;
   respond(frames?: PtyFrame[], status?: number): void;
@@ -96,6 +97,7 @@ function open(
   hub: PtyOutputHub,
   id: number,
   parse: (bytes: Uint8Array) => void | Promise<void> = () => {},
+  lease = { token: "0", epoch: "0" },
 ): Terminal {
   const parser = vi.fn(parse);
   const status = vi.fn<(status: PtyOutputStatus) => void>();
@@ -106,7 +108,7 @@ function open(
     (processed) => handle?.progress(processed),
     status,
   );
-  handle = hub.register(id, receiver, (code) => exits.push(code));
+  handle = hub.register(id, receiver, (code) => exits.push(code), lease);
   receiver.start();
   return { id, receiver, parse: parser, status, exits };
 }
@@ -129,6 +131,18 @@ describe("PtyOutputHub", () => {
     vi.restoreAllMocks();
   });
 
+  it("sends the active lease epoch on every request", async () => {
+    const transport = new FakeTransport();
+    const hub = new PtyOutputHub(transport);
+    await hub.ensureStream();
+    open(hub, 1, () => {}, {
+      token: "0",
+      epoch: "18446744073709551615",
+    });
+    await flush();
+    expect(transport.held.epoch).toBe(18446744073709551615n);
+  });
+
   it("shares one parse budget across cheap frames and terminals", async () => {
     await hub.ensureStream();
     let now = 0;
@@ -148,7 +162,10 @@ describe("PtyOutputHub", () => {
           return () => {};
         },
       );
-      hub.register(id, receiver, vi.fn());
+      hub.register(id, receiver, vi.fn(), {
+        token: "00000000000000aa",
+        epoch: "0",
+      });
       receiver.start();
       return receiver;
     });

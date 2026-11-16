@@ -5,7 +5,7 @@ import {
 } from "@/modules/terminal/lib/PtyOutputReceiver";
 import {
   decodeFrames,
-  encodeRequest,
+  encodeRequestWithEpoch,
   MAX_ACKS_PER_REQUEST,
   PTY_WINDOW_BYTES,
   type PtyAck,
@@ -36,6 +36,7 @@ type Entry = {
   readonly id: number;
   readonly receiver: PtyOutputReceiver;
   readonly onExit: (code: number) => void;
+  readonly lease: { token: string; epoch: string };
   /** Bytes delivered to the receiver: the offset the next data frame must carry. */
   received: number;
   /** Cumulative bytes the receiver finished parsing (at chunk boundaries). */
@@ -97,6 +98,16 @@ export class PtyOutputHub {
 
   constructor(private readonly transport: PtyStreamTransport) {}
 
+  /** The credential pair this window currently presents to native. */
+  identity(): { token: string; epoch: string } {
+    if (!this.token)
+      return { token: "0000000000000000", epoch: "0" };
+    let token = "";
+    for (let i = this.token.length - 1; i >= 0; i--)
+      token += this.token[i].toString(16).padStart(2, "0");
+    return { token, epoch: "0" };
+  }
+
   /** Must resolve before a PTY is opened: the stream needs its token first. */
   ensureStream(): Promise<void> {
     if (this.token) return Promise.resolve();
@@ -121,11 +132,13 @@ export class PtyOutputHub {
     id: number,
     receiver: PtyOutputReceiver,
     onExit: (code: number) => void,
+    lease: { token: string; epoch: string },
   ): PtyStreamHandle {
     const entry: Entry = {
       id,
       receiver,
       onExit,
+      lease,
       received: 0,
       target: 0,
       sent: 0,
@@ -218,20 +231,26 @@ export class PtyOutputHub {
   }
 
   /** Cumulative acknowledgements not yet sent, plus pending attach announcements. */
-  private collect(): { acks: PtyAck[]; included: Included[] } {
+  private collect(): {
+    acks: PtyAck[];
+    included: Included[];
+    lease: { token: string; epoch: string };
+  } {
     const acks: PtyAck[] = [];
     const included: Included[] = [];
+    let lease = { token: "0", epoch: "0" };
     for (const entry of this.entries.values()) {
       if (acks.length >= MAX_ACKS_PER_REQUEST) break;
       if (entry.dead || entry.receiver.hasFailed) continue;
       if (entry.attachSent && entry.target <= entry.sent) continue;
+      lease = entry.lease;
       acks.push({ id: entry.id, bytes: entry.target });
       included.push({ entry, bytes: entry.target });
       entry.attachSent = true;
       entry.sent = Math.max(entry.sent, entry.target);
       if (entry.sent >= entry.received) entry.urgent = false;
     }
-    return { acks, included };
+    return { acks, included, lease };
   }
 
   private confirm(included: readonly Included[]): void {
@@ -258,10 +277,10 @@ export class PtyOutputHub {
       !this.hasLiveEntries()
     )
       return;
-    const { acks, included } = this.collect();
+    const { acks, included, lease } = this.collect();
     let body: Uint8Array<ArrayBuffer>;
     try {
-      body = encodeRequest(token, acks);
+      body = encodeRequestWithEpoch(token, lease.epoch, acks);
     } catch (error) {
       this.revert(included);
       this.failAll(error);
@@ -336,11 +355,11 @@ export class PtyOutputHub {
       this.issuePoll();
       return;
     }
-    const { acks, included } = this.collect();
+    const { acks, included, lease } = this.collect();
     if (acks.length === 0) return;
     let body: Uint8Array<ArrayBuffer>;
     try {
-      body = encodeRequest(token, acks);
+      body = encodeRequestWithEpoch(token, lease.epoch, acks);
     } catch (error) {
       this.revert(included);
       this.failAll(error);

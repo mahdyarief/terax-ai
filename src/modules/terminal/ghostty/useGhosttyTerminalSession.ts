@@ -4,7 +4,6 @@ import { useSpaces } from "@/modules/spaces/lib/useSpaces";
 import {
   ensureGhosttyBlocks,
   ghosttyBlocks,
-  disposeGhosttyBlocks,
 } from "@/modules/terminal/ghostty/ghosttyBlockSessions";
 import { initializeSessionGeneration as startSessionInitialization } from "@/modules/terminal/ghostty/sessionInitialization";
 import { replaceSessionSurface } from "@/modules/terminal/ghostty/replaceSessionSurface";
@@ -31,6 +30,10 @@ import {
 } from "react";
 import { isAgentActivePty } from "../lib/agentActivity";
 import { openPty, type PtySession } from "../lib/pty-bridge";
+import {
+  applyReplayEvents,
+  type PtyReplayPayload,
+} from "../lib/ptyHandoff";
 import { writeTerminalClipboard } from "../lib/terminalClipboard";
 import { LatestClipboardWrite } from "@/modules/terminal/lib/LatestClipboardWrite";
 import { GhosttySemanticEventRouter } from "./core/GhosttySemanticEventRouter";
@@ -106,6 +109,8 @@ type GhosttySession = {
   initializing: Promise<void> | null;
   startup: GhosttyStartupTimings;
   font: TerminalFontSpec;
+  /** Set only while adopting a PTY handed over from another window. */
+  replay: PtyReplayPayload | null;
 };
 
 type GhosttyStartupTimings = {
@@ -459,18 +464,48 @@ export async function ghosttyLeafHasForegroundProcess(
   }
 }
 
+export function detachGhosttyView(leafId: number): boolean {
+  const session = sessions.get(leafId);
+  if (!session) return false;
+  session.cancelFocusRetry?.();
+  session.input?.dispose();
+  session.input = null;
+  session.surface?.dispose();
+  session.surface = null;
+  session.surfaceOptions = null;
+  ghosttyBlocks(leafId)?.detach();
+  session.model?.dispose();
+  session.model = null;
+  session.callbacks.onModel?.(null);
+  session.ptyResize.reset();
+  session.writer.detach();
+  session.writer.clear();
+  session.pty?.releaseView();
+  return true;
+}
+
+export async function attachGhosttyView(
+  leafId: number,
+  replay: PtyReplayPayload,
+): Promise<boolean> {
+  const session = sessions.get(leafId);
+  if (!session || session.disposed) return false;
+  detachGhosttyView(leafId);
+  session.generation += 1;
+  session.replay = replay;
+  session.shellExited = false;
+  session.startupError = null;
+  session.callbacks.onError?.(null);
+  await initializeSession(session);
+  return !!session.pty;
+}
+
 export function disposeGhosttySession(leafId: number): boolean {
   const session = sessions.get(leafId);
   if (!session) return false;
   session.disposed = true;
   session.generation += 1;
-  session.cancelFocusRetry?.();
-  session.input?.dispose();
-  session.surface?.dispose();
-  disposeGhosttyBlocks(leafId);
-  session.model?.dispose();
-  session.ptyResize.reset();
-  session.writer.dispose();
+  detachGhosttyView(leafId);
   void session.pty?.close();
   session.pty = null;
   sessions.delete(leafId);
@@ -568,6 +603,7 @@ function ensureSession(
     generation: 0,
     initializing: null,
     startup: createStartupTimings(),
+    replay: null,
     font:
       font ??
       ({
@@ -835,6 +871,9 @@ async function initializeSessionGeneration(
 
   const startCols = model.cols;
   const startRows = model.rows;
+  const replay = session.replay;
+  session.replay = null;
+  if (replay) applyReplayEvents(model, replay.events);
   const pty = await openPty(
     startCols,
     startRows,
@@ -860,6 +899,7 @@ async function initializeSessionGeneration(
     preferences.terminalShell || undefined,
     session.leafId,
     theme,
+    replay ? { attach: { ptyId: replay.ptyId, replay } } : {},
   );
   if (session.disposed || generation !== session.generation) {
     await pty.close();

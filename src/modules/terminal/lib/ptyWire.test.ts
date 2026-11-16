@@ -23,7 +23,7 @@ describe("PTY stream wire format", () => {
     ];
     const body = encodeRequestWithEpoch(
       token,
-      0xffff_ffff_ffff_ffffn,
+      "18446744073709551615",
       acks,
     );
     expect(body.length).toBe(20 + 3 * 12);
@@ -48,9 +48,9 @@ describe("PTY stream wire format", () => {
     expect(() => tokenBytes("zz")).toThrow(PtyWireError);
     expect(() => tokenBytes("0123456789abcde")).toThrow(PtyWireError);
     expect(() => encodeRequest(token.subarray(1), [])).toThrow(PtyWireError);
-    expect(() => encodeRequestWithEpoch(token, -1n, [])).toThrow(PtyWireError);
+    expect(() => encodeRequestWithEpoch(token, "-1", [])).toThrow(PtyWireError);
     expect(() =>
-      encodeRequestWithEpoch(token, 0x1_0000_0000_0000_0000n, []),
+      encodeRequestWithEpoch(token, "18446744073709551616", []),
     ).toThrow(PtyWireError);
     expect(() => encodeRequest(token, [{ id: 1, bytes: -1 }])).toThrow(
       PtyWireError,

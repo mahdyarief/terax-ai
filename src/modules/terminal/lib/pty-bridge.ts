@@ -19,6 +19,10 @@ import {
 } from "@/modules/terminal/lib/ptyPresentation";
 import { tokenBytes } from "@/modules/terminal/lib/ptyWire";
 import type { TerminalGpuTheme } from "@/modules/terminal/ghostty/gpu/terminalVisuals";
+import {
+  applyReplayEvents,
+  type PtyReplayPayload,
+} from "@/modules/terminal/lib/ptyHandoff";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
@@ -105,6 +109,17 @@ export type PtySession = {
   resize: (cols: number, rows: number) => Promise<void>;
   setColors: (colors: PtyColors) => Promise<void>;
   close: () => Promise<void>;
+  /**
+   * Stops polling and drops every webview-side handler, leaving the native PTY
+   * alive for another window to take over. Backend detach is issued once by the
+   * cross-window transaction, never here.
+   */
+  releaseView: () => void;
+  identity: () => { id: number; token: string; epoch: string };
+};
+
+export type PtyAttachOptions = {
+  attach?: { ptyId: number; replay: PtyReplayPayload };
 };
 
 export async function openPty(
@@ -116,8 +131,10 @@ export async function openPty(
   shell?: string,
   paneId?: number,
   colors?: PtyColors,
+  opts: PtyAttachOptions = {},
 ): Promise<PtySession> {
   const stream = outputHub();
+  const attached = opts.attach?.replay;
   let id: number | null = null;
   let released = false;
   let notice: string | number | undefined;
@@ -163,22 +180,51 @@ export async function openPty(
     if (notice !== undefined) toast.dismiss(notice);
   };
 
+  /** Drops this view's handlers but keeps native sessions for handoff. */
+  const releaseView = () => {
+    if (id === null) return;
+    stream.unregister(id);
+    receivers.delete(id);
+    usePtyActivityStore.getState().clear(id);
+    clearAgentActivity(id);
+    if (paneId !== undefined) unbindLeafPty(paneId, id);
+    if (notice !== undefined) toast.dismiss(notice);
+    notice = undefined;
+    receiver.dispose();
+  };
+
   const presentation =
     paneId === undefined ? undefined : leafPresentationClass(paneId);
   try {
     await ensureAgentActivityListener();
     await stream.ensureStream();
-    id = await invoke<number>("pty_open", {
-      cols,
-      rows,
-      cwd: cwd ?? null,
-      workspace: currentWorkspaceEnv(),
-      blocks: blocks ?? false,
-      shell: shell ?? null,
-      paneId: paneId ?? null,
-      presentation: presentation ?? null,
-      colors: colors ?? null,
-    });
+    id =
+      attached !== undefined
+        ? attached.ptyId
+        : await invoke<number>("pty_open", {
+            cols,
+            rows,
+            cwd: cwd ?? null,
+            workspace: currentWorkspaceEnv(),
+            blocks: blocks ?? false,
+            shell: shell ?? null,
+            paneId: paneId ?? null,
+            presentation: presentation ?? null,
+            colors: colors ?? null,
+          });
+    if (attached !== undefined)
+      applyReplayEvents(
+        {
+          write: (bytes) => void handlers.onData(bytes),
+          resize: (colsValue, rowsValue) =>
+            void invoke("pty_resize", {
+              id: attached.ptyId,
+              cols: colsValue,
+              rows: rowsValue,
+            }),
+        },
+        attached.events,
+      );
   } catch (error) {
     releaseHandlers();
     throw error;
@@ -190,13 +236,23 @@ export async function openPty(
     receivers.set(sessionId, receiver);
     // Native holds this terminal's output until it is registered here, so no
     // frame can precede this call.
-    progress = stream.register(sessionId, receiver, (code) => {
-      try {
-        handlers.onExit?.(code);
-      } finally {
-        releaseHandlers();
-      }
-    }).progress;
+    progress = stream.register(
+      sessionId,
+      receiver,
+      (code) => {
+        try {
+          handlers.onExit?.(code);
+        } finally {
+          releaseHandlers();
+        }
+      },
+      attached
+        ? {
+            token: attached.attachToken,
+            epoch: attached.leaseEpoch,
+          }
+        : { token: "0", epoch: "0" },
+    ).progress;
     if (paneId !== undefined && presentation !== undefined)
       bindLeafPty(paneId, sessionId, presentation);
   }
@@ -204,6 +260,14 @@ export async function openPty(
 
   let closed = false;
   const headers = { "x-pty-id": String(sessionId) };
+  const streamIdentity = stream.identity();
+  const identity = attached
+    ? {
+        id: sessionId,
+        token: attached.attachToken,
+        epoch: attached.leaseEpoch,
+      }
+    : { id: sessionId, token: streamIdentity.token, epoch: streamIdentity.epoch };
 
   return {
     id: sessionId,
@@ -225,5 +289,7 @@ export async function openPty(
       releaseHandlers();
       await invoke("pty_close", { id: sessionId });
     },
+    releaseView,
+    identity: () => identity,
   };
 }

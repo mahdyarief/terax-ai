@@ -57,22 +57,25 @@ export function encodeRequest(
   token: Uint8Array,
   acks: readonly PtyAck[],
 ): Uint8Array<ArrayBuffer> {
-  return encodeRequestWithEpoch(token, 0n, acks);
+  return encodeRequestWithEpoch(token, "0", acks);
 }
 
 /**
- * A window that moved onto a terminal keeps its stream token but must name the
- * lease epoch it was handed; a stale epoch is refused even when the token is
- * still current.
+ * A window that moved onto a terminal must name both the stream token and the
+ * lease epoch it was handed; a stale pair is refused even when one field is
+ * still current. Decimal strings keep u64 values above 2^53 exact.
  */
 export function encodeRequestWithEpoch(
   token: Uint8Array,
-  epoch: bigint,
+  epoch: string,
   acks: readonly PtyAck[],
 ): Uint8Array<ArrayBuffer> {
   if (token.length !== TOKEN_BYTES)
     throw new PtyWireError("invalid stream token");
-  if (epoch < 0n || epoch > 0xffff_ffff_ffff_ffffn)
+  if (!/^(?:0|[1-9][0-9]*)$/.test(epoch))
+    throw new PtyWireError("invalid lease epoch");
+  const epochValue = BigInt(epoch);
+  if (epochValue > 0xffff_ffff_ffff_ffffn)
     throw new PtyWireError("lease epoch out of range");
   if (acks.length > MAX_ACKS_PER_REQUEST)
     throw new PtyWireError("too many acknowledgements in one request");
@@ -81,7 +84,7 @@ export function encodeRequestWithEpoch(
   );
   const view = new DataView(body.buffer);
   body.set(token, 0);
-  view.setBigUint64(8, epoch, true);
+  view.setBigUint64(8, epochValue, true);
   view.setUint32(16, acks.length, true);
   let at = REQUEST_HEADER_BYTES;
   for (const ack of acks) {

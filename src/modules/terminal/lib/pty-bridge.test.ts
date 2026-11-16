@@ -303,4 +303,65 @@ describe("PTY bridge over the multiplexed stream", () => {
     });
     await session.close();
   });
+
+  it("releases a local view without closing or detaching the native PTY", async () => {
+    const { openPty } = await load();
+    nativeInvoke();
+    const session = await openPty(80, 24, { onData: vi.fn() });
+    session.releaseView();
+    expect(mocks.invoke).not.toHaveBeenCalledWith(
+      "pty_close",
+      expect.anything(),
+    );
+    expect(mocks.invoke).not.toHaveBeenCalledWith(
+      "pty_detach",
+      expect.anything(),
+    );
+    expect(session.identity()).toEqual({
+      id: 41,
+      token: "00000000000000aa",
+      epoch: "0",
+    });
+  });
+
+  it("attaches an existing PTY with its replay and lease", async () => {
+    const { openPty } = await load();
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "pty_stream_open")
+        return Promise.resolve("00000000000000bb");
+      if (command === "pty_attach") return Promise.resolve([]);
+      return Promise.resolve();
+    });
+    const onData = vi.fn();
+    const session = await openPty(80, 24, { onData }, undefined, false, undefined, undefined, undefined, {
+      attach: {
+        ptyId: 77,
+        replay: {
+          ptyId: 77,
+          cols: 80,
+          rows: 24,
+          attachToken: "00000000000000cc",
+          leaseEpoch: "7",
+          events: [
+            { kind: "output", data: btoa("hello") },
+            { kind: "resize", cols: 90, rows: 30 },
+          ],
+        },
+      },
+    });
+    expect(session.id).toBe(77);
+    expect(session.identity()).toEqual({
+      id: 77,
+      token: "00000000000000cc",
+      epoch: "7",
+    });
+    await flush();
+    expect(onData).toHaveBeenCalledWith(new TextEncoder().encode("hello"));
+    expect(mocks.invoke).toHaveBeenCalledWith("pty_resize", {
+      id: 77,
+      cols: 90,
+      rows: 30,
+    });
+    expect(mocks.invoke).not.toHaveBeenCalledWith("pty_open", expect.anything());
+  });
 });
