@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::time::{Duration, SystemTime};
+use std::time::Duration;
 
 use crate::modules::git::branch;
 use crate::modules::git::checkpoint;
@@ -341,6 +341,7 @@ fn a_backslash_in_a_file_name_is_not_a_separator_on_unix() {
 
 // -------------------------------------------- the real index's age on a copy
 
+#[cfg(unix)]
 fn set_mtime(path: &Path, when: SystemTime) {
     std::fs::OpenOptions::new()
         .write(true)
@@ -354,6 +355,7 @@ fn set_mtime(path: &Path, when: SystemTime) {
 #[test]
 fn a_read_only_real_index_still_hands_its_age_to_the_private_copy() {
     use std::os::unix::fs::PermissionsExt;
+    use std::time::SystemTime;
     let repo = TestRepo::new();
     let long_ago = SystemTime::now() - Duration::from_secs(7200);
     let real = repo.root.join(".git/index");

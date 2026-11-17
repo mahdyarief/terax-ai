@@ -5,12 +5,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::modules::git::checkpoint::{self, RestoreRefusal};
-use crate::modules::git::process::run_git;
 use crate::modules::git::review::{ApplyMode, ApplySelection, GitDiffScope, HunkSelection};
 use crate::modules::git::review_tests::{apply, file_diff, numbered};
 use crate::modules::git::testutil::{scratch, TestRepo};
 use crate::modules::git::worktree::{self, RemoveBlocker, WorktreeAddRequest, WorktreeBranch};
-use crate::modules::workspace::WorkspaceEnv;
 
 fn one(id: &str) -> ApplySelection {
     ApplySelection::Hunks {
@@ -111,6 +109,9 @@ fn diff_prefix_settings_of_the_user_never_change_what_the_header_parser_sees() {
 #[cfg(unix)]
 #[test]
 fn a_users_ceiling_directory_still_bounds_repository_discovery() {
+    use crate::modules::git::process::run_git;
+    use crate::modules::workspace::WorkspaceEnv;
+
     let (_keep, base) = scratch();
     crate::modules::git::testutil::git_in(&base, &["init", "-q", "-b", "main"]);
     let sub = base.join("sub");

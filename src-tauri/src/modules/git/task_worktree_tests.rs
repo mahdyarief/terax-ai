@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::time::Duration;
 
 use super::project_config::{self, Ports};
 use super::task_state::{Store, TaskStatus};
@@ -656,6 +655,8 @@ fn branch_and_fetched_origin_bases() {
 #[cfg(unix)]
 #[test]
 fn symlink_escapes_are_rejected_and_usage_does_not_follow_links() {
+    use std::time::Duration;
+
     let repo = TestRepo::new();
     let (_home, home) = scratch();
     let (_outside, outside) = scratch();

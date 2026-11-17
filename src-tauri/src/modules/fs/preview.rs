@@ -175,7 +175,7 @@ fn plain(status: u16) -> Response<Vec<u8>> {
 /// `http://terax-doc.localhost/<token>/...` on Windows; a bare request path is
 /// accepted too because `request.uri()` may be relative.
 fn parse_token(url: &str) -> Option<String> {
-    url.split(|c: char| matches!(c, '/' | '?' | '#' | ':' | '.'))
+    url.split(['/', '?', '#', ':', '.'])
         .find(|segment| is_token(segment))
         .map(|segment| segment.to_ascii_lowercase())
 }

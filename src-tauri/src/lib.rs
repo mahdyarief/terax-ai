@@ -102,10 +102,6 @@ fn can_open_space_window(label: &str) -> bool {
     label == "main"
 }
 
-fn can_focus_space_window(_caller: &str, target: &str) -> bool {
-    space_id_from_label(target).is_some()
-}
-
 #[tauri::command]
 async fn focus_space_window(app: tauri::AppHandle, space_id: String) -> Result<(), String> {
     let label = space_window_label(&space_id);
@@ -674,10 +670,7 @@ mod launch_target_tests {
 
 #[cfg(test)]
 mod space_window_tests {
-    use super::{
-        can_focus_space_window, can_open_space_window, space_id_from_label,
-        space_window_label,
-    };
+    use super::{can_open_space_window, space_id_from_label, space_window_label};
 
     #[test]
     fn space_window_label_round_trips() {
@@ -697,13 +690,5 @@ mod space_window_tests {
         assert!(can_open_space_window("main"));
         assert!(!can_open_space_window("space-abc"));
         assert!(!can_open_space_window("settings"));
-    }
-
-    #[test]
-    fn any_window_can_focus_an_existing_space_window() {
-        assert!(can_focus_space_window("main", "space-abc"));
-        assert!(can_focus_space_window("space-abc", "space-abc"));
-        assert!(can_focus_space_window("space-abc", "space-def"));
-        assert!(!can_focus_space_window("main", "main"));
     }
 }
