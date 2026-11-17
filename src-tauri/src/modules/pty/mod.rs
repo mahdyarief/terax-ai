@@ -31,10 +31,10 @@ use tauri::Manager;
 
 use crate::modules::control::ControlState;
 use crate::modules::workspace::{user_spawn_cwd_or_home, WorkspaceEnv, WorkspaceRegistry};
+use attachment::{AttachToken, LeaseEpoch};
 use hub::{Command, Hub};
 pub use presentation::PresentationClass;
 pub use protocol::stream_protocol;
-use attachment::{AttachToken, LeaseEpoch};
 use session::Session;
 use terminal_colors::TerminalColors;
 
@@ -389,7 +389,10 @@ pub async fn pty_open(
         }
     }
     log::info!("pty opened id={id} cols={cols} rows={rows}");
-    Ok(PtyOpenResult { id, token: attachment_token })
+    Ok(PtyOpenResult {
+        id,
+        token: attachment_token,
+    })
 }
 
 // Input is the latency-critical path: raw body + id header skips JSON
@@ -621,12 +624,8 @@ pub async fn pty_attach(
     handoff_id: String,
     ids: Vec<u32>,
 ) -> Result<Vec<PtyReplayPayload>, String> {
-    let replays = handoff::handoff_attach(
-        &state,
-        parse_handoff(&handoff_id)?,
-        &ids,
-        webview.label(),
-    )?;
+    let replays =
+        handoff::handoff_attach(&state, parse_handoff(&handoff_id)?, &ids, webview.label())?;
     for id in &ids {
         state.hub.submit(Command::RebindEntry {
             id: *id,

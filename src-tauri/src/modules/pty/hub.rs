@@ -285,10 +285,7 @@ impl HubCore {
                 entry.attached = false;
                 entry.nudged = None;
                 if old != label {
-                    let empty = !self
-                        .entries
-                        .values()
-                        .any(|other| other.label == old);
+                    let empty = !self.entries.values().any(|other| other.label == old);
                     if empty {
                         if let Some(stream) = self.streams.get_mut(&old) {
                             release(stream.held.take(), STATUS_SUPERSEDED);
@@ -938,13 +935,7 @@ mod tests {
         h.rebind(1, "space-2");
         h.push(&queue, b"live");
 
-        h.request_with(
-            "space-2",
-            Endpoint::Poll,
-            target_token,
-            0,
-            &[ack(1, 0)],
-        );
+        h.request_with("space-2", Endpoint::Poll, target_token, 0, &[ack(1, 0)]);
         h.advance(ms(4));
         assert_eq!(h.frames(), [(1, "data@0+4".to_string())]);
     }
