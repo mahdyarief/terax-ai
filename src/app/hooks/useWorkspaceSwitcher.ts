@@ -1,4 +1,10 @@
-import { type RefObject, useCallback, useEffect, useState } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { homeDir } from "@tauri-apps/api/path";
 import { native } from "@/modules/ai/lib/native";
 import type { Tab } from "@/modules/tabs";
@@ -112,8 +118,13 @@ export function useWorkspaceSwitcher({
     ],
   );
 
+  // Adoptions resolve asynchronously (WSL home lookup), so a slow older call
+  // must not authorize its home after a newer one already won.
+  const adoptSeqRef = useRef(0);
+
   const adoptWorkspaceEnv = useCallback(
     async (env: WorkspaceEnv): Promise<string | null> => {
+      const seq = ++adoptSeqRef.current;
       setWorkspaceEnv(env.kind === "local" ? LOCAL_WORKSPACE : env);
       let nextHome: string;
       try {
@@ -121,8 +132,9 @@ export function useWorkspaceSwitcher({
       } catch {
         return null;
       }
+      if (seq !== adoptSeqRef.current) return null;
       await authorizeHome(nextHome);
-      return nextHome;
+      return seq === adoptSeqRef.current ? nextHome : null;
     },
     [setWorkspaceEnv, authorizeHome],
   );

@@ -13,26 +13,33 @@ import {
   type SpaceMeta,
 } from "./store";
 import {
+  HOST_CHANGED_REASONS,
   SPACE_DELETED_EVENT,
+  SPACE_HOST_CHANGED_EVENT,
   SPACE_META_CHANGED_EVENT,
+  type HostChangedPayload,
+  type HostChangedReason,
 } from "./crossWindowSync";
 
-async function emitMetaChanged(): Promise<void> {
+async function emitSafely(event: string, payload?: unknown): Promise<void> {
   try {
     const { emit } = await import("@tauri-apps/api/event");
-    await emit(SPACE_META_CHANGED_EVENT);
+    await emit(event, payload);
   } catch {
     // Non-Tauri/test environments have no event bus.
   }
 }
 
-async function emitDeleted(id: string): Promise<void> {
-  try {
-    const { emit } = await import("@tauri-apps/api/event");
-    await emit(SPACE_DELETED_EVENT, { spaceId: id });
-  } catch {
-    // Non-Tauri/test environments have no event bus.
-  }
+function emitMetaChanged(): Promise<void> {
+  return emitSafely(SPACE_META_CHANGED_EVENT);
+}
+
+function emitDeleted(id: string): Promise<void> {
+  return emitSafely(SPACE_DELETED_EVENT, { spaceId: id });
+}
+
+function emitHostChanged(payload: HostChangedPayload): Promise<void> {
+  return emitSafely(SPACE_HOST_CHANGED_EVENT, payload);
 }
 
 async function persistSpaces(spaces: SpaceMeta[]): Promise<void> {
@@ -80,6 +87,7 @@ type State = {
   assignSpaceToWindow: (
     id: string,
     hostWindowLabel: string | null,
+    reason?: HostChangedReason,
   ) => Promise<void>;
 };
 
@@ -175,13 +183,25 @@ export const useSpaces = create<State>((set, get) => ({
     void saveActiveIdForWindow(label, id);
   },
 
-  assignSpaceToWindow: async (id, hostWindowLabel) => {
+  assignSpaceToWindow: async (
+    id,
+    hostWindowLabel,
+    reason = HOST_CHANGED_REASONS.handoff,
+  ) => {
+    const updatedAt = Date.now();
+    const hostWindowLabelResolved = hostWindowLabel || "main";
     const spaces = get().spaces.map((s) =>
       s.id === id
-        ? { ...s, hostWindowLabel: hostWindowLabel ?? "main", updatedAt: Date.now() }
+        ? { ...s, hostWindowLabel: hostWindowLabelResolved, updatedAt }
         : s,
     );
     set({ spaces });
     await persistSpaces(spaces);
+    await emitHostChanged({
+      spaceId: id,
+      hostWindowLabel: hostWindowLabelResolved,
+      updatedAt,
+      reason,
+    });
   },
 }));

@@ -89,6 +89,7 @@ import {
   SPACE_RECLAIM_REQUEST_EVENT,
   SPACE_TABS_ATTACHED_EVENT,
   SPACE_WINDOW_READY_EVENT,
+  type HostChangedPayload,
   type TabsAttachedPayload,
   type TabsMovedPayload,
   type WindowReadyPayload,
@@ -129,7 +130,6 @@ import {
   hasLeaf,
   isTerminalSurfaceTarget,
   leafIds,
-  leafHasForegroundProcess,
   navigateFocusedBlocks,
   queueHandoffReplay,
   type PaneBounds,
@@ -377,13 +377,17 @@ export default function App() {
     });
   }, [windowLabel]);
 
-  const prevSpaceRef = useRef(activeSpaceId);
+  const prevSpaceRef = useRef<string | null>(null);
   useEffect(() => {
     if (!spacesHydrated || !activeSpaceId) return;
     setActiveSpaceForNewTabs(activeSpaceId);
     const prev = prevSpaceRef.current;
     prevSpaceRef.current = activeSpaceId;
-    if (prev === null || prev === activeSpaceId) return;
+    if (prev === activeSpaceId) return;
+    // A window that boots with no hosted space has no active space until a
+    // handoff arrives (`prev === null`), so first activation must adopt too:
+    // PTY spawn reads the workspace env, and a stale default spawns in the
+    // wrong directory (or local instead of WSL).
     const meta = useSpaces
       .getState()
       .spaces.find((s) => s.id === activeSpaceId);
@@ -1338,24 +1342,14 @@ export default function App() {
         let rollbackReplays: PtyReplayPayload[] = [];
         let rollbackCheckpoints: PtyHandoffCheckpoint[] = [];
         try {
-          const leaves = snapshot.flatMap((t) =>
-            t.kind === "terminal" ? leafIds(t.paneTree) : [],
-          );
-          const checks = await Promise.all(
-            leaves.map((leafId) => leafHasForegroundProcess(leafId)),
-          );
-          const runningCount = checks.filter(Boolean).length;
-          if (runningCount > 0) {
-            const ok = window.confirm(
-              `${runningCount} active ${runningCount === 1 ? "process" : "processes"} detected in this space. ` +
-                "Moving it to another window keeps the terminal sessions running. Continue?",
-            );
-            if (!ok) return;
-          }
-
           await flushNow();
           await invoke("open_space_window", { spaceId });
           await waitForWindowReady(plan.to);
+
+          // Publish the new host before the target window's debounced
+          // persistence can flush; otherwise it sees no hosted space and
+          // overwrites the space state on disk with an empty list.
+          await state.assignSpaceToWindow(spaceId, plan.to);
 
           const serialized = serializeTabs(snapshot);
           const { ptyIds, leafPtyIds } = detachTabsForHandoff(spaceId);
@@ -1434,6 +1428,7 @@ export default function App() {
 
     void (async () => {
       const {
+        HOST_CHANGED_REASONS,
         SPACE_DELETED_EVENT,
         SPACE_META_CHANGED_EVENT,
         SPACE_HOST_CHANGED_EVENT,
@@ -1443,7 +1438,7 @@ export default function App() {
       } = await import("@/modules/spaces/lib/crossWindowSync");
       const subs = await Promise.all([
         listen(SPACE_META_CHANGED_EVENT, () => void refreshRegistry()),
-        listen<{ spaceId: string; hostWindowLabel: string; updatedAt?: number }>(
+        listen<HostChangedPayload>(
           SPACE_HOST_CHANGED_EVENT,
           (event) => {
             const payload = event.payload;
@@ -1453,52 +1448,61 @@ export default function App() {
             }
             void (async () => {
               try {
-                const { loadAll, saveSpacesList } = await import(
-                  "@/modules/spaces/lib/store"
+                // A live handoff is persisted by its source window before the
+                // broadcast, so only a closed host needs the on-disk registry
+                // and tab state. Reading it on every broadcast would also make
+                // several windows race to rewrite the same file.
+                const restoreFromDisk =
+                  payload.reason === HOST_CHANGED_REASONS.windowClosed;
+                const spacesStore = restoreFromDisk
+                  ? await import("@/modules/spaces/lib/store")
+                  : null;
+                const loaded = spacesStore ? await spacesStore.loadAll() : null;
+                const currentSpaces =
+                  loaded?.spaces ?? useSpaces.getState().spaces;
+                const prev = currentSpaces.find(
+                  (s) => s.id === payload.spaceId,
                 );
-                const { spaces, states } = await loadAll();
-                const prev = spaces.find((s) => s.id === payload.spaceId);
-                const merged = applyHostChanged(spaces, {
-                  spaceId: payload.spaceId,
-                  hostWindowLabel: payload.hostWindowLabel,
-                  updatedAt: payload.updatedAt ?? Date.now(),
-                });
-                // Single writer: only the window that now hosts the space
-                // persists, so every window receiving the broadcast can't race
-                // on the same registry file.
-                if (payload.hostWindowLabel === windowLabel) {
-                  await saveSpacesList(merged);
+                const merged = applyHostChanged(currentSpaces, payload);
+                if (spacesStore && payload.hostWindowLabel === windowLabel) {
+                  await spacesStore.saveSpacesList(merged);
                 }
                 if (disposed) return;
-                useSpaces.setState((s) => ({
-                  spaces: merged,
-                  hydrated: s.hydrated,
-                }));
+                if (merged !== currentSpaces) {
+                  useSpaces.setState((s) => ({
+                    spaces: merged,
+                    hydrated: s.hydrated,
+                  }));
+                }
 
                 const movedToThisWindow = payload.hostWindowLabel === windowLabel;
                 const cameFromElsewhere =
                   (prev?.hostWindowLabel ?? "main") !== windowLabel;
-                if (movedToThisWindow && cameFromElsewhere) {
-                  const state = states.get(payload.spaceId);
-                  if (!state?.tabs?.length || disposed) {
-                    useSpaces.getState().setActive(payload.spaceId);
-                    return;
-                  }
+                if (movedToThisWindow && cameFromElsewhere && !disposed) {
+                  useSpaces.getState().setActive(payload.spaceId);
+                  // A closed window cannot run a tabs-moved handoff, so this
+                  // is the only case where the receiving window restores from
+                  // disk. Live handoffs restore through SPACE_TABS_MOVED_EVENT
+                  // alone; doing it here too would append duplicate tabs and
+                  // attach PTYs that were detached for the handoff.
+                  if (!restoreFromDisk) return;
+                  const state = loaded?.states.get(payload.spaceId);
+                  if (!state?.tabs?.length) return;
                   const { hydrateTabs } = await import(
                     "@/modules/spaces/lib/serialize"
                   );
-                  const hydrated = hydrateTabs(state.tabs, payload.spaceId, allocId);
-                  if (!hydrated.length || disposed) {
-                    useSpaces.getState().setActive(payload.spaceId);
-                    return;
-                  }
+                  const hydrated = hydrateTabs(
+                    state.tabs,
+                    payload.spaceId,
+                    allocId,
+                  );
+                  if (!hydrated.length || disposed) return;
                   attachTabsForSpace(payload.spaceId, hydrated);
                   const idx = Math.min(
                     Math.max(0, state.activeTabIndex ?? 0),
                     hydrated.length - 1,
                   );
                   setActiveId(hydrated[idx]?.id ?? hydrated[0].id);
-                  useSpaces.getState().setActive(payload.spaceId);
                 }
               } catch (e) {
                 console.error("[terax] spaces host sync failed:", e);
@@ -1595,6 +1599,39 @@ export default function App() {
                 return;
               }
 
+              // Adopt the space locally before any debounced persistence runs:
+              // the boot path saw this space as hosted elsewhere, so without
+              // this the next flush skips its tabs and clears its saved state.
+              useSpaces.setState((s) => ({
+                spaces: applyHostChanged(s.spaces, {
+                  spaceId: payload.spaceId,
+                  hostWindowLabel: windowLabel,
+                  updatedAt: Date.now(),
+                }),
+              }));
+
+              // This window booted with no hosted space, so the boot path
+              // returned before adopting its env. Attaching PTYs and spawning
+              // tabs must see the space's workspace, not the default one.
+              let meta = useSpaces
+                .getState()
+                .spaces.find((s) => s.id === payload.spaceId);
+              if (!meta) {
+                // A space created in another window after this one booted may
+                // not be in the local registry yet. Fall back to disk before
+                // deciding how to attach its PTYs.
+                const { spaces: diskSpaces } = await import(
+                  "@/modules/spaces/lib/store"
+                ).then((m) => m.loadAll());
+                meta = diskSpaces.find((s) => s.id === payload.spaceId);
+              }
+              if (payload.checkpoints.length > 0 && !meta) {
+                throw new Error(
+                  `Cannot attach PTYs: workspace for space ${payload.spaceId} is unknown`,
+                );
+              }
+              if (meta) await adoptWorkspaceEnv(meta.env);
+
               let replays: TabsAttachedPayload["replays"] = [];
               if (payload.checkpoints.length > 0) {
                 const ptyIds = payload.checkpoints.map((c) => c.ptyId);
@@ -1664,6 +1701,7 @@ export default function App() {
     spacesHydrated,
     windowLabel,
     allocId,
+    adoptWorkspaceEnv,
     attachTabsForSpace,
     detachTabsForHandoff,
     detachTabsForSpace,

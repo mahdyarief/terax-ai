@@ -1,7 +1,8 @@
+import { TabErrorBoundary } from "@/components/TabErrorBoundary";
 import { cn, isMarkdownPath } from "@/lib/utils";
 import { MarkdownViewToggle } from "@/modules/markdown";
-import { useWindowInactive } from "@/modules/theme/WindowActivityBridge";
 import type { EditorTab, Tab } from "@/modules/tabs";
+import { useWindowInactive } from "@/modules/theme/WindowActivityBridge";
 import { useEffect, useRef } from "react";
 import { EditorPane, type EditorPaneHandle } from "./EditorPane";
 
@@ -117,15 +118,17 @@ export function EditorStack({
                   renderedHint="Save to preview"
                 />
               )}
-              <EditorPane
-                ref={getRefCallback(t.id)}
-                path={t.path}
-                overrideLanguage={t.overrideLanguage}
-                onDirtyChange={getDirtyCallback(t.id)}
-                onClose={getCloseCallback(t.id)}
-                mediaActive={visible && !windowInactive}
-                workspaceRoot={workspaceRoot}
-              />
+              <TabErrorBoundary tabTitle={t.title || t.path}>
+                <EditorPane
+                  ref={getRefCallback(t.id)}
+                  path={t.path}
+                  overrideLanguage={t.overrideLanguage}
+                  onDirtyChange={getDirtyCallback(t.id)}
+                  onClose={getCloseCallback(t.id)}
+                  mediaActive={visible && !windowInactive}
+                  workspaceRoot={workspaceRoot}
+                />
+              </TabErrorBoundary>
             </div>
           </div>
         );

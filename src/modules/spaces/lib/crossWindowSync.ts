@@ -25,11 +25,21 @@ export type TabsAttachedPayload = {
   error?: string;
 };
 
+export const HOST_CHANGED_REASONS = {
+  windowClosed: "window-closed",
+  handoff: "handoff",
+} as const;
+
+export type HostChangedReason =
+  (typeof HOST_CHANGED_REASONS)[keyof typeof HOST_CHANGED_REASONS];
+
 export type HostChangedPayload = {
   spaceId: string;
   hostWindowLabel: string;
   /** Optional explicit timestamp; falls back to now when omitted. */
   updatedAt?: number;
+  /** Only window closure needs tabs restored from disk; handoffs carry tabs separately. */
+  reason?: HostChangedReason;
 };
 
 export type ReclaimRequestPayload = {
@@ -70,13 +80,20 @@ export function applyHostChanged(
   payload: HostChangedPayload,
 ): SpaceMeta[] {
   let changed = false;
+  const updatedAt = payload.updatedAt ?? Date.now();
   const next = spaces.map((s) => {
-    if (s.id !== payload.spaceId) return s;
+    if (
+      s.id !== payload.spaceId ||
+      ((s.hostWindowLabel ?? "main") === payload.hostWindowLabel &&
+        s.updatedAt === updatedAt)
+    ) {
+      return s;
+    }
     changed = true;
     return {
       ...s,
       hostWindowLabel: payload.hostWindowLabel,
-      updatedAt: payload.updatedAt ?? Date.now(),
+      updatedAt,
     };
   });
   return changed ? next : spaces;

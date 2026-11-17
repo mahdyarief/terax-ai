@@ -559,6 +559,7 @@ pub fn run() {
                                     "spaceId": space_id,
                                     "hostWindowLabel": "main",
                                     "updatedAt": now,
+                                    "reason": "window-closed",
                                 }),
                             );
                         }
