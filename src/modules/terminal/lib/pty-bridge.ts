@@ -220,9 +220,12 @@ export async function openPty(
       attachToken = opened.token;
     }
     if (attached !== undefined)
+      // Replay output is applied to the model by the view layer before this
+      // bridge starts live delivery. Only replay resizes must reach the native
+      // PTY here; echoing output through onData would double the terminal text.
       applyReplayEvents(
         {
-          write: (bytes) => void handlers.onData(bytes),
+          write: () => {},
           resize: (colsValue, rowsValue) =>
             void invoke("pty_resize", {
               id: attached.ptyId,

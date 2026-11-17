@@ -357,7 +357,9 @@ describe("PTY bridge over the multiplexed stream", () => {
       epoch: "7",
     });
     await flush();
-    expect(onData).toHaveBeenCalledWith(new TextEncoder().encode("hello"));
+    // The view layer applies replay output to the model; the bridge must not
+    // write it a second time, or the target terminal shows doubled content.
+    expect(onData).not.toHaveBeenCalled();
     expect(mocks.invoke).toHaveBeenCalledWith("pty_resize", {
       id: 77,
       cols: 90,

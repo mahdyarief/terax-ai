@@ -14,6 +14,13 @@ import {
 
 /** Unparsed-but-acknowledgeable bytes that justify an ack-only request. */
 export const ACK_ONLY_BYTES = PTY_WINDOW_BYTES / 2;
+/**
+ * Epoch published by `pty_stream_open`. Every poll/ack carries this window
+ * stream epoch, never a terminal's lease epoch: one stream serves many PTYs
+ * whose lease epochs differ, and native authorizes the request against the
+ * single pair it published for this webview.
+ */
+const STREAM_EPOCH = "0";
 const RETRY_BASE_MS = 50;
 const RETRY_MAX_MS = 1_000;
 const STALL_AFTER_FAILURES = 5;
@@ -234,23 +241,20 @@ export class PtyOutputHub {
   private collect(): {
     acks: PtyAck[];
     included: Included[];
-    lease: { token: string; epoch: string };
   } {
     const acks: PtyAck[] = [];
     const included: Included[] = [];
-    let lease = { token: "0", epoch: "0" };
     for (const entry of this.entries.values()) {
       if (acks.length >= MAX_ACKS_PER_REQUEST) break;
       if (entry.dead || entry.receiver.hasFailed) continue;
       if (entry.attachSent && entry.target <= entry.sent) continue;
-      lease = entry.lease;
       acks.push({ id: entry.id, bytes: entry.target });
       included.push({ entry, bytes: entry.target });
       entry.attachSent = true;
       entry.sent = Math.max(entry.sent, entry.target);
       if (entry.sent >= entry.received) entry.urgent = false;
     }
-    return { acks, included, lease };
+    return { acks, included };
   }
 
   private confirm(included: readonly Included[]): void {
@@ -277,10 +281,10 @@ export class PtyOutputHub {
       !this.hasLiveEntries()
     )
       return;
-    const { acks, included, lease } = this.collect();
+    const { acks, included } = this.collect();
     let body: Uint8Array<ArrayBuffer>;
     try {
-      body = encodeRequestWithEpoch(token, lease.epoch, acks);
+      body = encodeRequestWithEpoch(token, STREAM_EPOCH, acks);
     } catch (error) {
       this.revert(included);
       this.failAll(error);
@@ -355,11 +359,11 @@ export class PtyOutputHub {
       this.issuePoll();
       return;
     }
-    const { acks, included, lease } = this.collect();
+    const { acks, included } = this.collect();
     if (acks.length === 0) return;
     let body: Uint8Array<ArrayBuffer>;
     try {
-      body = encodeRequestWithEpoch(token, lease.epoch, acks);
+      body = encodeRequestWithEpoch(token, STREAM_EPOCH, acks);
     } catch (error) {
       this.revert(included);
       this.failAll(error);

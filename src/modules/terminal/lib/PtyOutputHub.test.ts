@@ -131,7 +131,7 @@ describe("PtyOutputHub", () => {
     vi.restoreAllMocks();
   });
 
-  it("sends the active lease epoch on every request", async () => {
+  it("sends the stream epoch on every request, not the PTY lease epoch", async () => {
     const transport = new FakeTransport();
     const hub = new PtyOutputHub(transport);
     await hub.ensureStream();
@@ -140,7 +140,9 @@ describe("PtyOutputHub", () => {
       epoch: "18446744073709551615",
     });
     await flush();
-    expect(transport.held.epoch).toBe(18446744073709551615n);
+    // Native publishes epoch 0 when the stream opens and authorizes every
+    // poll/ack against that window-level pair. A PTY lease epoch is 403'd.
+    expect(transport.held.epoch).toBe(0n);
   });
 
   it("shares one parse budget across cheap frames and terminals", async () => {

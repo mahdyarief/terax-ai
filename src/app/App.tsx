@@ -1690,7 +1690,7 @@ export default function App() {
           }
           try {
             const { ptyIds, leafPtyIds } = detachTabsForHandoff(
-              targetSpaceId,
+              tab.spaceId,
               [tabId],
             );
             let rollbackReplays: PtyReplayPayload[] = [];
@@ -1715,13 +1715,13 @@ export default function App() {
             if (!result.ok) {
               const restored = restoreHandoffSource(
                 [tab],
-                targetSpaceId,
+                tab.spaceId,
                 rollbackReplays,
                 rollbackCheckpoints,
                 leafPtyIds,
                 allocId,
               );
-              attachTabsForSpace(targetSpaceId, restored);
+              attachTabsForSpace(tab.spaceId, restored);
               throw new Error(result.error);
             }
           } catch (e) {

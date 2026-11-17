@@ -621,8 +621,19 @@ pub async fn pty_attach(
     handoff_id: String,
     ids: Vec<u32>,
 ) -> Result<Vec<PtyReplayPayload>, String> {
-    handoff::handoff_attach(&state, parse_handoff(&handoff_id)?, &ids, webview.label())
-        .map(|replays| replays.into_iter().map(to_replay_payload).collect())
+    let replays = handoff::handoff_attach(
+        &state,
+        parse_handoff(&handoff_id)?,
+        &ids,
+        webview.label(),
+    )?;
+    for id in &ids {
+        state.hub.submit(Command::RebindEntry {
+            id: *id,
+            label: Arc::from(webview.label()),
+        });
+    }
+    Ok(replays.into_iter().map(to_replay_payload).collect())
 }
 
 #[tauri::command]
@@ -671,8 +682,22 @@ pub async fn pty_rollback_handoff(
             return Err(format!("terminal {id} does not belong to this handoff"));
         }
     }
-    handoff::handoff_rollback(&state, handoff_id, &ids)
-        .map(|replays| replays.into_iter().map(to_replay_payload).collect())
+    let replays = handoff::handoff_rollback(&state, handoff_id, &ids)?;
+    for id in &ids {
+        let host = state
+            .sessions
+            .read()
+            .unwrap()
+            .get(id)
+            .map(|session| session.host());
+        if let Some(host) = host {
+            state.hub.submit(Command::RebindEntry {
+                id: *id,
+                label: host,
+            });
+        }
+    }
+    Ok(replays.into_iter().map(to_replay_payload).collect())
 }
 
 #[tauri::command]

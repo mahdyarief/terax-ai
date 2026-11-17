@@ -81,6 +81,13 @@ pub(super) enum Command {
     Unregister {
         id: u32,
     },
+    /// A live PTY moved to another window during a handoff. Its output queue
+    /// and replay stay put; only the label that serves it changes, so the
+    /// target window's polls and acks reach the same native session.
+    RebindEntry {
+        id: u32,
+        label: Arc<str>,
+    },
     /// `seq` is the frontend's counter for presentation reports. Commands run
     /// on a multi-threaded runtime and can arrive out of order, so each
     /// terminal keeps the class of the newest report that named it.
@@ -267,6 +274,26 @@ impl HubCore {
                     .any(|other| other.label == entry.label);
                 if let (true, Some(stream)) = (empty, self.streams.get_mut(&entry.label)) {
                     release(stream.held.take(), STATUS_OK);
+                }
+            }
+            Command::RebindEntry { id, label } => {
+                let Some(entry) = self.entries.get_mut(&id) else {
+                    return;
+                };
+                let old = entry.label.clone();
+                entry.label = label.clone();
+                entry.attached = false;
+                entry.nudged = None;
+                if old != label {
+                    let empty = !self
+                        .entries
+                        .values()
+                        .any(|other| other.label == old);
+                    if empty {
+                        if let Some(stream) = self.streams.get_mut(&old) {
+                            release(stream.held.take(), STATUS_SUPERSEDED);
+                        }
+                    }
                 }
             }
             Command::SetPresentation {
@@ -748,6 +775,22 @@ mod tests {
             self.try_open(token, epoch).unwrap()
         }
 
+        fn open_with_label(&mut self, label: &str, token: u64, epoch: u64) -> u64 {
+            let (tx, rx) = mpsc::channel();
+            self.core.apply(
+                Command::OpenStream {
+                    label: Arc::from(label),
+                    token,
+                    epoch,
+                    reply: Box::new(move |result| tx.send(result).unwrap()),
+                },
+                self.now,
+            );
+            self.step();
+            rx.recv().unwrap().unwrap();
+            token
+        }
+
         fn register(&mut self, id: u32, class: PresentationClass) -> Arc<OutputQueue> {
             let queue = Arc::new(OutputQueue::new(None));
             self.core.apply(
@@ -807,6 +850,16 @@ mod tests {
         fn attach(&mut self, token: u64, ids: &[u32]) {
             let acks: Vec<Ack> = ids.iter().map(|&id| Ack { id, bytes: 0 }).collect();
             self.poll(token, &acks);
+        }
+
+        fn rebind(&mut self, id: u32, label: &str) {
+            self.core.apply(
+                Command::RebindEntry {
+                    id,
+                    label: Arc::from(label),
+                },
+                self.now,
+            );
         }
 
         fn step(&mut self) -> Option<Instant> {
@@ -872,6 +925,28 @@ mod tests {
         h.push(&queue, b"more");
         h.advance(ms(500));
         assert!(h.responses().is_empty());
+    }
+
+    #[test]
+    fn rebinding_an_entry_delivers_live_output_to_the_new_label() {
+        let mut h = Harness::new();
+        let source = h.open(100, 0);
+        let target_token = h.open_with_label("space-2", 200, 0);
+        let queue = h.register(1, PresentationClass::Focused);
+        h.attach(source, &[1]);
+
+        h.rebind(1, "space-2");
+        h.push(&queue, b"live");
+
+        h.request_with(
+            "space-2",
+            Endpoint::Poll,
+            target_token,
+            0,
+            &[ack(1, 0)],
+        );
+        h.advance(ms(4));
+        assert_eq!(h.frames(), [(1, "data@0+4".to_string())]);
     }
 
     #[test]
