@@ -8,7 +8,7 @@ import {
   ghosttyLeafIdForPty,
   ghosttyCwdForLeaf,
   ghosttyPtyIdForLeaf,
-  detachGhosttyView,
+  releaseGhosttySessionForHandoff,
   ghosttySelectionForLeaf,
   hasGhosttySession,
   interruptGhosttySession,
@@ -173,7 +173,7 @@ export function disposeSession(leafId: number): void {
 
 /** Detach the local view without closing the native PTY (live handoff). */
 export function detachSessionView(leafId: number): boolean {
-  return detachGhosttyView(leafId);
+  return releaseGhosttySessionForHandoff(leafId);
 }
 
 function delay(milliseconds: number): Promise<void> {

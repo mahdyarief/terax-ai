@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import ReactDOM from "react-dom/client";
 import App from "./app/App";
 import { initLaunchDir } from "./lib/launchDir";
+import { ensureTauriBridge } from "./lib/tauriBridge";
 import { USE_CUSTOM_WINDOW_CONTROLS } from "./lib/platform";
 import { terminalDiagnosticsEnabled } from "@/modules/terminal/lib/terminalDiagnosticsEnabled";
 
@@ -24,6 +25,14 @@ if (import.meta.env.DEV && import.meta.env.VITE_REACT_SCAN === "true") {
 if (__TERAX_BENCH__) {
   const { installBenchEarly } = await import("@/bench/early");
   await installBenchEarly();
+}
+
+// Every Tauri call below needs this window's metadata; a new space window can
+// start before WebView2 injected it (see ensureTauriBridge).
+if (!(await ensureTauriBridge())) {
+  console.error(
+    "[terax] Tauri bridge missing after reload; this window cannot boot",
+  );
 }
 
 // Reap PTY sessions orphaned by a prior main-window load before any tab spawns.

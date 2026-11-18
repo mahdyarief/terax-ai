@@ -7,6 +7,7 @@ import {
   buildPrepareHandoff,
   buildRollbackHandoff,
   decodeReplayOutput,
+  nextHandoffId,
 } from "./ptyHandoff";
 
 describe("ptyHandoff", () => {
@@ -27,6 +28,16 @@ describe("ptyHandoff", () => {
       handoffId: "9",
       ids: [7],
     });
+  });
+
+  it("mints handoff ids the backend can parse as u64", () => {
+    const a = nextHandoffId(1_794_976_123_706);
+    const b = nextHandoffId(1_794_976_123_706);
+    for (const id of [a, b, nextHandoffId()]) {
+      expect(id).toMatch(/^\d+$/);
+      expect(Number.isSafeInteger(Number(id))).toBe(true);
+    }
+    expect(a).not.toBe(b);
   });
 
   it("passes each lease token and epoch through as strings", () => {

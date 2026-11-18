@@ -21,8 +21,11 @@ pub(super) trait Target {
     fn attachment(&self) -> Attachment;
     fn install(&self, attachment: Attachment);
     fn checkpoint(&self) -> Result<u64, ReplayError>;
-    fn replay_all(&self) -> Result<Vec<ReplayEvent>, ReplayError>;
-    fn replay_after(&self, checkpoint: u64) -> Result<Vec<ReplayEvent>, ReplayError>;
+    /// Retained history plus the live-stream offset it ends at; rebases the
+    /// output stream there so a rebuilt view neither repeats nor misses bytes.
+    fn snapshot(&self) -> Result<(Vec<ReplayEvent>, u64), ReplayError>;
+    /// Where the live stream is now, without rebasing it.
+    fn stream_offset(&self) -> u64;
     fn size(&self) -> (u16, u16);
 }
 
@@ -40,6 +43,8 @@ pub(super) struct Replay {
     pub rows: u16,
     pub token: u64,
     pub epoch: u64,
+    /// Offset of the first live data frame after `events`.
+    pub stream_offset: u64,
     pub events: Vec<ReplayEvent>,
 }
 
@@ -57,12 +62,12 @@ impl Target for Session {
         Session::checkpoint(self)
     }
 
-    fn replay_all(&self) -> Result<Vec<ReplayEvent>, ReplayError> {
-        Session::replay_all(self)
+    fn snapshot(&self) -> Result<(Vec<ReplayEvent>, u64), ReplayError> {
+        Session::snapshot_for_handoff(self)
     }
 
-    fn replay_after(&self, checkpoint: u64) -> Result<Vec<ReplayEvent>, ReplayError> {
-        Session::replay_after(self, checkpoint)
+    fn stream_offset(&self) -> u64 {
+        Session::stream_offset(self)
     }
 
     fn size(&self) -> (u16, u16) {
@@ -165,6 +170,10 @@ pub(super) fn handoff_rollback(
 
 /// Freezes each terminal's output boundary and marks it as moving away from
 /// `from`. Repeating the same handoff id returns the same checkpoints.
+///
+/// All or nothing: every terminal is validated before any is marked, so a
+/// refusal on one never strands the others in `Preparing`, where no window
+/// owns them and rollback of the batch would fail.
 pub(super) fn prepare(
     targets: &HashMap<u32, Arc<dyn Target>>,
     handoff: HandoffId,
@@ -173,6 +182,7 @@ pub(super) fn prepare(
     to: &str,
 ) -> Result<Vec<Frozen>, String> {
     let mut frozen = Vec::with_capacity(ids.len());
+    let mut staged: Vec<(&Arc<dyn Target>, Attachment)> = Vec::with_capacity(ids.len());
     for id in ids {
         let target = targets.get(id).ok_or_else(|| format!("no terminal {id}"))?;
         let mut attachment = target.attachment();
@@ -210,8 +220,8 @@ pub(super) fn prepare(
                 checkpoint,
                 source: attachment.clone(),
             })
-            .map_err(explain)?;
-        target.install(next);
+            .map_err(|error| format!("terminal {id}: {}", explain(error)))?;
+        staged.push((target, next));
         frozen.push(Frozen {
             pty_id: *id,
             checkpoint,
@@ -219,6 +229,9 @@ pub(super) fn prepare(
             rows,
             token: attachment.token(),
         });
+    }
+    for (target, next) in staged {
+        target.install(next);
     }
     Ok(frozen)
 }
@@ -267,22 +280,25 @@ pub(super) fn attach(
         ) && attachment.handoff_id() == Some(handoff)
             && attachment.host().as_ref() == to
         {
+            // A retried attach rebuilds the view again, so it rebases again.
+            let (events, stream_offset) = target.snapshot().map_err(replay_error)?;
             replays.push(Replay {
                 pty_id: *id,
                 cols: target.size().0,
                 rows: target.size().1,
                 token: attachment.token(),
                 epoch: attachment.epoch(),
-                events: target.replay_all().map_err(replay_error)?,
+                stream_offset,
+                events,
             });
             continue;
         }
-        let events = target.replay_all().map_err(replay_error)?;
         let token = mint();
         let epoch = attachment.epoch() + 1;
         let next = attachment
             .attach(handoff, Arc::from(to), token, epoch)
             .map_err(explain)?;
+        let (events, stream_offset) = target.snapshot().map_err(replay_error)?;
         target.install(next);
         let (cols, rows) = target.size();
         replays.push(Replay {
@@ -291,6 +307,7 @@ pub(super) fn attach(
             rows,
             token,
             epoch,
+            stream_offset,
             events,
         });
     }
@@ -314,8 +331,8 @@ pub(super) fn commit(
     Ok(())
 }
 
-/// Restores the source host with fresh credentials and returns the output the
-/// source missed while the move was in flight.
+/// Restores the source host with fresh credentials and returns the full
+/// history to rebuild its view from.
 pub(super) fn rollback(
     targets: &HashMap<u32, Arc<dyn Target>>,
     handoff: HandoffId,
@@ -340,16 +357,37 @@ pub(super) fn rollback(
                 rows: target.size().1,
                 token: attachment.token(),
                 epoch: attachment.epoch(),
+                stream_offset: target.stream_offset(),
                 events: Vec::new(),
             });
             continue;
         }
-        let checkpoint = attachment.checkpoint();
+        // Never prepared by this handoff (an earlier step failed first): it is
+        // still attached where it was, so hand back its current lease.
+        if attachment.phase() == AttachmentPhase::Attached
+            && attachment.handoff_id() != Some(handoff)
+        {
+            let (events, stream_offset) = target.snapshot().map_err(replay_error)?;
+            let (cols, rows) = target.size();
+            replays.push(Replay {
+                pty_id: *id,
+                cols,
+                rows,
+                token: attachment.token(),
+                epoch: attachment.epoch(),
+                stream_offset,
+                events,
+            });
+            continue;
+        }
         let token = mint();
         let epoch = attachment.epoch() + 1;
         let next = attachment
             .rollback(handoff, token, epoch)
-            .map_err(explain)?;
+            .map_err(|error| format!("terminal {id}: {}", explain(error)))?;
+        // The source released its view at detach, so it rebuilds from the full
+        // history, not just what it missed while the move was in flight.
+        let (events, stream_offset) = target.snapshot().map_err(replay_error)?;
         target.install(next);
         let (cols, rows) = target.size();
         replays.push(Replay {
@@ -358,7 +396,8 @@ pub(super) fn rollback(
             rows,
             token,
             epoch,
-            events: target.replay_after(checkpoint).map_err(replay_error)?,
+            stream_offset,
+            events,
         });
     }
     Ok(replays)
@@ -373,6 +412,8 @@ mod tests {
     struct Fake {
         attachment: Mutex<Attachment>,
         replay: Mutex<ReplayLog>,
+        /// Live-stream offset, as the session's output queue would hold it.
+        stream: Mutex<u64>,
         size: (u16, u16),
     }
 
@@ -381,6 +422,7 @@ mod tests {
             Arc::new(Self {
                 attachment: Mutex::new(Attachment::new(Arc::from(host), token)),
                 replay: Mutex::new(ReplayLog::new(cols, rows)),
+                stream: Mutex::new(0),
                 size: (cols, rows),
             })
         }
@@ -398,17 +440,16 @@ mod tests {
             *self.attachment.lock().unwrap() = attachment;
         }
         fn checkpoint(&self) -> Result<u64, ReplayError> {
+            Ok(self.replay.lock().unwrap().sequence())
+        }
+        fn snapshot(&self) -> Result<(Vec<ReplayEvent>, u64), ReplayError> {
             let log = self.replay.lock().unwrap();
-            if !log.is_complete() {
-                return Err(ReplayError::Truncated);
-            }
-            Ok(log.sequence())
+            let offset = log.output_bytes();
+            *self.stream.lock().unwrap() = offset;
+            Ok((log.replay_all()?, offset))
         }
-        fn replay_all(&self) -> Result<Vec<ReplayEvent>, ReplayError> {
-            self.replay.lock().unwrap().replay_all()
-        }
-        fn replay_after(&self, checkpoint: u64) -> Result<Vec<ReplayEvent>, ReplayError> {
-            self.replay.lock().unwrap().replay_after(checkpoint)
+        fn stream_offset(&self) -> u64 {
+            *self.stream.lock().unwrap()
         }
         fn size(&self) -> (u16, u16) {
             self.size
@@ -453,7 +494,7 @@ mod tests {
     }
 
     #[test]
-    fn rollback_restores_the_source_with_outage_output_only() {
+    fn rollback_restores_the_source_with_its_full_history() {
         let fake = Fake::new("main", 7, 80, 24);
         fake.output(b"before");
         let map = targets(&fake);
@@ -464,11 +505,57 @@ mod tests {
         let replays = rollback(&map, 1, &[1], &mut mint).expect("rollback");
         assert_eq!(replays[0].epoch, 1);
         assert_eq!(replays[0].token, 42);
-        assert!(
-            matches!(&replays[0].events[0], ReplayEvent::Output { bytes } if bytes == b"after")
-        );
+        let output: Vec<u8> = replays[0]
+            .events
+            .iter()
+            .flat_map(|event| match event {
+                ReplayEvent::Output { bytes } => bytes.clone(),
+                ReplayEvent::Resize { .. } => Vec::new(),
+            })
+            .collect();
+        assert_eq!(output, b"beforeafter");
         assert_eq!(fake.attachment().host().as_ref(), "main");
         assert!(fake.attachment().authorizes("main", 42, 1));
+    }
+
+    #[test]
+    fn prepare_is_all_or_nothing() {
+        let good = Fake::new("main", 7, 80, 24);
+        let foreign = Fake::new("space-b", 8, 80, 24);
+        let mut map = targets(&good);
+        map.insert(2, foreign.clone());
+        assert!(prepare(&map, 1, &[1, 2], "main", "space-a").is_err());
+        assert_eq!(good.attachment().phase(), AttachmentPhase::Attached);
+        assert_eq!(good.attachment().handoff_id(), None);
+    }
+
+    #[test]
+    fn rollback_tolerates_terminals_the_failed_handoff_never_prepared() {
+        let fake = Fake::new("main", 7, 80, 24);
+        fake.output(b"kept");
+        let map = targets(&fake);
+        let mut mint = || 42;
+        let replays = rollback(&map, 1, &[1], &mut mint).expect("rollback");
+        assert_eq!(replays[0].token, 7);
+        assert_eq!(replays[0].epoch, 0);
+        assert!(matches!(&replays[0].events[0], ReplayEvent::Output { bytes } if bytes == b"kept"));
+        assert!(fake.attachment().authorizes("main", 7, 0));
+    }
+
+    #[test]
+    fn a_terminal_with_evicted_history_can_still_move() {
+        let fake = Fake::new("main", 7, 80, 24);
+        fake.output(&vec![b'x'; crate::modules::pty::replay::MAX_REPLAY_BYTES]);
+        fake.output(b"newest");
+        let map = targets(&fake);
+        prepare(&map, 1, &[1], "main", "space-a").expect("prepare");
+        detach(&map, 1, &[1], "main").expect("detach");
+        let mut mint = || 99;
+        let replays = attach(&map, 1, &[1], "space-a", &mut mint).expect("attach");
+        assert!(matches!(
+            replays[0].events.last(),
+            Some(ReplayEvent::Output { bytes }) if bytes == b"newest"
+        ));
     }
 
     #[test]
@@ -558,6 +645,7 @@ mod tests {
             rows: 24,
             token: u64::MAX,
             epoch: 2,
+            stream_offset: 11_705,
             events: vec![
                 ReplayEvent::Output {
                     bytes: b"hello".to_vec(),
@@ -572,6 +660,7 @@ mod tests {
         assert_eq!(json["ptyId"], 7);
         assert_eq!(json["attachToken"], u64::MAX.to_string());
         assert_eq!(json["leaseEpoch"], "2");
+        assert_eq!(json["streamOffset"], 11_705);
         assert_eq!(json["events"][0]["kind"], "output");
         assert_eq!(json["events"][0]["data"], "aGVsbG8=");
         assert_eq!(json["events"][1]["kind"], "resize");

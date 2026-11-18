@@ -140,16 +140,18 @@ export class PtyOutputHub {
     receiver: PtyOutputReceiver,
     onExit: (code: number) => void,
     lease: { token: string; epoch: string },
+    // A terminal rebuilt from a handoff replay resumes mid-stream.
+    startOffset = 0,
   ): PtyStreamHandle {
     const entry: Entry = {
       id,
       receiver,
       onExit,
       lease,
-      received: 0,
-      target: 0,
-      sent: 0,
-      confirmed: 0,
+      received: startOffset,
+      target: startOffset,
+      sent: startOffset,
+      confirmed: startOffset,
       attachSent: false,
       attached: false,
       urgent: false,
@@ -160,7 +162,10 @@ export class PtyOutputHub {
     // Terminals opened in the same tick announce themselves in one request.
     this.queueKick();
     return {
-      progress: (processedBytes) => this.progress(entry, processedBytes),
+      // The receiver counts the bytes it parsed; acknowledgements are stream
+      // offsets.
+      progress: (processedBytes) =>
+        this.progress(entry, startOffset + processedBytes),
     };
   }
 

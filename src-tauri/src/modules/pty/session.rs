@@ -177,25 +177,26 @@ impl Session {
         result
     }
 
-    pub(super) fn replay_all(
+    /// The retained history plus the stream offset live output resumes at, for
+    /// a window that rebuilds this terminal from scratch. The output queue is
+    /// rebased to that offset under the replay lock, so nothing the snapshot
+    /// holds is delivered again and nothing after it is lost.
+    pub(super) fn snapshot_for_handoff(
         &self,
-    ) -> Result<Vec<super::replay::ReplayEvent>, super::replay::ReplayError> {
-        self.replay.lock().unwrap().replay_all()
+    ) -> Result<(Vec<super::replay::ReplayEvent>, u64), super::replay::ReplayError> {
+        let replay = self.replay.lock().unwrap();
+        let events = replay.replay_all()?;
+        let offset = replay.output_bytes();
+        self.output.rebase(offset);
+        Ok((events, offset))
     }
 
-    pub(super) fn replay_after(
-        &self,
-        checkpoint: u64,
-    ) -> Result<Vec<super::replay::ReplayEvent>, super::replay::ReplayError> {
-        self.replay.lock().unwrap().replay_after(checkpoint)
+    pub(super) fn stream_offset(&self) -> u64 {
+        self.output.stream_offset()
     }
 
     pub(super) fn checkpoint(&self) -> Result<u64, super::replay::ReplayError> {
-        let replay = self.replay.lock().unwrap();
-        if !replay.is_complete() {
-            return Err(super::replay::ReplayError::Truncated);
-        }
-        Ok(replay.sequence())
+        Ok(self.replay.lock().unwrap().sequence())
     }
 
     pub(super) fn size(&self) -> (u16, u16) {

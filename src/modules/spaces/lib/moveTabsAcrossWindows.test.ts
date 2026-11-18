@@ -97,8 +97,14 @@ describe("moveTabsAcrossWindows", () => {
       emitTo: vi.fn(),
       waitForAttach: vi.fn(),
     });
-    expect(result).toEqual({ ok: false, error: "source-unavailable" });
-    expect(invoke).toHaveBeenCalledWith("pty_close", { id: 1 });
+    expect(result).toEqual({
+      ok: false,
+      error: "source-unavailable: source window gone",
+    });
+    expect(invoke).toHaveBeenCalledWith("pty_close", {
+      id: 1,
+      handoffId: "h4",
+    });
   });
 
   it("rolls back and sends a correction when attach reports an error", async () => {

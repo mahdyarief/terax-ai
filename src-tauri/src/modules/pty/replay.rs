@@ -1,4 +1,6 @@
-//! Bounded, sequence-zero replay log for one live PTY.
+//! Bounded, rolling replay log for one live PTY.
+
+use std::collections::VecDeque;
 
 pub(super) const MAX_REPLAY_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const MAX_REPLAY_EVENTS: usize = 65_536;
@@ -18,65 +20,89 @@ impl ReplayEvent {
     }
 }
 
+// Only `replay_after` (kept for tests) builds these now: the rolling log never
+// refuses a push, and handoffs replay the whole retained history.
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum ReplayError {
+    /// The requested checkpoint is older than the oldest retained output.
     Truncated,
     InvalidCheckpoint,
 }
 
+/// Rolling replay log. Sequence numbers are absolute (bytes plus one per
+/// resize since the PTY opened), so checkpoints stay valid while the oldest
+/// output is evicted to keep the log under [`MAX_REPLAY_BYTES`] and
+/// [`MAX_REPLAY_EVENTS`]. A busy terminal therefore always stays movable; it
+/// just carries its newest history, like a scrollback limit.
+///
+/// It used to stop recording for good once full, which made every long-lived
+/// terminal unmovable ("terminal history is incomplete").
 #[derive(Debug)]
 pub(super) struct ReplayLog {
-    events: Vec<ReplayEvent>,
+    events: VecDeque<ReplayEvent>,
     bytes: usize,
-    complete: bool,
-    creation_cols: u16,
-    creation_rows: u16,
+    /// Sequence of the first retained event.
+    base: u64,
+    /// Sequence after the last retained event.
+    end: u64,
+    /// Terminal size in force at `base`, so a replay starts at the right size.
+    base_size: (u16, u16),
+    /// Output bytes ever pushed (resizes excluded): the PTY output stream
+    /// offset right after the newest retained event.
+    output_total: u64,
 }
 
 impl ReplayLog {
     pub(super) fn new(cols: u16, rows: u16) -> Self {
         Self {
-            events: Vec::new(),
+            events: VecDeque::new(),
             bytes: 0,
-            complete: true,
-            creation_cols: cols,
-            creation_rows: rows,
+            base: 0,
+            end: 0,
+            base_size: (cols, rows),
+            output_total: 0,
         }
     }
 
     pub(super) fn push_output(&mut self, bytes: &[u8]) -> Result<u64, ReplayError> {
         if bytes.is_empty() {
-            return Ok(self.sequence());
+            return Ok(self.end);
         }
-        if !self.complete {
-            return Err(ReplayError::Truncated);
-        }
-        if self.bytes + bytes.len() > MAX_REPLAY_BYTES || self.events.len() + 1 > MAX_REPLAY_EVENTS
-        {
-            self.complete = false;
-            return Err(ReplayError::Truncated);
-        }
-        self.events.push(ReplayEvent::Output {
-            bytes: bytes.to_vec(),
+        self.output_total += bytes.len() as u64;
+        // A single chunk larger than the whole budget keeps only its tail.
+        let kept = if bytes.len() > MAX_REPLAY_BYTES {
+            let skipped = bytes.len() - MAX_REPLAY_BYTES;
+            self.evict_all();
+            self.base += skipped as u64;
+            self.end = self.base;
+            &bytes[skipped..]
+        } else {
+            bytes
+        };
+        self.make_room(kept.len());
+        self.events.push_back(ReplayEvent::Output {
+            bytes: kept.to_vec(),
         });
-        self.bytes += bytes.len();
-        Ok(self.sequence())
+        self.bytes += kept.len();
+        self.end += kept.len() as u64;
+        Ok(self.end)
     }
 
     pub(super) fn push_resize(&mut self, cols: u16, rows: u16) -> Result<u64, ReplayError> {
-        if !self.complete {
-            return Err(ReplayError::Truncated);
-        }
-        if self.events.len() + 1 > MAX_REPLAY_EVENTS {
-            self.complete = false;
-            return Err(ReplayError::Truncated);
-        }
-        self.events.push(ReplayEvent::Resize { cols, rows });
-        Ok(self.sequence())
+        self.make_room(0);
+        self.events.push_back(ReplayEvent::Resize { cols, rows });
+        self.end += 1;
+        Ok(self.end)
+    }
+
+    /// Stream offset that follows everything [`Self::replay_all`] returns.
+    pub(super) fn output_bytes(&self) -> u64 {
+        self.output_total
     }
 
     pub(super) fn sequence(&self) -> u64 {
-        self.events.iter().map(ReplayEvent::sequence_len).sum()
+        self.end
     }
 
     pub(super) fn size(&self) -> (u16, u16) {
@@ -87,29 +113,37 @@ impl ReplayLog {
                 ReplayEvent::Resize { cols, rows } => Some((*cols, *rows)),
                 ReplayEvent::Output { .. } => None,
             })
-            .unwrap_or((self.creation_cols, self.creation_rows))
+            .unwrap_or(self.base_size)
     }
 
+    /// True while nothing has been evicted since the PTY opened.
+    #[cfg(test)]
     pub(super) fn is_complete(&self) -> bool {
-        self.complete
+        self.base == 0
     }
 
+    /// Everything retained, led by the size in force at the oldest event once
+    /// older output (and the resize that set that size) has been evicted.
     pub(super) fn replay_all(&self) -> Result<Vec<ReplayEvent>, ReplayError> {
-        if !self.complete {
-            return Err(ReplayError::Truncated);
+        let mut replay = Vec::with_capacity(self.events.len() + 1);
+        if self.base > 0 {
+            let (cols, rows) = self.base_size;
+            replay.push(ReplayEvent::Resize { cols, rows });
         }
-        Ok(self.events.clone())
+        replay.extend(self.events.iter().cloned());
+        Ok(replay)
     }
 
+    #[cfg(test)]
     pub(super) fn replay_after(&self, checkpoint: u64) -> Result<Vec<ReplayEvent>, ReplayError> {
-        if !self.complete {
-            return Err(ReplayError::Truncated);
-        }
-        if checkpoint > self.sequence() {
+        if checkpoint > self.end {
             return Err(ReplayError::InvalidCheckpoint);
         }
+        if checkpoint < self.base {
+            return Err(ReplayError::Truncated);
+        }
         let mut replay = Vec::new();
-        let mut start = 0;
+        let mut start = self.base;
         for event in &self.events {
             let end = start + event.sequence_len();
             if end > checkpoint {
@@ -125,6 +159,32 @@ impl ReplayLog {
             start = end;
         }
         Ok(replay)
+    }
+
+    /// Evicts the oldest events until `incoming` more bytes and one more event fit.
+    fn make_room(&mut self, incoming: usize) {
+        while !self.events.is_empty()
+            && (self.bytes + incoming > MAX_REPLAY_BYTES
+                || self.events.len() + 1 > MAX_REPLAY_EVENTS)
+        {
+            self.evict_front();
+        }
+    }
+
+    fn evict_front(&mut self) {
+        if let Some(event) = self.events.pop_front() {
+            self.base += event.sequence_len();
+            match event {
+                ReplayEvent::Output { bytes } => self.bytes -= bytes.len(),
+                ReplayEvent::Resize { cols, rows } => self.base_size = (cols, rows),
+            }
+        }
+    }
+
+    fn evict_all(&mut self) {
+        while !self.events.is_empty() {
+            self.evict_front();
+        }
     }
 }
 
@@ -161,12 +221,52 @@ mod tests {
     }
 
     #[test]
-    fn overflow_marks_the_log_incomplete_and_prevents_replay() {
+    fn overflow_evicts_the_oldest_output_and_keeps_the_log_usable() {
         let mut log = ReplayLog::new(80, 24);
-        let payload = vec![b'x'; MAX_REPLAY_BYTES + 1];
-        let _ = log.push_output(&payload);
+        log.push_resize(100, 30).unwrap();
+        log.push_output(&vec![b'a'; MAX_REPLAY_BYTES - 1]).unwrap();
+        let end = log.push_output(b"zz").unwrap();
+        assert_eq!(end, 1 + MAX_REPLAY_BYTES as u64 + 1);
         assert!(!log.is_complete());
-        assert!(matches!(log.replay_all(), Err(ReplayError::Truncated)));
+        let events = log.replay_all().unwrap();
+        // The evicted resize still sets the replay's starting size.
+        assert!(matches!(
+            events[0],
+            ReplayEvent::Resize {
+                cols: 100,
+                rows: 30
+            }
+        ));
+        assert!(matches!(events.last(), Some(ReplayEvent::Output { bytes }) if bytes == b"zz"));
+        assert_eq!(log.size(), (100, 30));
+        assert!(matches!(log.replay_after(1), Err(ReplayError::Truncated)));
+        assert!(log.replay_after(end - 1).is_ok());
+    }
+
+    #[test]
+    fn a_chunk_bigger_than_the_budget_keeps_its_tail() {
+        let mut log = ReplayLog::new(80, 24);
+        let mut chunk = vec![b'x'; MAX_REPLAY_BYTES];
+        chunk.extend_from_slice(b"tail");
+        let end = log.push_output(&chunk).unwrap();
+        assert_eq!(end, chunk.len() as u64);
+        let events = log.replay_all().unwrap();
+        let ReplayEvent::Output { bytes } = events.last().unwrap() else {
+            panic!("expected output");
+        };
+        assert_eq!(bytes.len(), MAX_REPLAY_BYTES);
+        assert!(bytes.ends_with(b"tail"));
+    }
+
+    #[test]
+    fn event_cap_evicts_instead_of_refusing() {
+        let mut log = ReplayLog::new(80, 24);
+        for _ in 0..MAX_REPLAY_EVENTS + 10 {
+            log.push_output(b"x").unwrap();
+        }
+        assert_eq!(log.sequence(), (MAX_REPLAY_EVENTS + 10) as u64);
+        // One leading resize restores the starting size, then the newest events.
+        assert_eq!(log.replay_all().unwrap().len(), MAX_REPLAY_EVENTS + 1);
     }
 
     #[test]

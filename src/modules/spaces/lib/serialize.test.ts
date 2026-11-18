@@ -3,7 +3,9 @@ import type { PaneNode } from "@/modules/terminal/lib/panes";
 import type { Tab } from "@/modules/tabs/lib/useTabs";
 import {
   hydrateTabs,
+  isHandoffMovable,
   serializeTabs,
+  serializeTabsForHandoff,
   stampHandoffAttachments,
   type SerializedTab,
 } from "./serialize";
@@ -148,7 +150,7 @@ describe("hydrateTabs", () => {
     ).toEqual([]);
   });
 
-  it("preserves stable PTY attachment metadata during handoff hydration", () => {
+  it("never writes a live leaf's stale PTY attachment", () => {
     const tab = term({
       paneTree: {
         kind: "leaf",
@@ -158,15 +160,79 @@ describe("hydrateTabs", () => {
       },
     });
     const [serialized] = serializeTabs([tab]);
+    expect(JSON.stringify(serialized)).not.toContain("ptyAttachment");
     const [hydrated] = hydrateTabs([serialized], "s1", counter(), {
       keepPty: true,
     });
+    expect(hydrated.kind === "terminal" && hydrated.cold).toBe(true);
+  });
+
+  it("drops PTY attachments when hydrating without keepPty", () => {
+    const stamped = stampHandoffAttachments(serializeTabs([term({})]), [
+      { ptyId: 41, checkpoint: "128", cols: 80, rows: 24, attachToken: "5" },
+    ]);
+    const [hydrated] = hydrateTabs(stamped, "s1", counter());
     const leaf = hydrated.kind === "terminal" ? hydrated.paneTree : null;
-    expect(leaf).toMatchObject({
-      kind: "leaf",
-      ptyAttachment: { ptyId: 41, checkpoint: "128", cols: 80, rows: 24 },
-    });
-    expect(hydrated.kind === "terminal" && hydrated.cold).toBe(false);
+    expect((leaf as { ptyAttachment?: unknown }).ptyAttachment).toBeUndefined();
+  });
+
+  it("clears a stale attachment from a leaf whose PTY id is null", () => {
+    const serialized: SerializedTab[] = [
+      {
+        kind: "terminal",
+        tree: {
+          kind: "leaf",
+          cwd: "/a",
+          ptyAttachment: { ptyId: 9, checkpoint: "1", cols: 80, rows: 24 },
+        },
+      },
+    ];
+    const stamped = stampHandoffAttachments(serialized, [], [null]);
+    expect(JSON.stringify(stamped)).not.toContain("ptyAttachment");
+  });
+
+  it("carries git views and clean editors in a handoff, not dirty editors", () => {
+    const tabs: Tab[] = [
+      {
+        id: 1,
+        kind: "git-diff",
+        spaceId: "s1",
+        title: "a.ts",
+        path: "a.ts",
+        repoRoot: "/r",
+        mode: "+",
+        originalPath: null,
+        preview: false,
+      },
+      { id: 2, kind: "git-history", spaceId: "s1", title: "History", repoRoot: "/r" },
+      {
+        id: 3,
+        kind: "git-commit-file",
+        spaceId: "s1",
+        title: "b.ts",
+        repoRoot: "/r",
+        sha: "abc123",
+        shortSha: "abc",
+        subject: "fix",
+        path: "b.ts",
+        originalPath: null,
+      },
+      { id: 4, kind: "editor", spaceId: "s1", title: "c", path: "/c", dirty: true, preview: false },
+      { id: 5, kind: "editor", spaceId: "s1", title: "d", path: "/d", dirty: false, preview: false },
+    ];
+    expect(tabs.map(isHandoffMovable)).toEqual([true, true, true, false, true]);
+    // Persistence is unchanged: git views are not written to disk.
+    expect(serializeTabs(tabs).map((t) => t.kind)).toEqual(["editor", "editor"]);
+    const moved = serializeTabsForHandoff(tabs);
+    expect(moved.map((t) => t.kind)).toEqual([
+      "git-diff",
+      "git-history",
+      "git-commit-file",
+      "editor",
+    ]);
+    const hydrated = hydrateTabs(moved, "s2", counter());
+    expect(hydrated[0]).toMatchObject({ kind: "git-diff", spaceId: "s2", repoRoot: "/r", mode: "+" });
+    expect(hydrated[2]).toMatchObject({ kind: "git-commit-file", sha: "abc123", subject: "fix" });
   });
 
   it("keeps legacy state cold when no PTY attachment exists", () => {

@@ -259,6 +259,7 @@ export async function openPty(
         }
       },
       { token: attachToken ?? "0", epoch: attachEpoch },
+      attached?.streamOffset ?? 0,
     ).progress;
     if (paneId !== undefined && presentation !== undefined)
       bindLeafPty(paneId, sessionId, presentation);

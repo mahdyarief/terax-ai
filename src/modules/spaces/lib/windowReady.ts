@@ -11,6 +11,15 @@ export function noteWindowReady(label: string): void {
   for (const resolve of pending) resolve();
 }
 
+/**
+ * Forget a window's readiness once it is destroyed. A later window reusing the
+ * label (reopening the same space) must announce again; otherwise a handoff
+ * would be emitted before its listeners exist and silently dropped.
+ */
+export function forgetWindowReady(label: string): void {
+  ready.delete(label);
+}
+
 export function isWindowReady(label: string): boolean {
   return ready.has(label);
 }

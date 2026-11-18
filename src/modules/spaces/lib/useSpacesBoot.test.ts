@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reclaimOrphanSpaces, spacesForWindow } from "./useSpacesBoot";
+import { reclaimOrphanSpaces, resolveBootTargets, spacesForWindow } from "./useSpacesBoot";
 
 describe("spacesForWindow", () => {
   it("boot only hydrates spaces hosted by this window", () => {
@@ -9,6 +9,40 @@ describe("spacesForWindow", () => {
     ] as any;
     const hosted = spacesForWindow(spaces, "space-b");
     expect(hosted.map((s) => s.id)).toEqual(["b"]);
+  });
+});
+
+describe("resolveBootTargets", () => {
+  const spaces = [
+    { id: "a", hostWindowLabel: "main" },
+    { id: "b", hostWindowLabel: "main" },
+  ] as any;
+
+  it("claims the space named in a new window's label before the host is published", () => {
+    const result = resolveBootTargets(spaces, "space-b");
+    expect(result.hosted.map((s) => s.id)).toEqual(["b"]);
+    expect(result.awaitingHandoff).toBe(true);
+  });
+
+  it("uses persisted hosts once the handoff has been published", () => {
+    const result = resolveBootTargets(
+      [{ id: "a", hostWindowLabel: "main" }, { id: "b", hostWindowLabel: "space-b" }] as any,
+      "space-b",
+    );
+    expect(result.hosted.map((s) => s.id)).toEqual(["b"]);
+    expect(result.awaitingHandoff).toBe(false);
+  });
+
+  it("stays empty when a space window's id is unknown", () => {
+    const result = resolveBootTargets(spaces, "space-missing");
+    expect(result.hosted).toEqual([]);
+    expect(result.awaitingHandoff).toBe(false);
+  });
+
+  it("never claims a space from the main window", () => {
+    const result = resolveBootTargets(spaces, "main");
+    expect(result.hosted.map((s) => s.id)).toEqual(["a", "b"]);
+    expect(result.awaitingHandoff).toBe(false);
   });
 });
 

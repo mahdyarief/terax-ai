@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  forgetWindowReady,
   isWindowReady,
   noteWindowReady,
   resetWindowReady,
@@ -36,6 +37,22 @@ describe("windowReady", () => {
       "window ready timeout",
     );
     expect(isWindowReady("space-d")).toBe(false);
+  });
+
+  it("waits for a fresh announcement after the window was forgotten", async () => {
+    noteWindowReady("space-e");
+    forgetWindowReady("space-e");
+    expect(isWindowReady("space-e")).toBe(false);
+
+    let resolved = false;
+    const pending = waitForWindowReady("space-e", 1000).then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    noteWindowReady("space-e");
+    await pending;
+    expect(resolved).toBe(true);
   });
 
   it("ignores empty window labels", () => {

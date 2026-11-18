@@ -18,6 +18,15 @@ export function takeHandoffReplay(ptyId: number): PtyReplayPayload | null {
 }
 
 /**
+ * Drop replays queued for a handoff that will never mount its leaves (the
+ * source rolled back, or attaching the tabs failed), so their scrollback does
+ * not linger for the life of the window.
+ */
+export function dropHandoffReplays(ptyIds: Iterable<number>): void {
+  for (const ptyId of ptyIds) pendingByPty.delete(ptyId);
+}
+
+/**
  * Pair serialized checkpoints with the leaves that own their PTYs. Checkpoint
  * order matches the `pty_prepare_handoff` request order, so the i-th checkpoint
  * belongs to the i-th live terminal leaf.

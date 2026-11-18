@@ -1,4 +1,5 @@
 import { Kbd } from "@/components/ui/kbd";
+import { Spinner } from "@/components/ui/spinner";
 import {
   Popover,
   PopoverContent,
@@ -21,7 +22,9 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { InlineRename } from "./components/InlineRename";
+import { isSpaceWindow, visibleSpacesForWindow } from "./lib/handoff";
 import { accentFor } from "./lib/spaceColor";
+import { useSpaceTransfers } from "./lib/spaceTransfers";
 import type { SpaceMeta } from "./lib/store";
 import { useSpaces } from "./lib/useSpaces";
 import { SpaceAvatar } from "./SpaceAvatar";
@@ -90,11 +93,18 @@ export function SpaceSwitcher({
   onReorderTab,
   onReorderSpaces,
 }: Props) {
-  const spaces = useSpaces((s) => s.spaces);
+  const allSpaces = useSpaces((s) => s.spaces);
   const activeId = useSpaces((s) => s.activeId);
   const setActive = useSpaces((s) => s.setActive);
   const rename = useSpaces((s) => s.rename);
   const windowLabel = useSpaces((s) => s.windowLabel);
+  // A space window is focused on its own space: it neither lists nor creates
+  // other spaces. Main stays the hub that shows all of them.
+  const focusedWindow = isSpaceWindow(windowLabel);
+  const spaces = useMemo(
+    () => visibleSpacesForWindow(allSpaces, windowLabel),
+    [allSpaces, windowLabel],
+  );
   const shortcut = useShortcutLabel("space.overview");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() =>
@@ -265,7 +275,9 @@ export function SpaceSwitcher({
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6} className="w-[20rem] p-1.5">
         <div className="flex items-center justify-between px-1.5 pb-1.5 pt-0.5">
-          <span className="text-xs font-semibold text-foreground">Spaces</span>
+          <span className="text-xs font-semibold text-foreground">
+            {focusedWindow ? "Space" : "Spaces"}
+          </span>
           {shortcut && (
             <Kbd className="h-5 bg-muted/70 text-[10px]">{shortcut}</Kbd>
           )}
@@ -277,7 +289,7 @@ export function SpaceSwitcher({
               space={sp}
               tabs={tabsBySpace.get(sp.id) ?? []}
               isActive={sp.id === activeId}
-              canDelete={spaces.length > 1}
+              canDelete={!focusedWindow && spaces.length > 1}
               expanded={expanded.has(sp.id)}
               editing={editingId === sp.id}
               dragging={dragging}
@@ -310,16 +322,18 @@ export function SpaceSwitcher({
             />
           ))}
         </div>
-        <div className="mt-1.5 border-t border-border/60 pt-1.5">
-          <button
-            type="button"
-            onClick={onNewSpace}
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
-          >
-            <HugeiconsIcon icon={PlusSignIcon} size={14} strokeWidth={1.75} />
-            <span className="flex-1">New space</span>
-          </button>
-        </div>
+        {!focusedWindow && (
+          <div className="mt-1.5 border-t border-border/60 pt-1.5">
+            <button
+              type="button"
+              onClick={onNewSpace}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+            >
+              <HugeiconsIcon icon={PlusSignIcon} size={14} strokeWidth={1.75} />
+              <span className="flex-1">New space</span>
+            </button>
+          </div>
+        )}
       </PopoverContent>
       {overlay &&
         (draggedSpace || draggedTab) &&
@@ -402,6 +416,7 @@ function SpaceRow({
 }: SpaceRowProps) {
   const host = space.hostWindowLabel ?? "main";
   const hostedHere = host === windowLabel;
+  const transfer = useSpaceTransfers((s) => s.pending[space.id]);
   const isDragging = dragging?.kind === "space" && dragging.id === space.id;
   const moveTarget = drop?.kind === "into-space" && drop.spaceId === space.id;
   const reorderEdge =
@@ -469,9 +484,21 @@ function SpaceRow({
         )}
         {!editing && (
           <>
-            <span className="shrink-0 px-1 text-[10px] tabular-nums text-muted-foreground/50">
-              {tabs.length}
-            </span>
+            {transfer ? (
+              <span
+                className="flex shrink-0 items-center gap-1 px-1 text-[10px] text-muted-foreground"
+                aria-live="polite"
+              >
+                <Spinner className="size-3" />
+                {transfer === "opening" ? "Opening…" : "Returning…"}
+              </span>
+            ) : (
+              hostedHere && (
+                <span className="shrink-0 px-1 text-[10px] tabular-nums text-muted-foreground/50">
+                  {tabs.length}
+                </span>
+              )
+            )}
             <div data-no-drag className="flex shrink-0 items-center gap-0.5">
               <RowAction
                 icon={PencilEdit02Icon}
@@ -483,6 +510,7 @@ function SpaceRow({
                   icon={ArrowUpRight02Icon}
                   label={hostedHere ? "Open in new window" : "Focus window"}
                   onClick={onOpenInWindow}
+                  disabled={transfer !== undefined}
                 />
               )}
               {!hostedHere && windowLabel === "main" && (
@@ -490,6 +518,7 @@ function SpaceRow({
                   icon={ArrowLeft02Icon}
                   label="Bring back to this window"
                   onClick={onBringBack}
+                  disabled={transfer !== undefined}
                 />
               )}
               <RowAction
@@ -527,7 +556,15 @@ function SpaceRow({
           ))}
           {tabs.length === 0 && (
             <span className="px-2 py-1 text-[10.5px] text-muted-foreground/50">
-              {draggingTabFromOther ? "Drop to move here" : "No tabs"}
+              {transfer === "opening"
+                ? "Opening in a focus window…"
+                : transfer === "returning"
+                  ? "Bringing its tabs back…"
+                  : !hostedHere
+                    ? "Opened in a focus window"
+                    : draggingTabFromOther
+                      ? "Drop to move here"
+                      : "No tabs"}
             </span>
           )}
         </div>
@@ -658,23 +695,26 @@ function RowAction({
   label,
   onClick,
   destructive,
+  disabled,
 }: {
   icon: typeof Delete02Icon;
   label: string;
   onClick: () => void;
   destructive?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       aria-label={label}
       title={label}
+      disabled={disabled}
       onClick={(e) => {
         e.stopPropagation();
         onClick();
       }}
       className={cn(
-        "flex size-5 items-center justify-center rounded text-muted-foreground/70 transition-colors",
+        "flex size-5 items-center justify-center rounded text-muted-foreground/70 transition-colors disabled:pointer-events-none disabled:opacity-40",
         destructive
           ? "hover:bg-destructive/10 hover:text-destructive"
           : "hover:bg-accent hover:text-foreground",

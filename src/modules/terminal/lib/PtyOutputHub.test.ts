@@ -98,6 +98,7 @@ function open(
   id: number,
   parse: (bytes: Uint8Array) => void | Promise<void> = () => {},
   lease = { token: "0", epoch: "0" },
+  startOffset = 0,
 ): Terminal {
   const parser = vi.fn(parse);
   const status = vi.fn<(status: PtyOutputStatus) => void>();
@@ -108,7 +109,13 @@ function open(
     (processed) => handle?.progress(processed),
     status,
   );
-  handle = hub.register(id, receiver, (code) => exits.push(code), lease);
+  handle = hub.register(
+    id,
+    receiver,
+    (code) => exits.push(code),
+    lease,
+    startOffset,
+  );
   receiver.start();
   return { id, receiver, parse: parser, status, exits };
 }
@@ -255,6 +262,20 @@ describe("PtyOutputHub", () => {
     ]);
     expect(b.parse.mock.calls.map(([chunk]) => [...chunk])).toEqual([[9]]);
     expect(hub.diagnostics().frames).toBe(4);
+  });
+
+  it("resumes a handed-off terminal at its replay stream offset", async () => {
+    await hub.ensureStream();
+    const moved = open(hub, 1, () => {}, { token: "5", epoch: "1" }, 11_705);
+    await flush();
+    // The attach announcement acknowledges the offset the replay ended at.
+    expect(transport.held.acks).toEqual([{ id: 1, bytes: 11_705 }]);
+    transport.held.respond([
+      { kind: "data", id: 1, offset: 11_705, bytes: bytes(10) },
+    ]);
+    await flush();
+    expect(moved.parse).toHaveBeenCalledTimes(1);
+    expect(moved.receiver.hasFailed).toBe(false);
   });
 
   it("issues the next poll before parsing the response", async () => {

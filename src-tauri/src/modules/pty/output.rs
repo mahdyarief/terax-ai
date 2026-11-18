@@ -58,6 +58,14 @@ impl OutputCredit {
         self.boundaries.push_back(self.sent);
     }
 
+    /// Restarts the stream at `offset` with nothing in flight: a new receiver
+    /// took over and rebuilt everything before `offset` from the replay log.
+    pub fn rebase(&mut self, offset: u64) {
+        self.sent = offset;
+        self.acknowledged = offset;
+        self.boundaries.clear();
+    }
+
     pub fn acknowledge(&mut self, bytes: u64) -> Result<bool, InvalidBoundary> {
         if bytes <= self.acknowledged {
             return Ok(false);

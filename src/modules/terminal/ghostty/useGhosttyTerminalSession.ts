@@ -510,6 +510,23 @@ export async function attachGhosttyView(
   return !!session.pty;
 }
 
+/**
+ * Hand the native PTY to a cross-window transaction. The view is torn down and
+ * the session forgotten *without* closing the PTY, so the pane-tree disposal
+ * that follows the tab removal cannot `pty_close` a terminal mid-handoff. The
+ * generation bump makes an in-flight `pty_open` close its own result.
+ */
+export function releaseGhosttySessionForHandoff(leafId: number): boolean {
+  const session = sessions.get(leafId);
+  if (!session) return false;
+  detachGhosttyView(leafId);
+  session.disposed = true;
+  session.generation += 1;
+  session.pty = null;
+  sessions.delete(leafId);
+  return true;
+}
+
 export function disposeGhosttySession(leafId: number): boolean {
   const session = sessions.get(leafId);
   if (!session) return false;

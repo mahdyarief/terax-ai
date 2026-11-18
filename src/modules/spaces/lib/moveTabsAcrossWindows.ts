@@ -111,15 +111,32 @@ export async function moveTabsAcrossWindows({
         buildRollbackHandoff(handoffId, ptyIds),
       )) as PtyReplayPayload[] | undefined;
       if (replays) onRollback?.(replays, checkpoints);
-    } catch {
+    } catch (rollbackError) {
+      console.error("[terax] handoff failed and could not roll back", {
+        handoffId,
+        reason,
+        rollback:
+          rollbackError instanceof Error
+            ? rollbackError.message
+            : String(rollbackError),
+      });
       // The source window is gone; nobody can resume these sessions, so close
       // them here rather than leaving orphaned native processes behind.
       await Promise.all(
         checkpoints.map((checkpoint) =>
-          invoke("pty_close", { id: checkpoint.ptyId }).catch(() => {}),
+          // The PTY is mid-handoff, so the backend only closes it for the
+          // transaction that owns it.
+          invoke("pty_close", { id: checkpoint.ptyId, handoffId }).catch(
+            () => {},
+          ),
         ),
       );
-      return { ok: false, error: new SourceUnavailableError().message };
+      // Keep the first failure visible: it is the actual cause, while
+      // "source-unavailable" only says the rollback could not repair it.
+      return {
+        ok: false,
+        error: `${new SourceUnavailableError().message}: ${reason}`,
+      };
     }
     return { ok: false, error: reason };
   }

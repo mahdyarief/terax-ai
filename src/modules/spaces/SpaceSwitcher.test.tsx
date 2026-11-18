@@ -10,6 +10,15 @@ vi.mock("@/components/ui/popover", () => ({
 vi.mock("@/modules/shortcuts", () => ({ useShortcutLabel: () => null }));
 let currentWindowLabel = "main";
 let currentHostWindowLabel = "main";
+let extraSpaces: Array<Record<string, unknown>> = [];
+// Server rendering reads a zustand store's initial state, so the transfer
+// store is driven through this variable instead.
+let pendingTransfers: Record<string, "opening" | "returning"> = {};
+vi.mock("./lib/spaceTransfers", () => ({
+  useSpaceTransfers: (
+    select: (state: { pending: typeof pendingTransfers }) => unknown,
+  ) => select({ pending: pendingTransfers }),
+}));
 
 vi.mock("./lib/useSpaces", () => ({
   useSpaces: (select: (state: unknown) => unknown) =>
@@ -24,6 +33,7 @@ vi.mock("./lib/useSpaces", () => ({
           updatedAt: 0,
           hostWindowLabel: currentHostWindowLabel,
         },
+        ...extraSpaces,
       ],
       activeId: "space-1",
       setActive: vi.fn(),
@@ -76,8 +86,8 @@ it("renders Space actions without hover-only visibility classes", () => {
 });
 
 it("hides window-opening actions in a dedicated space window", () => {
-  currentWindowLabel = "space-1";
-  currentHostWindowLabel = "space-1";
+  currentWindowLabel = "space-space-1";
+  currentHostWindowLabel = "space-space-1";
 
   const html = renderSwitcher();
 
@@ -88,4 +98,57 @@ it("hides window-opening actions in a dedicated space window", () => {
 
   currentWindowLabel = "main";
   currentHostWindowLabel = "main";
+});
+
+it("lists only its own space in a dedicated space window", () => {
+  const other = {
+    id: "space-2",
+    name: "OtherSpaceName",
+    root: null,
+    env: { kind: "local" },
+    createdAt: 0,
+    updatedAt: 0,
+    hostWindowLabel: "main",
+  };
+  extraSpaces = [other];
+
+  const mainHtml = renderSwitcher();
+  expect(mainHtml).toContain("OtherSpaceName");
+  expect(mainHtml).toContain("New space");
+
+  currentWindowLabel = "space-space-1";
+  currentHostWindowLabel = "space-space-1";
+  const html = renderSwitcher();
+  expect(html).not.toContain("OtherSpaceName");
+  expect(html).not.toContain("New space");
+  expect(html).not.toContain('aria-label="Delete space"');
+
+  currentWindowLabel = "main";
+  currentHostWindowLabel = "main";
+  extraSpaces = [];
+});
+it("shows a spinner and locks the window actions while a space is moving", () => {
+  currentWindowLabel = "main";
+  currentHostWindowLabel = "main";
+  pendingTransfers = { "space-1": "opening" };
+  try {
+    const html = renderSwitcher();
+    expect(html).toContain("Opening…");
+    expect(html).toMatch(/aria-label="Open in new window"[^>]*disabled/);
+    expect(html).toContain("Opening in a focus window…");
+  } finally {
+    pendingTransfers = {};
+  }
+});
+
+it("says a space lives in its focus window instead of 'No tabs'", () => {
+  currentWindowLabel = "main";
+  currentHostWindowLabel = "space-space-1";
+  try {
+    const html = renderSwitcher();
+    expect(html).toContain("Opened in a focus window");
+    expect(html).not.toContain("No tabs");
+  } finally {
+    currentHostWindowLabel = "main";
+  }
 });

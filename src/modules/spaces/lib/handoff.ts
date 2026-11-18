@@ -1,3 +1,47 @@
+export const SPACE_WINDOW_PREFIX = "space-";
+
+export function spaceWindowLabel(spaceId: string): string {
+  return `${SPACE_WINDOW_PREFIX}${spaceId}`;
+}
+
+/** Inverse of {@link spaceWindowLabel}; null for the "main" window. */
+export function spaceIdFromWindowLabel(label: string): string | null {
+  if (!label.startsWith(SPACE_WINDOW_PREFIX)) return null;
+  const id = label.slice(SPACE_WINDOW_PREFIX.length);
+  return id.length > 0 ? id : null;
+}
+
+/** True for the window dedicated to one space (as opposed to "main"). */
+export function isSpaceWindow(label: string): boolean {
+  return spaceIdFromWindowLabel(label) !== null;
+}
+
+/**
+ * Spaces this window lists in its switcher. Main is the hub and lists every
+ * space (including ones hosted elsewhere, to focus or bring them back); a
+ * space window is focused on its own space and lists only that one.
+ */
+export function visibleSpacesForWindow<
+  T extends { id: string },
+>(spaces: T[], windowLabel: string): T[] {
+  const own = spaceIdFromWindowLabel(windowLabel);
+  if (own === null) return spaces;
+  return spaces.filter((s) => s.id === own);
+}
+
+/**
+ * Where tabs that cannot travel with `spaceId` stay in `windowLabel`: the
+ * first other space this window still hosts, or null when there is none.
+ */
+export function pickHandoffFallback<
+  T extends { id: string; hostWindowLabel?: string | null },
+>(spaces: T[], spaceId: string, windowLabel: string): string | null {
+  const other = spaces.find(
+    (s) => s.id !== spaceId && (s.hostWindowLabel ?? "main") === windowLabel,
+  );
+  return other?.id ?? null;
+}
+
 export type HandoffPlan =
   | { kind: "focus"; windowLabel: string }
   | { kind: "handoff"; spaceId: string; from: string; to: string }
@@ -14,6 +58,6 @@ export function planSpaceHandoff(
     kind: "handoff",
     spaceId: space.spaceId,
     from: currentWindowLabel,
-    to: `space-${space.spaceId}`,
+    to: spaceWindowLabel(space.spaceId),
   };
 }

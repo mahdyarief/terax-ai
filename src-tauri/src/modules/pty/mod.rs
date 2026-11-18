@@ -83,6 +83,9 @@ pub struct PtyReplayPayload {
     rows: u16,
     attach_token: String,
     lease_epoch: String,
+    /// Offset of the first live data frame after `events`; the receiver
+    /// starts counting there instead of at zero.
+    stream_offset: u64,
     events: Vec<PtyReplayEvent>,
 }
 
@@ -118,6 +121,7 @@ fn to_replay_payload(replay: handoff::Replay) -> PtyReplayPayload {
         rows: replay.rows,
         attach_token: replay.token.to_string(),
         lease_epoch: replay.epoch.to_string(),
+        stream_offset: replay.stream_offset,
         events: replay
             .events
             .into_iter()
@@ -504,7 +508,42 @@ pub fn pty_set_colors(
 }
 
 #[tauri::command]
-pub fn pty_close(state: tauri::State<PtyState>, id: u32) -> Result<(), String> {
+pub fn pty_close(
+    state: tauri::State<PtyState>,
+    id: u32,
+    handoff_id: Option<String>,
+) -> Result<(), String> {
+    let handoff = handoff_id.as_deref().map(parse_handoff).transpose()?;
+    close_session(&state, id, handoff)
+}
+
+/// A terminal moving between windows belongs to its handoff transaction, not
+/// to whichever view last showed it. Closing it then is only allowed for that
+/// transaction (its abort path); a stray close from the source window's view
+/// teardown would otherwise kill the process mid-move.
+fn close_allowed(session: &Session, handoff: Option<attachment::HandoffId>) -> bool {
+    let attachment = session.attachment.read().unwrap();
+    match attachment.phase() {
+        attachment::AttachmentPhase::Attached => true,
+        _ => handoff.is_some() && attachment.handoff_id() == handoff,
+    }
+}
+
+fn close_session(
+    state: &PtyState,
+    id: u32,
+    handoff: Option<attachment::HandoffId>,
+) -> Result<(), String> {
+    let allowed = state
+        .sessions
+        .read()
+        .unwrap()
+        .get(&id)
+        .map(|session| close_allowed(session, handoff));
+    if allowed == Some(false) {
+        log::warn!("pty_close refused id={id}: terminal is being handed off");
+        return Err(format!("terminal {id} is being moved to another window"));
+    }
     // Detached drop: on Windows `ClosePseudoConsole` can block until conhost
     // drains, which would freeze this Tauri worker thread and stall IPC.
     match state.take(id) {
@@ -594,7 +633,21 @@ pub async fn pty_prepare_handoff(
     to: String,
 ) -> Result<Vec<PtyHandoffCheckpoint>, String> {
     let handoff_id = parse_handoff(&handoff_id)?;
-    let checkpoints = handoff::handoff_prepare(&state, handoff_id, &ids, webview.label(), &to)?;
+    let checkpoints = handoff::handoff_prepare(&state, handoff_id, &ids, webview.label(), &to)
+        .inspect_err(|e| {
+            log::warn!(
+                "handoff prepare failed id={handoff_id} from={} to={to} pty_ids={ids:?}: {e}",
+                webview.label()
+            )
+        })?;
+    log::debug!(
+        "handoff prepare id={} from={} to={} pty_ids={:?} checkpoints={}",
+        handoff_id,
+        webview.label(),
+        to,
+        ids,
+        checkpoints.len()
+    );
     Ok(checkpoints
         .into_iter()
         .map(|checkpoint| PtyHandoffCheckpoint {
@@ -614,7 +667,22 @@ pub async fn pty_detach(
     handoff_id: String,
     ids: Vec<u32>,
 ) -> Result<(), String> {
-    handoff::handoff_detach(&state, parse_handoff(&handoff_id)?, &ids, webview.label())
+    let handoff_id = parse_handoff(&handoff_id)?;
+    let result = handoff::handoff_detach(&state, handoff_id, &ids, webview.label());
+    if let Err(e) = &result {
+        log::warn!(
+            "handoff detach failed id={handoff_id} from={} pty_ids={ids:?}: {e}",
+            webview.label()
+        );
+    }
+    log::debug!(
+        "handoff detach id={} from={} pty_ids={:?} result={:?}",
+        handoff_id,
+        webview.label(),
+        ids,
+        result.as_ref().map(|_| ()).map_err(|e| e.as_str())
+    );
+    result
 }
 
 #[tauri::command]
@@ -624,8 +692,21 @@ pub async fn pty_attach(
     handoff_id: String,
     ids: Vec<u32>,
 ) -> Result<Vec<PtyReplayPayload>, String> {
+    let handoff_id = parse_handoff(&handoff_id)?;
     let replays =
-        handoff::handoff_attach(&state, parse_handoff(&handoff_id)?, &ids, webview.label())?;
+        handoff::handoff_attach(&state, handoff_id, &ids, webview.label()).inspect_err(|e| {
+            log::warn!(
+                "handoff attach failed id={handoff_id} to={} pty_ids={ids:?}: {e}",
+                webview.label()
+            )
+        })?;
+    log::debug!(
+        "handoff attach id={} to={} pty_ids={:?} replays={}",
+        handoff_id,
+        webview.label(),
+        ids,
+        replays.len()
+    );
     for id in &ids {
         state.hub.submit(Command::RebindEntry {
             id: *id,
@@ -652,11 +733,31 @@ pub async fn pty_commit_handoff(
             .get(id)
             .cloned()
             .ok_or_else(|| format!("no terminal {id}"))?;
-        if session.host().as_ref() != webview.label() {
+        // The source window drives the transaction and commits it after the
+        // target attached, by which point the host is already the target.
+        let caller_owns = {
+            let attachment = session.attachment.read().unwrap();
+            &*attachment.host() == webview.label()
+                || (attachment.handoff_id() == Some(handoff_id)
+                    && attachment.handoff_from().as_deref() == Some(webview.label()))
+        };
+        if !caller_owns {
+            log::warn!(
+                "handoff commit refused id={handoff_id} by={} pty={id}: host is {}",
+                webview.label(),
+                session.host()
+            );
             return Err(format!("terminal {id} is not attached to this window"));
         }
     }
+    log::debug!(
+        "handoff commit id={} by={} leases={:?}",
+        handoff_id,
+        webview.label(),
+        leases.iter().map(|(id, _, _)| *id).collect::<Vec<_>>()
+    );
     handoff::handoff_commit(&state, handoff_id, &leases)
+        .inspect_err(|e| log::warn!("handoff commit failed id={handoff_id}: {e}"))
 }
 
 #[tauri::command]
@@ -678,10 +779,23 @@ pub async fn pty_rollback_handoff(
         if session.host().as_ref() != webview.label()
             && session.attachment.read().unwrap().handoff_id() != Some(handoff_id)
         {
+            log::warn!(
+                "handoff rollback refused id={handoff_id} by={} pty={id}: host is {}",
+                webview.label(),
+                session.host()
+            );
             return Err(format!("terminal {id} does not belong to this handoff"));
         }
     }
-    let replays = handoff::handoff_rollback(&state, handoff_id, &ids)?;
+    log::warn!(
+        "handoff rollback id={} by={} pty_ids={:?}",
+        handoff_id,
+        webview.label(),
+        ids
+    );
+    let replays = handoff::handoff_rollback(&state, handoff_id, &ids).inspect_err(|e| {
+        log::warn!("handoff rollback failed id={handoff_id} pty_ids={ids:?}: {e}")
+    })?;
     for id in &ids {
         let host = state
             .sessions
@@ -899,6 +1013,33 @@ mod tests {
         wait_for("shutdown to reap the frozen session", || {
             !state.sessions.read().unwrap().contains_key(&1)
         });
+    }
+
+    #[test]
+    fn closing_a_terminal_mid_handoff_needs_its_handoff_id() {
+        let state = Arc::new(PtyState::default());
+        let _session = open(&state, 1, "main");
+        handoff::handoff_prepare(&state, 7, &[1], "main", "space-a").expect("prepare");
+        handoff::handoff_detach(&state, 7, &[1], "main").expect("detach");
+
+        // The source view tearing down must not kill the moving process.
+        assert!(close_session(&state, 1, None).is_err());
+        assert!(close_session(&state, 1, Some(8)).is_err());
+        assert!(state.sessions.read().unwrap().contains_key(&1));
+
+        // The owning transaction may still abort and close it.
+        close_session(&state, 1, Some(7)).expect("close by owning handoff");
+        assert!(!state.sessions.read().unwrap().contains_key(&1));
+    }
+
+    #[test]
+    fn closing_an_attached_terminal_is_unconditional() {
+        let state = Arc::new(PtyState::default());
+        let _session = open(&state, 1, "main");
+        close_session(&state, 1, None).expect("close");
+        assert!(!state.sessions.read().unwrap().contains_key(&1));
+        // Unknown ids stay a no-op.
+        close_session(&state, 99, None).expect("unknown id");
     }
 
     #[test]

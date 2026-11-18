@@ -9,6 +9,9 @@ import type {
 } from "@/modules/terminal/lib/ptyHandoff";
 import type {
   EditorTab,
+  GitCommitFileDiffTab,
+  GitDiffTab,
+  GitHistoryTab,
   MarkdownTab,
   PreviewTab,
   Tab,
@@ -33,7 +36,29 @@ export type SerializedTab =
     }
   | { kind: "editor"; path: string }
   | { kind: "preview"; url: string }
-  | { kind: "markdown"; path: string };
+  | { kind: "markdown"; path: string }
+  // Git views only travel in a live cross-window handoff; they are never
+  // persisted, since a restart has no reason to reopen a stale diff.
+  | {
+      kind: "git-diff";
+      title: string;
+      path: string;
+      repoRoot: string;
+      mode: GitDiffTab["mode"];
+      originalPath: string | null;
+      preview: boolean;
+    }
+  | { kind: "git-history"; title: string; repoRoot: string }
+  | {
+      kind: "git-commit-file";
+      title: string;
+      repoRoot: string;
+      sha: string;
+      shortSha: string;
+      subject: string;
+      path: string;
+      originalPath: string | null;
+    };
 
 function basename(path: string): string {
   const parts = path.split(/[\\/]/).filter(Boolean);
@@ -50,11 +75,14 @@ function titleFromUrl(url: string): string {
 
 function serializeNode(node: PaneNode, activeLeafId: number): SerializedNode {
   if (isLeaf(node)) {
+    // A live leaf's `ptyAttachment` is a leftover from the handoff that
+    // created it. It is never written out: on disk it would point a restored
+    // leaf at a dead PTY, and in a later handoff it would let a cold leaf claim
+    // a PTY it no longer owns. `stampHandoffAttachments` sets it fresh.
     return {
       kind: "leaf",
       ...(node.cwd !== undefined && { cwd: node.cwd }),
       ...(node.id === activeLeafId && { active: true }),
-      ...(node.ptyAttachment && { ptyAttachment: node.ptyAttachment }),
     };
   }
   return {
@@ -77,8 +105,67 @@ export function isSerializableTab(tab: Tab): boolean {
   }
 }
 
-function serializeTab(tab: Tab): SerializedTab | null {
-  if (!isSerializableTab(tab)) return null;
+/**
+ * Whether a cross-window handoff can carry this tab without losing anything.
+ * Broader than {@link isSerializableTab} (git views travel too) but stricter
+ * for editors: a dirty buffer only serializes its path, so it stays behind.
+ */
+export function isHandoffMovable(tab: Tab): boolean {
+  switch (tab.kind) {
+    case "git-diff":
+    case "git-history":
+    case "git-commit-file":
+      return true;
+    case "editor":
+      return !tab.dirty;
+    default:
+      return isSerializableTab(tab);
+  }
+}
+
+function serializeGitTab(
+  tab: GitDiffTab | GitHistoryTab | GitCommitFileDiffTab,
+): SerializedTab {
+  switch (tab.kind) {
+    case "git-diff":
+      return {
+        kind: "git-diff",
+        title: tab.title,
+        path: tab.path,
+        repoRoot: tab.repoRoot,
+        mode: tab.mode,
+        originalPath: tab.originalPath,
+        preview: tab.preview,
+      };
+    case "git-history":
+      return { kind: "git-history", title: tab.title, repoRoot: tab.repoRoot };
+    case "git-commit-file":
+      return {
+        kind: "git-commit-file",
+        title: tab.title,
+        repoRoot: tab.repoRoot,
+        sha: tab.sha,
+        shortSha: tab.shortSha,
+        subject: tab.subject,
+        path: tab.path,
+        originalPath: tab.originalPath,
+      };
+  }
+}
+
+function serializeTab(tab: Tab, forHandoff: boolean): SerializedTab | null {
+  if (forHandoff) {
+    if (!isHandoffMovable(tab)) return null;
+    if (
+      tab.kind === "git-diff" ||
+      tab.kind === "git-history" ||
+      tab.kind === "git-commit-file"
+    ) {
+      return serializeGitTab(tab);
+    }
+  } else if (!isSerializableTab(tab)) {
+    return null;
+  }
   switch (tab.kind) {
     case "terminal":
       return {
@@ -98,10 +185,23 @@ function serializeTab(tab: Tab): SerializedTab | null {
   }
 }
 
+/** Tabs as persisted to disk. */
 export function serializeTabs(tabs: Tab[]): SerializedTab[] {
+  return serializeTabList(tabs, false);
+}
+
+/**
+ * Tabs as carried by a cross-window handoff: only {@link isHandoffMovable}
+ * tabs, in order, so leaf order matches `detachTabsForHandoff`.
+ */
+export function serializeTabsForHandoff(tabs: Tab[]): SerializedTab[] {
+  return serializeTabList(tabs, true);
+}
+
+function serializeTabList(tabs: Tab[], forHandoff: boolean): SerializedTab[] {
   const out: SerializedTab[] = [];
   for (const tab of tabs) {
-    const s = serializeTab(tab);
+    const s = serializeTab(tab, forHandoff);
     if (s) out.push(s);
   }
   return out;
@@ -118,6 +218,7 @@ function hydrateNode(
   node: SerializedNode,
   allocId: () => number,
   acc: { activeLeafId: number | null },
+  keepPty: boolean,
 ): PaneNode {
   if (node.kind === "leaf") {
     const id = allocId();
@@ -126,10 +227,13 @@ function hydrateNode(
       kind: "leaf",
       id,
       ...(node.cwd !== undefined && { cwd: node.cwd }),
-      ...(node.ptyAttachment && { ptyAttachment: node.ptyAttachment }),
+      ...(keepPty &&
+        node.ptyAttachment && { ptyAttachment: node.ptyAttachment }),
     };
   }
-  const children = node.children.map((c) => hydrateNode(c, allocId, acc));
+  const children = node.children.map((c) =>
+    hydrateNode(c, allocId, acc, keepPty),
+  );
   if (children.length === 0) return { kind: "leaf", id: allocId() };
   if (children.length === 1) return children[0];
   return { kind: "split", id: allocId(), dir: node.dir, children };
@@ -138,9 +242,10 @@ function hydrateNode(
 function hydrateTree(
   tree: SerializedNode,
   allocId: () => number,
+  keepPty: boolean,
 ): HydratedTree {
   const acc: { activeLeafId: number | null } = { activeLeafId: null };
-  const paneTree = hydrateNode(tree, allocId, acc);
+  const paneTree = hydrateNode(tree, allocId, acc, keepPty);
   const leaves = collectLeaves(paneTree);
   const activeLeafId = acc.activeLeafId ?? leaves[0]?.id ?? allocId();
   const firstLeafCwd =
@@ -167,7 +272,7 @@ function hydrateTab(
   switch (s.kind) {
     case "terminal": {
       const { tree, activeLeafId, firstLeafCwd, hasPtyAttachment } =
-        hydrateTree(s.tree, allocId);
+        hydrateTree(s.tree, allocId, keepPty);
       const title =
         s.customTitle ??
         (firstLeafCwd ? basename(firstLeafCwd) : s.blocks ? "blocks" : "shell");
@@ -213,6 +318,39 @@ function hydrateTab(
         title: basename(s.path),
         path: s.path,
       } satisfies MarkdownTab;
+    case "git-diff":
+      return {
+        id: allocId(),
+        kind: "git-diff",
+        spaceId,
+        title: s.title,
+        path: s.path,
+        repoRoot: s.repoRoot,
+        mode: s.mode,
+        originalPath: s.originalPath,
+        preview: s.preview,
+      } satisfies GitDiffTab;
+    case "git-history":
+      return {
+        id: allocId(),
+        kind: "git-history",
+        spaceId,
+        title: s.title,
+        repoRoot: s.repoRoot,
+      } satisfies GitHistoryTab;
+    case "git-commit-file":
+      return {
+        id: allocId(),
+        kind: "git-commit-file",
+        spaceId,
+        title: s.title,
+        repoRoot: s.repoRoot,
+        sha: s.sha,
+        shortSha: s.shortSha,
+        subject: s.subject,
+        path: s.path,
+        originalPath: s.originalPath,
+      } satisfies GitCommitFileDiffTab;
     default:
       return null;
   }
@@ -242,8 +380,8 @@ function stampNode(
 ): SerializedNode {
   if (node.kind === "leaf") {
     const attachment = next();
-    if (!attachment) return node;
-    return { ...node, ptyAttachment: attachment };
+    const { ptyAttachment: _stale, ...rest } = node;
+    return attachment ? { ...rest, ptyAttachment: attachment } : rest;
   }
   return {
     ...node,

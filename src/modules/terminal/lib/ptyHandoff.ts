@@ -16,6 +16,12 @@ export type PtyReplayPayload = {
   rows: number;
   attachToken: string;
   leaseEpoch: string;
+  /**
+   * Stream offset of the first live data frame after `events`. The backend
+   * rebases the PTY's output stream here when it snapshots the history, so the
+   * receiver must start counting from it, not from zero.
+   */
+  streamOffset?: number;
   events: PtyReplayEvent[];
 };
 
@@ -33,6 +39,20 @@ export type PtyLease = {
 };
 
 type IdPayload = { handoffId: string; ids: number[] };
+
+// Per-window random start so two windows handing off in the same millisecond
+// do not mint the same id.
+let handoffSeq = Math.floor(Math.random() * 1000);
+
+/**
+ * A fresh handoff id. The backend parses it as a `u64` (`parse_handoff`), so
+ * it must be a plain decimal integer: `ms * 1000 + seq` stays well inside
+ * `Number.MAX_SAFE_INTEGER` and increases within a window.
+ */
+export function nextHandoffId(now: number = Date.now()): string {
+  handoffSeq = (handoffSeq + 1) % 1000;
+  return String(Math.trunc(now) * 1000 + handoffSeq);
+}
 
 export function buildPrepareHandoff(
   handoffId: string,

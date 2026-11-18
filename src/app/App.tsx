@@ -84,6 +84,11 @@ import {
   useSpaces,
   useSpacesBoot,
 } from "@/modules/spaces";
+import { selectHostedSpaces } from "@/modules/spaces/lib/useSpaces";
+import {
+  spaceTransferToastId,
+  useSpaceTransfers,
+} from "@/modules/spaces/lib/spaceTransfers";
 import {
   reclaimHost,
   SPACE_RECLAIM_REQUEST_EVENT,
@@ -95,19 +100,28 @@ import {
   type WindowReadyPayload,
 } from "@/modules/spaces/lib/crossWindowSync";
 import { createAttachWaiter } from "@/modules/spaces/lib/attachWaiter";
-import { planSpaceHandoff } from "@/modules/spaces/lib/handoff";
+import {
+  isSpaceWindow,
+  pickHandoffFallback,
+  planSpaceHandoff,
+  spaceWindowLabel,
+} from "@/modules/spaces/lib/handoff";
 import { moveTabsAcrossWindows } from "@/modules/spaces/lib/moveTabsAcrossWindows";
 import {
   hydrateTabs,
-  serializeTabs,
+  isHandoffMovable,
+  serializeTabsForHandoff,
   stampHandoffAttachments,
 } from "@/modules/spaces/lib/serialize";
 import {
+  forgetWindowReady,
+  isWindowReady,
   noteWindowReady,
   waitForWindowReady,
 } from "@/modules/spaces/lib/windowReady";
 import {
   buildAttachHandoff,
+  nextHandoffId,
   type PtyHandoffCheckpoint,
   type PtyReplayPayload,
 } from "@/modules/terminal/lib/ptyHandoff";
@@ -131,6 +145,7 @@ import {
   isTerminalSurfaceTarget,
   leafIds,
   navigateFocusedBlocks,
+  dropHandoffReplays,
   queueHandoffReplay,
   type PaneBounds,
   ptyIdForLeaf,
@@ -191,16 +206,20 @@ const BenchBridge = __TERAX_BENCH__
   ? lazy(() => import("@/bench/BenchBridge"))
   : null;
 
-let handoffCounter = 0;
-function nextHandoffId(): string {
-  handoffCounter += 1;
-  return `${Date.now()}-${handoffCounter}`;
-}
-
 const tauriAttachListen = (
   event: string,
   fn: (event: { payload: TabsAttachedPayload }) => void,
 ) => listen(event, fn);
+
+async function windowExists(label: string): Promise<boolean> {
+  try {
+    const { WebviewWindow } = await import("@tauri-apps/api/webviewWindow");
+    return (await WebviewWindow.getByLabel(label)) !== null;
+  } catch {
+    // Unknown: keep the readiness we have rather than wait on a guess.
+    return true;
+  }
+}
 
 function restoreHandoffSource(
   snapshot: Tab[],
@@ -212,7 +231,7 @@ function restoreHandoffSource(
 ): Tab[] {
   for (const replay of replays) queueHandoffReplay(replay);
   const serialized = stampHandoffAttachments(
-    serializeTabs(snapshot),
+    serializeTabsForHandoff(snapshot),
     checkpoints,
     leafPtyIds,
   );
@@ -232,7 +251,6 @@ export default function App() {
     reorderTabByGap,
     newTabInSpace,
     removeTabsForSpace,
-    detachTabsForSpace,
     detachTabsForHandoff,
     attachTabsForSpace,
     markBooted,
@@ -376,6 +394,13 @@ export default function App() {
       return !space || (space.hostWindowLabel ?? "main") === windowLabel;
     });
   }, [windowLabel]);
+
+  // Incoming handoffs this window is attaching or just attached, so a later
+  // correction from the source can undo exactly that handoff's tabs.
+  const incomingHandoffsRef = useRef(
+    new Map<string, { ptyIds: number[]; tabIds: number[] }>(),
+  );
+  const abandonedHandoffsRef = useRef(new Set<string>());
 
   const prevSpaceRef = useRef<string | null>(null);
   useEffect(() => {
@@ -625,12 +650,15 @@ export default function App() {
   });
 
   const cycleSpace = useCallback((delta: 1 | -1) => {
-    const { spaces, activeId: sid, setActive } = useSpaces.getState();
+    const { spaces: all, activeId: sid, setActive } = useSpaces.getState();
+    // Only cycle through spaces this window shows; a space hosted elsewhere
+    // would render an empty tab list here. A space window has just one.
+    const spaces = selectHostedSpaces(all, windowLabel);
     if (spaces.length < 2) return;
     const idx = spaces.findIndex((s) => s.id === sid);
     const next = (idx + delta + spaces.length) % spaces.length;
     setActive(spaces[next].id);
-  }, []);
+  }, [windowLabel]);
 
   const captureActiveSelection = useCallback((): string | null => {
     const t = tabs.find((x) => x.id === activeId);
@@ -1290,6 +1318,8 @@ export default function App() {
   const activeCwd = activeTerminalLeafCwd;
 
   const handleNewSpace = useCallback(() => {
+    // A space window is dedicated to one space; new spaces start in main.
+    if (isSpaceWindow(windowLabel)) return null;
     const { spaces, create, setActive } = useSpaces.getState();
     const meta = create({
       name: `Space ${spaces.length + 1}`,
@@ -1300,7 +1330,14 @@ export default function App() {
     newTab(activeCwd ?? undefined);
     setActive(meta.id);
     return meta.id;
-  }, [activeCwd, home, workspaceEnv, newTab, setActiveSpaceForNewTabs]);
+  }, [
+    windowLabel,
+    activeCwd,
+    home,
+    workspaceEnv,
+    newTab,
+    setActiveSpaceForNewTabs,
+  ]);
 
   const handleDeleteSpace = useCallback(
     (id: string) => {
@@ -1335,14 +1372,46 @@ export default function App() {
         return;
       }
 
+      // Tabs that cannot travel losslessly (private terminals, AI diffs,
+      // unsaved editors) stay in this window under another space it hosts.
+      const fallbackSpaceId = pickHandoffFallback(
+        state.spaces,
+        spaceId,
+        windowLabel,
+      );
+      const unmovable = tabsRef.current.filter(
+        (t) => t.spaceId === spaceId && !isHandoffMovable(t),
+      );
+      if (unmovable.length > 0 && fallbackSpaceId === null) {
+        toast(`Save or close ${unmovable.length} tab(s) first`, {
+          description:
+            "Private terminals, AI diffs and unsaved editors cannot move, and no other space in this window can keep them.",
+        });
+        return;
+      }
+
+      const transfers = useSpaceTransfers.getState();
+      if (transfers.pending[spaceId]) return;
+      const toastId = spaceTransferToastId(spaceId);
+      transfers.begin(spaceId, "opening");
+      toast.loading(`Opening ${space.name} in a new window…`, {
+        id: toastId,
+        description: "Moving its tabs and terminals.",
+      });
+
       void (async () => {
-        const snapshot = tabsRef.current.filter((t) => t.spaceId === spaceId);
-        let detached = false;
+        let detachedTabs: Tab[] = [];
         let leafPtyIdsSnapshot: Array<number | null> = [];
         let rollbackReplays: PtyReplayPayload[] = [];
         let rollbackCheckpoints: PtyHandoffCheckpoint[] = [];
+        const wasActive = useSpaces.getState().activeId === spaceId;
         try {
           await flushNow();
+          // A previous window for this space announced readiness and was
+          // closed; a new one must announce again before we emit to it.
+          if (isWindowReady(plan.to) && !(await windowExists(plan.to))) {
+            forgetWindowReady(plan.to);
+          }
           await invoke("open_space_window", { spaceId });
           await waitForWindowReady(plan.to);
 
@@ -1351,14 +1420,18 @@ export default function App() {
           // overwrites the space state on disk with an empty list.
           await state.assignSpaceToWindow(spaceId, plan.to);
 
-          const serialized = serializeTabs(snapshot);
-          const { ptyIds, leafPtyIds } = detachTabsForHandoff(spaceId);
+          // Plan, serialize and detach from the same tabs in the same tick so
+          // the leaf -> PTY order always matches what is sent.
+          const { ptyIds, leafPtyIds, detached, kept } = detachTabsForHandoff(
+            spaceId,
+            { isMovable: isHandoffMovable, fallbackSpaceId },
+          );
+          detachedTabs = detached;
           leafPtyIdsSnapshot = leafPtyIds;
-          detached = true;
 
           const result = await moveTabsAcrossWindows({
             handoffId: nextHandoffId(),
-            tabs: serialized,
+            tabs: serializeTabsForHandoff(detached),
             ptyIds,
             leafPtyIds,
             targetWindow: plan.to,
@@ -1375,13 +1448,40 @@ export default function App() {
           });
           if (!result.ok) throw new Error(result.error);
           await state.assignSpaceToWindow(spaceId, plan.to);
+          toast.success(`${space.name} opened in its own window`, {
+            id: toastId,
+            description: undefined,
+          });
+
+          // This window no longer shows the moved space; land on the space
+          // that kept the leftovers (or any other one this window hosts).
+          if (wasActive && fallbackSpaceId) {
+            useSpaces.getState().setActive(fallbackSpaceId);
+            if (!tabsRef.current.some((t) => t.spaceId === fallbackSpaceId)) {
+              const root = useSpaces
+                .getState()
+                .spaces.find((s) => s.id === fallbackSpaceId)?.root;
+              newTabInSpace(fallbackSpaceId, root ?? undefined);
+            }
+          }
+          if (kept.length > 0 && fallbackSpaceId) {
+            const name =
+              useSpaces
+                .getState()
+                .spaces.find((s) => s.id === fallbackSpaceId)?.name ??
+              "another space";
+            toast(`${kept.length} tab(s) stayed in ${name}`, {
+              description:
+                "Private terminals, AI diffs and unsaved editors cannot move between windows.",
+            });
+          }
         } catch (e) {
           console.error("[terax] open space window failed:", e);
           try {
             await state.assignSpaceToWindow(spaceId, plan.from);
-            if (detached && snapshot.length > 0) {
+            if (detachedTabs.length > 0) {
               const restored = restoreHandoffSource(
-                snapshot,
+                detachedTabs,
                 spaceId,
                 rollbackReplays,
                 rollbackCheckpoints,
@@ -1389,6 +1489,14 @@ export default function App() {
                 allocId,
               );
               attachTabsForSpace(spaceId, restored);
+            } else {
+              // Nothing moved (the new window never became ready). Close the
+              // empty window instead of leaving a dead frame behind.
+              forgetWindowReady(plan.to);
+              const { WebviewWindow } = await import(
+                "@tauri-apps/api/webviewWindow"
+              );
+              await (await WebviewWindow.getByLabel(plan.to))?.destroy();
             }
           } catch (rollbackError) {
             console.error(
@@ -1396,6 +1504,12 @@ export default function App() {
               rollbackError,
             );
           }
+          toast.error("Could not open the space in a new window", {
+            id: toastId,
+            description: e instanceof Error ? e.message : String(e),
+          });
+        } finally {
+          useSpaceTransfers.getState().end(spaceId);
         }
       })();
     },
@@ -1404,6 +1518,7 @@ export default function App() {
       flushNow,
       detachTabsForHandoff,
       attachTabsForSpace,
+      newTabInSpace,
       allocId,
     ],
   );
@@ -1445,6 +1560,11 @@ export default function App() {
             if (!payload?.spaceId || !payload.hostWindowLabel) {
               void refreshRegistry();
               return;
+            }
+            if (payload.reason === HOST_CHANGED_REASONS.windowClosed) {
+              // The window is gone: a reopened window for this space reuses the
+              // label and must announce itself again before a handoff targets it.
+              forgetWindowReady(spaceWindowLabel(payload.spaceId));
             }
             void (async () => {
               try {
@@ -1517,22 +1637,43 @@ export default function App() {
             const { spaceId, toWindow, handoffId } = event.payload ?? {};
             if (!spaceId || !toWindow || windowLabel === toWindow) return;
             // Only the current host answers; other windows ignore the request.
-            if (windowLabel !== `space-${spaceId}` && windowLabel !== "main") {
+            if (
+              windowLabel !== spaceWindowLabel(spaceId) &&
+              windowLabel !== "main"
+            ) {
               return;
             }
             void (async () => {
               try {
                 await flushNow();
-                const snapshot = tabsRef.current.filter(
-                  (t) => t.spaceId === spaceId,
+                const fallbackSpaceId = pickHandoffFallback(
+                  useSpaces.getState().spaces,
+                  spaceId,
+                  windowLabel,
                 );
-                const serialized = serializeTabs(snapshot);
-                const { ptyIds, leafPtyIds } = detachTabsForHandoff(spaceId);
+                const unmovable = tabsRef.current.filter(
+                  (t) => t.spaceId === spaceId && !isHandoffMovable(t),
+                );
+                if (unmovable.length > 0 && fallbackSpaceId === null) {
+                  // This window closes after a reclaim, so leftovers would be
+                  // lost. Keep everything here and ask the user instead.
+                  toast(`Save or close ${unmovable.length} tab(s) first`, {
+                    description:
+                      "Private terminals, AI diffs and unsaved editors cannot move back to the main window.",
+                  });
+                  await getCurrentWindow().setFocus();
+                  return;
+                }
+                const { ptyIds, leafPtyIds, detached } = detachTabsForHandoff(
+                  spaceId,
+                  { isMovable: isHandoffMovable, fallbackSpaceId },
+                );
+                const snapshot = detached;
                 let rollbackReplays: PtyReplayPayload[] = [];
                 let rollbackCheckpoints: PtyHandoffCheckpoint[] = [];
                 const result = await moveTabsAcrossWindows({
                   handoffId: handoffId ?? nextHandoffId(),
-                  tabs: serialized,
+                  tabs: serializeTabsForHandoff(detached),
                   ptyIds,
                   leafPtyIds,
                   targetWindow: toWindow,
@@ -1589,15 +1730,62 @@ export default function App() {
                 console.error("[terax] handoff ack failed:", e);
               }
             };
+            // Release only what *this* handoff built: the PTYs went back to
+            // the source, so the views are dropped without closing them, and
+            // tabs this window already had in the space are left alone.
+            const releaseHandoff = () => {
+              const record = incomingHandoffsRef.current.get(handoffId);
+              incomingHandoffsRef.current.delete(handoffId);
+              if (!record) return;
+              dropHandoffReplays(record.ptyIds);
+              if (record.tabIds.length === 0) return;
+              const ids = new Set(record.tabIds);
+              detachTabsForHandoff(payload.spaceId, {
+                isMovable: (t) => ids.has(t.id),
+                fallbackSpaceId: null,
+                tabIds: record.tabIds,
+              });
+            };
+            // A return this window asked for: close its spinner and toast.
+            const settleReturn = (error?: string) => {
+              const transfers = useSpaceTransfers.getState();
+              if (transfers.pending[payload.spaceId] !== "returning") return;
+              transfers.end(payload.spaceId);
+              const name =
+                useSpaces
+                  .getState()
+                  .spaces.find((s) => s.id === payload.spaceId)?.name ??
+                "The space";
+              const id = spaceTransferToastId(payload.spaceId);
+              if (error) {
+                toast.error(`Could not bring ${name} back`, {
+                  id,
+                  description: error,
+                });
+              } else {
+                toast.success(`${name} is back in this window`, {
+                  id,
+                  description: undefined,
+                });
+              }
+            };
             try {
-              if (disposed) return;
+              // A disposed effect only stops registering *new* listeners. An
+              // event already delivered to this handler must still be answered,
+              // otherwise the source times out and rolls back with no replays,
+              // leaving a live PTY with no tab to host it.
               const correction = payload.tabs.length === 0;
               if (correction) {
-                // The source rolled back; drop whatever this window built.
-                detachTabsForSpace(payload.spaceId);
+                // The source rolled back. The original event may still be
+                // mid-attach, so mark it abandoned before releasing.
+                abandonedHandoffsRef.current.add(handoffId);
+                releaseHandoff();
                 await ack([], "source rolled back");
+                settleReturn("The move was rolled back.");
                 return;
               }
+              const ptyIds = payload.checkpoints.map((c) => c.ptyId);
+              incomingHandoffsRef.current.set(handoffId, { ptyIds, tabIds: [] });
 
               // Adopt the space locally before any debounced persistence runs:
               // the boot path saw this space as hosted elsewhere, so without
@@ -1633,14 +1821,27 @@ export default function App() {
               if (meta) await adoptWorkspaceEnv(meta.env);
 
               let replays: TabsAttachedPayload["replays"] = [];
-              if (payload.checkpoints.length > 0) {
-                const ptyIds = payload.checkpoints.map((c) => c.ptyId);
+              if (ptyIds.length > 0) {
                 replays =
                   (await invoke<PtyReplayPayload[]>(
                     "pty_attach",
                     buildAttachHandoff(handoffId, ptyIds),
                   )) ?? [];
+                // A leaf whose replay is missing would spawn a fresh shell and
+                // strand its real PTY here. Fail the move so the source rolls
+                // back and keeps the session.
+                const got = new Set(replays.map((r) => r.ptyId));
+                const missing = ptyIds.filter((id) => !got.has(id));
+                if (missing.length > 0) {
+                  throw new Error(
+                    `terminal(s) ${missing.join(", ")} returned no replay`,
+                  );
+                }
                 for (const replay of replays) queueHandoffReplay(replay);
+              }
+              if (abandonedHandoffsRef.current.delete(handoffId)) {
+                releaseHandoff();
+                return;
               }
 
               const stamped = stampHandoffAttachments(
@@ -1651,15 +1852,34 @@ export default function App() {
               const hydrated = hydrateTabs(stamped, payload.spaceId, allocId, {
                 keepPty: true,
               });
-              if (hydrated.length > 0 && !disposed) {
-                attachTabsForSpace(payload.spaceId, hydrated);
-                setActiveId(hydrated[0].id);
-                useSpaces.getState().setActive(payload.spaceId);
+              // Once a handoff event is being handled it must finish: `disposed`
+              // only guards listener registration. A re-render mid-handoff (e.g.
+              // adoptWorkspaceEnv changing state) must not leave the target with
+              // an attached PTY and no tab hosting it.
+              if (hydrated.length === 0) {
+                throw new Error("no tabs could be restored from the handoff");
               }
+              incomingHandoffsRef.current.set(handoffId, {
+                ptyIds,
+                tabIds: hydrated.map((t) => t.id),
+              });
+              attachTabsForSpace(payload.spaceId, hydrated);
+              setActiveId(hydrated[0].id);
+              useSpaces.getState().setActive(payload.spaceId);
               await ack(replays);
+              settleReturn();
+              // The source may still fail its commit and send a correction, so
+              // keep the record briefly instead of forgetting it at once.
+              setTimeout(() => {
+                incomingHandoffsRef.current.delete(handoffId);
+                abandonedHandoffsRef.current.delete(handoffId);
+              }, 60_000);
             } catch (e) {
               console.error("[terax] cross-window tab attach failed:", e);
-              await ack([], e instanceof Error ? e.message : String(e));
+              releaseHandoff();
+              const reason = e instanceof Error ? e.message : String(e);
+              await ack([], reason);
+              settleReturn(reason);
             }
           })();
         }),
@@ -1704,7 +1924,6 @@ export default function App() {
     adoptWorkspaceEnv,
     attachTabsForSpace,
     detachTabsForHandoff,
-    detachTabsForSpace,
     flushNow,
     setActiveId,
   ]);
@@ -1719,18 +1938,20 @@ export default function App() {
         const tab = tabsRef.current.find((t) => t.id === tabId);
         if (!tab) return;
         void (async () => {
-          const serialized = serializeTabs([tab]);
-          if (serialized.length === 0) {
+          if (!isHandoffMovable(tab)) {
             toast("This tab cannot move between windows", {
-              description: "Its type has no cross-window representation.",
+              description:
+                "Private terminals, AI diffs and unsaved editors stay in their window.",
             });
             return;
           }
+          const serialized = serializeTabsForHandoff([tab]);
           try {
-            const { ptyIds, leafPtyIds } = detachTabsForHandoff(
-              tab.spaceId,
-              [tabId],
-            );
+            const { ptyIds, leafPtyIds } = detachTabsForHandoff(tab.spaceId, {
+              isMovable: isHandoffMovable,
+              fallbackSpaceId: null,
+              tabIds: [tabId],
+            });
             let rollbackReplays: PtyReplayPayload[] = [];
             let rollbackCheckpoints: PtyHandoffCheckpoint[] = [];
             const result = await moveTabsAcrossWindows({
@@ -1791,7 +2012,23 @@ export default function App() {
         .getState()
         .spaces.find((s) => s.id === spaceId);
       const host = reclaimHost(space, windowLabel);
-      if (!host) return;
+      if (!host || !space) return;
+      const transfers = useSpaceTransfers.getState();
+      if (transfers.pending[spaceId]) return;
+      const toastId = spaceTransferToastId(spaceId);
+      // The other window does the move; this one hears back when the tabs
+      // arrive (SPACE_TABS_MOVED_EVENT), or gives up.
+      transfers.begin(spaceId, "returning", () => {
+        toast.error(`${space.name} did not come back`, {
+          id: toastId,
+          description:
+            "Its window did not answer. It may be asking you to save or close tabs first.",
+        });
+      });
+      toast.loading(`Bringing ${space.name} back…`, {
+        id: toastId,
+        description: "Moving its tabs and terminals to this window.",
+      });
       void (async () => {
         try {
           await waitForWindowReady(host);
@@ -1802,7 +2039,9 @@ export default function App() {
           });
         } catch (e) {
           console.error("[terax] reclaim request failed:", e);
-          toast("Could not bring the space back", {
+          useSpaceTransfers.getState().end(spaceId);
+          toast.error("Could not bring the space back", {
+            id: toastId,
             description: "Its window may have closed.",
           });
         }

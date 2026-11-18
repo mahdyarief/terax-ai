@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  dropHandoffReplays,
   matchCheckpointToLeaf,
   queueHandoffReplay,
   takeHandoffReplay,
@@ -49,6 +50,16 @@ describe("handoffSession", () => {
 
     expect(takeHandoffReplay(7)).not.toBeNull();
     expect(takeHandoffReplay(7)).toBeNull();
+  });
+
+  it("drops queued replays for an abandoned handoff", () => {
+    queueHandoffReplay(replay(7));
+    queueHandoffReplay(replay(8));
+
+    dropHandoffReplays([7]);
+
+    expect(takeHandoffReplay(7)).toBeNull();
+    expect(takeHandoffReplay(8)?.ptyId).toBe(8);
   });
 
   it("returns null when no replay was queued", () => {

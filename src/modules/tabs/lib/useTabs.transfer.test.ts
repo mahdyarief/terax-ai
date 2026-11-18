@@ -3,6 +3,7 @@ import {
   attachTabsBySpace,
   detachTabsBySpace,
   detachTabsForHandoff,
+  planHandoffDetach,
 } from "./useTabs";
 
 describe("detachTabsBySpace", () => {
@@ -135,6 +136,48 @@ describe("detachTabsForHandoff", () => {
     expect(ptyIds).toEqual([]);
     expect(leafPtyIds).toEqual([]);
     expect(detached).toEqual([]);
+  });
+});
+
+describe("planHandoffDetach", () => {
+  const tabs = [
+    { id: 1, kind: "terminal", spaceId: "a" },
+    { id: 2, kind: "ai-diff", spaceId: "a" },
+    { id: 3, kind: "editor", spaceId: "b" },
+    { id: 4, kind: "editor", spaceId: "a" },
+  ] as any;
+  const isMovable = (t: any) => t.kind !== "ai-diff";
+
+  it("moves movable tabs and re-homes the rest onto the fallback space", () => {
+    const { detached, kept, remaining } = planHandoffDetach(tabs, "a", {
+      isMovable,
+      fallbackSpaceId: "b",
+    });
+    expect(detached.map((t: any) => t.id)).toEqual([1, 4]);
+    expect(kept).toEqual([{ id: 2, kind: "ai-diff", spaceId: "b" }]);
+    expect(remaining.map((t: any) => [t.id, t.spaceId])).toEqual([
+      [2, "b"],
+      [3, "b"],
+    ]);
+  });
+
+  it("reports unmovable tabs without touching them when there is no fallback", () => {
+    const { kept, remaining } = planHandoffDetach(tabs, "a", {
+      isMovable,
+      fallbackSpaceId: null,
+    });
+    expect(kept.map((t: any) => [t.id, t.spaceId])).toEqual([[2, "a"]]);
+    expect(remaining.map((t: any) => t.id)).toEqual([2, 3]);
+  });
+
+  it("honours a tab id filter", () => {
+    const { detached, remaining } = planHandoffDetach(tabs, "a", {
+      isMovable,
+      fallbackSpaceId: "b",
+      tabIds: [4],
+    });
+    expect(detached.map((t: any) => t.id)).toEqual([4]);
+    expect(remaining.map((t: any) => t.id)).toEqual([1, 2, 3]);
   });
 });
 

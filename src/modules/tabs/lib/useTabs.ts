@@ -611,6 +611,45 @@ export function detachTabsForHandoff(
   return { ptyIds, leafPtyIds };
 }
 
+/**
+ * Splits a space's tabs for a cross-window handoff. `detached` are the tabs
+ * that travel (in tab order, matching `serializeTabsForHandoff`); `kept` are
+ * the ones that cannot travel losslessly, re-homed onto `fallbackSpaceId` so
+ * they stay in this window instead of being dropped. Without a fallback the
+ * unmovable tabs are reported in `kept` but left in place untouched.
+ */
+export function planHandoffDetach(
+  tabs: Tab[],
+  spaceId: string,
+  opts: {
+    isMovable: (tab: Tab) => boolean;
+    fallbackSpaceId: string | null;
+    tabIds?: number[];
+  },
+): { detached: Tab[]; kept: Tab[]; remaining: Tab[] } {
+  const idFilter = opts.tabIds ? new Set(opts.tabIds) : null;
+  const detached: Tab[] = [];
+  const kept: Tab[] = [];
+  const remaining: Tab[] = [];
+  for (const tab of tabs) {
+    const inScope =
+      tab.spaceId === spaceId && (!idFilter || idFilter.has(tab.id));
+    if (!inScope) {
+      remaining.push(tab);
+    } else if (opts.isMovable(tab)) {
+      detached.push(tab);
+    } else if (opts.fallbackSpaceId !== null) {
+      const rehomed = { ...tab, spaceId: opts.fallbackSpaceId } as Tab;
+      kept.push(rehomed);
+      remaining.push(rehomed);
+    } else {
+      kept.push(tab);
+      remaining.push(tab);
+    }
+  }
+  return { detached, kept, remaining };
+}
+
 export function attachTabsBySpace(
   tabs: Tab[],
   incoming: Tab[],
@@ -1614,36 +1653,42 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   const detachTabsForHandoffLocal = useCallback(
     (
       spaceId: string,
-      tabIds?: number[],
-    ): { ptyIds: number[]; leafPtyIds: Array<number | null> } => {
-      const { ptyIds, leafPtyIds } = detachTabsForHandoff(
+      opts: {
+        isMovable: (tab: Tab) => boolean;
+        fallbackSpaceId: string | null;
+        tabIds?: number[];
+      },
+    ): {
+      ptyIds: number[];
+      leafPtyIds: Array<number | null>;
+      detached: Tab[];
+      kept: Tab[];
+    } => {
+      // Plan, collect PTYs and release views from one array in one tick, so
+      // the serialized tabs and leaf->PTY order can never drift apart.
+      const { detached, kept, remaining } = planHandoffDetach(
         tabsRef.current,
         spaceId,
-        {
-          ptyIdForLeaf,
-          detachGhosttyView: detachSessionView,
-          tabIds,
-        },
+        opts,
       );
-      const idFilter = tabIds ? new Set(tabIds) : null;
-      const detached = tabsRef.current.filter(
-        (t) =>
-          t.spaceId === spaceId && (!idFilter || idFilter.has(t.id)),
-      );
-      const remaining = tabsRef.current.filter(
-        (t) =>
-          t.spaceId !== spaceId || (idFilter && !idFilter.has(t.id)),
-      );
-      if (detached.length === 0) return { ptyIds, leafPtyIds };
-      const activeDetached = detached.some((t) => t.id === activeIdRef.current);
-      const nextActive = activeDetached ? (remaining[0]?.id ?? null) : null;
+      const { ptyIds, leafPtyIds } = detachTabsForHandoff(detached, spaceId, {
+        ptyIdForLeaf,
+        detachGhosttyView: detachSessionView,
+      });
+      if (detached.length === 0 && kept.length === 0) {
+        return { ptyIds, leafPtyIds, detached, kept };
+      }
+      const activeGone = !remaining.some((t) => t.id === activeIdRef.current);
+      const nextActive = activeGone
+        ? (kept[0]?.id ?? remaining[0]?.id ?? null)
+        : null;
       tabsRef.current = remaining;
       setTabs(remaining);
       if (nextActive !== null) {
         activeIdRef.current = nextActive;
         setActiveId(nextActive);
       }
-      return { ptyIds, leafPtyIds };
+      return { ptyIds, leafPtyIds, detached, kept };
     },
     [setActiveId, setTabs],
   );

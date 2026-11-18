@@ -6,6 +6,7 @@ import { isLeaf, type PaneNode } from "@/modules/terminal/lib/panes";
 import { parseWorkspaceScopeKey, type WorkspaceEnv } from "@/modules/workspace";
 import { useEffect, useRef } from "react";
 import { activeSpaceEnv, freshTabCwd } from "./activeSpace";
+import { spaceIdFromWindowLabel } from "./handoff";
 import { freshTerminalTab, hydrateTabs } from "./serialize";
 import { loadAll, type SpaceMeta, saveActiveId, saveSpacesList } from "./store";
 import { selectHostedSpaces, useSpaces } from "./useSpaces";
@@ -15,6 +16,32 @@ export function spacesForWindow(
   windowLabel: string,
 ): SpaceMeta[] {
   return selectHostedSpaces(spaces, windowLabel);
+}
+
+/**
+ * Which spaces this window should render on boot, plus whether their tabs are
+ * still in flight from another window.
+ *
+ * A space window is created before its source publishes the new host, so the
+ * persisted registry can still list the space as hosted by "main". In that
+ * case the window label is authoritative for which space it exists to show,
+ * and `awaitingHandoff` tells boot to wait for SPACE_TABS_MOVED_EVENT instead
+ * of restoring the same tabs from disk (or spawning a duplicate shell).
+ */
+export function resolveBootTargets(
+  spaces: SpaceMeta[],
+  windowLabel: string,
+): { hosted: SpaceMeta[]; awaitingHandoff: boolean } {
+  const hosted = spacesForWindow(spaces, windowLabel);
+  if (hosted.length > 0) return { hosted, awaitingHandoff: false };
+
+  const labelSpaceId = spaceIdFromWindowLabel(windowLabel);
+  if (!labelSpaceId) return { hosted, awaitingHandoff: false };
+
+  const target = spaces.find((s) => s.id === labelSpaceId);
+  if (!target) return { hosted, awaitingHandoff: false };
+
+  return { hosted: [target], awaitingHandoff: true };
 }
 
 /**
@@ -153,7 +180,11 @@ export function useSpacesBoot({
           }
         }
 
-        const hosted = spacesForWindow(registry, windowLabel);
+        const { hosted, awaitingHandoff } = resolveBootTargets(
+          registry,
+          windowLabel,
+        );
+
         if (hosted.length === 0) {
           // No space is hosted here yet. Keep the full registry for the
           // switcher, but render an empty tab list until a handoff arrives.
@@ -163,10 +194,12 @@ export function useSpacesBoot({
         }
 
         const restored: Tab[] = [];
-        for (const space of hosted) {
-          const st = states.get(space.id);
-          if (!st) continue;
-          restored.push(...hydrateTabs(st.tabs, space.id, allocId));
+        if (!awaitingHandoff) {
+          for (const space of hosted) {
+            const st = states.get(space.id);
+            if (!st) continue;
+            restored.push(...hydrateTabs(st.tabs, space.id, allocId));
+          }
         }
 
         const perWindow = activeIdByWindow[windowLabel] ?? null;
@@ -179,6 +212,16 @@ export function useSpacesBoot({
         // below; env is set synchronously so cwd resolution picks WSL vs local.
         const env = activeSpaceEnv(hosted, saveActive);
         const restoredHome = await adoptWorkspaceEnv(env);
+
+        if (awaitingHandoff) {
+          // The source window still owns this space's tabs and is about to
+          // hand them over. Select the space now so the window shows the right
+          // workspace immediately, and let SPACE_TABS_MOVED_EVENT supply the
+          // tabs; hydrating from disk or spawning a fresh shell here would
+          // duplicate the tab that is already in flight.
+          useSpaces.getState().hydrate(registry, saveActive, {});
+          return;
+        }
 
         // Active space must never be empty, else its tab list shows nothing.
         if (!restored.some((t) => t.spaceId === saveActive)) {

@@ -35,6 +35,9 @@ struct QueueState {
     finished: bool,
     /// Extra bytes the reader may retain beyond `MAX_BUFFERED_BYTES`.
     overdraft: usize,
+    /// Bytes the reader is about to push that a rebase already delivered
+    /// through the replay log; they are dropped instead of sent twice.
+    skip: u64,
 }
 
 impl QueueState {
@@ -146,6 +149,7 @@ impl OutputQueue {
                 drain_timed_out: false,
                 finished: false,
                 overdraft: 0,
+                skip: 0,
             }),
             changed: Condvar::new(),
             closed: AtomicBool::new(false),
@@ -211,6 +215,18 @@ impl OutputQueue {
         if self.is_closed() {
             return false;
         }
+        // Applied after any backpressure wait: a rebase can land while this
+        // reader waits, and the chunk it holds is then already replayed.
+        let bytes = if state.skip > 0 {
+            let dropped = (state.skip as usize).min(bytes.len());
+            state.skip -= dropped as u64;
+            &bytes[dropped..]
+        } else {
+            bytes
+        };
+        if bytes.is_empty() {
+            return true;
+        }
         let before = state.pending_len();
         if before == 0 {
             state.clear_pending();
@@ -270,6 +286,31 @@ impl OutputQueue {
         state.credit.sent(n);
         state.last_sent_at = Some(now);
         Some((offset, n))
+    }
+
+    /// Restarts delivery at stream `offset`, the output-byte count of a replay
+    /// snapshot a new receiver rebuilds from. Pending and in-flight bytes are
+    /// all inside that snapshot, so they are discarded rather than sent again;
+    /// bytes the reader already logged but has not pushed yet are skipped.
+    ///
+    /// The caller holds the replay lock, so the reader cannot log more output
+    /// meanwhile; it logs before it pushes, so `offset` is never behind what
+    /// this queue has seen.
+    pub fn rebase(&self, offset: u64) {
+        let mut state = self.lock();
+        let seen = state.credit.sent_bytes() + state.pending_len() as u64;
+        debug_assert!(offset >= seen, "replay is never behind the queue");
+        state.skip = offset.saturating_sub(seen);
+        state.clear_pending();
+        state.credit.rebase(offset);
+        drop(state);
+        // Room opened up for a reader blocked on backpressure.
+        self.changed.notify_all();
+    }
+
+    /// The offset the next data frame will carry.
+    pub fn stream_offset(&self) -> u64 {
+        self.lock().credit.sent_bytes()
     }
 
     pub fn acknowledge(&self, bytes: u64) -> Result<bool, InvalidBoundary> {
@@ -445,6 +486,53 @@ mod tests {
         let mut out = Vec::new();
         queue.take_into(&mut out, max, Instant::now())?;
         Some(out)
+    }
+
+    fn take_with_offset(queue: &OutputQueue) -> Option<(u64, Vec<u8>)> {
+        let mut out = Vec::new();
+        let (offset, _) = queue.take_into(&mut out, usize::MAX, Instant::now())?;
+        Some((offset, out))
+    }
+
+    #[test]
+    fn a_rebase_drops_replayed_bytes_and_resumes_at_the_snapshot_offset() {
+        let queue = OutputQueue::new(None);
+        assert!(queue.push(b"old-in-flight"));
+        assert!(take(&queue).is_some());
+        assert!(queue.push(b"old-pending"));
+        // The snapshot covers both, plus "new" the reader logged but has
+        // not pushed yet.
+        let offset = (b"old-in-flight".len() + b"old-pending".len() + 3) as u64;
+        queue.rebase(offset);
+        assert_eq!(queue.stream_offset(), offset);
+        assert!(take(&queue).is_none(), "nothing replayed is sent again");
+        assert!(queue.push(b"new"), "the logged chunk is skipped");
+        assert!(take(&queue).is_none());
+        assert!(queue.push(b"live"));
+        assert_eq!(take_with_offset(&queue), Some((offset, b"live".to_vec())));
+        assert_eq!(queue.acknowledge(offset + 4), Ok(true));
+    }
+
+    #[test]
+    fn a_rebase_releases_a_reader_blocked_on_the_old_receivers_credit() {
+        let queue = full_queue();
+        let (done, finished) = mpsc::channel();
+        let reader = {
+            let queue = queue.clone();
+            thread::spawn(move || done.send(queue.push(b"tail")).unwrap())
+        };
+        assert!(finished.recv_timeout(Duration::from_millis(100)).is_err());
+        // The blocked chunk was logged before the push, so the snapshot has it.
+        let offset = (2 * MAX_IN_FLIGHT_BYTES + 4) as u64;
+        queue.rebase(offset);
+        assert!(finished.recv_timeout(Duration::from_secs(2)).unwrap());
+        reader.join().unwrap();
+        assert!(
+            take(&queue).is_none(),
+            "the waiting chunk is not sent twice"
+        );
+        assert!(queue.push(b"x"));
+        assert_eq!(take_with_offset(&queue), Some((offset, b"x".to_vec())));
     }
 
     fn full_queue() -> Arc<OutputQueue> {
