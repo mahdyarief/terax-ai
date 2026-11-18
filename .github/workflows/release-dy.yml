@@ -4,12 +4,12 @@ name: Release (dy)
 # them to the GitHub release of the pushed tag. The Windows installers are
 # built locally and uploaded when the release is created.
 #
-# Tags are `dy-v<version>` on purpose: a `v*` tag would start release.yml,
-# which needs the upstream signing secrets this fork does not have.
+# Tags are `v<version>-dy`. release.yml excludes them: it needs the upstream
+# signing secrets, which this fork does not have.
 on:
   push:
     tags:
-      - "dy-v*"
+      - "v*-dy"
   workflow_dispatch:
     inputs:
       tag:

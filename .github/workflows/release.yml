@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "v*"
+      # dy builds are unsigned and released by release-dy.yml.
+      - "!v*-dy"
   # Manual runs only build Linux workflow artifacts; publishing requires a tag push.
   workflow_dispatch:
 
