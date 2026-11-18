@@ -17,13 +17,20 @@ import { Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { vim } from "@replit/codemirror-vim";
 import { useAssetGrant } from "@/lib/useAssetGrant";
-import { isHtmlPath } from "@/lib/utils";
-import { MarkdownViewToggle } from "@/modules/markdown";
+import { cn, isHtmlPath, isMarkdownPath } from "@/lib/utils";
+import {
+  type MarkdownViewMode,
+  MarkdownViewToggle,
+} from "@/modules/markdown";
+import type { MarkdownViewHandle } from "@/modules/markdown/MarkdownPreviewPane";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import {
   forwardRef,
+  lazy,
   memo,
+  Suspense,
   useCallback,
+  useDeferredValue,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -77,6 +84,14 @@ import { SpreadsheetPreview } from "./SpreadsheetPreview";
 
 initVimGlobals();
 
+// The markdown renderer is a separate chunk: only markdown files that show
+// their preview next to (or instead of) the source ever load it.
+const MarkdownDocumentView = lazy(() =>
+  import("@/modules/markdown/MarkdownPreviewPane").then((module) => ({
+    default: module.MarkdownDocumentView,
+  })),
+);
+
 export type EditorPaneHandle = {
   setQuery: (q: string) => void;
   findNext: () => void;
@@ -109,8 +124,14 @@ type Props = {
   onSaved?: () => void;
   onClose?: () => void;
   mediaActive?: boolean;
+  /** False while this editor's tab is in the background. */
+  visible?: boolean;
   /** Workspace root for scoping local assets in HTML previews. */
   workspaceRoot?: string | null;
+  /** Markdown files: source, live preview, or both side by side. */
+  markdownView?: MarkdownViewMode;
+  /** Open a file that a link in the markdown preview points at. */
+  onOpenFile?: (path: string) => void;
 };
 
 // Above this, syntax highlighting and LSP are disabled: a multi-MB lezer
@@ -134,7 +155,10 @@ export const EditorPane = memo(
       onSaved,
       onClose,
       mediaActive = true,
+      visible = true,
       workspaceRoot = null,
+      markdownView,
+      onOpenFile,
     } = props;
 
     const { doc, onChange, save, reload, adoptDiskText, openAnyway } =
@@ -164,6 +188,59 @@ export const EditorPane = memo(
     const csvRaw = csvRawPath === path;
     const [htmlSourcePath, setHtmlSourcePath] = useState<string | null>(null);
     const htmlSource = htmlSourcePath === path;
+
+    // Markdown: the editor stays mounted in every mode (hidden in "rendered"),
+    // so switching views keeps undo history, the cursor and unsaved text. The
+    // preview renders the live buffer, not the file on disk.
+    const mdMode: MarkdownViewMode = isMarkdownPath(path)
+      ? (markdownView ?? "raw")
+      : "raw";
+    const mdModeRef = useRef(mdMode);
+    mdModeRef.current = mdMode;
+    const previewRef = useRef<MarkdownViewHandle | null>(null);
+    /** Line to show once the preview has mounted. */
+    const pendingPreviewLineRef = useRef<number | null>(null);
+    /** Source line at the top of the preview, as it last reported. */
+    const previewLineRef = useRef(1);
+    const setPreviewRef = useCallback((handle: MarkdownViewHandle | null) => {
+      previewRef.current = handle;
+      if (handle && pendingPreviewLineRef.current !== null) {
+        handle.scrollToSourceLine(pendingPreviewLineRef.current);
+        pendingPreviewLineRef.current = null;
+      }
+    }, []);
+    const onPreviewLine = useCallback((line: number) => {
+      previewLineRef.current = line;
+    }, []);
+    // `doc.content` is only the text as loaded: keystrokes go to a ref, not to
+    // state, so the editor does not re-render on every one. The preview needs
+    // the buffer itself, so it gets its own copy, updated while it is showing.
+    const [liveText, setLiveText] = useState("");
+    const liveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => {
+      if (doc.status === "ready") setLiveText(doc.content);
+    }, [doc]);
+    useEffect(
+      () => () => {
+        if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
+      },
+      [],
+    );
+    const handleChange = useCallback(
+      (next: string) => {
+        onChange(next);
+        if (mdModeRef.current === "raw") return;
+        if (liveTimerRef.current) clearTimeout(liveTimerRef.current);
+        liveTimerRef.current = setTimeout(() => setLiveText(next), 120);
+      },
+      [onChange],
+    );
+    // Deferred, so typing stays responsive while a long document re-renders.
+    const previewText = useDeferredValue(liveText);
+    const previewStatus = useMemo(
+      () => ({ kind: "ready" as const, content: previewText }),
+      [previewText],
+    );
     const apiKeyRef = useRef<string | null>(null);
 
     useEffect(() => {
@@ -455,6 +532,63 @@ export const EditorPane = memo(
       });
     }, [doc]);
 
+    /** 1-based source line at the top of the editor's viewport. */
+    const topEditorLine = useCallback(() => {
+      const view = cmRef.current?.view;
+      if (!view) return 1;
+      const block = view.lineBlockAtHeight(view.scrollDOM.scrollTop);
+      return view.state.doc.lineAt(block.from).number;
+    }, []);
+
+    // Carry the reading position across a view switch.
+    const prevMdModeRef = useRef(mdMode);
+    useLayoutEffect(() => {
+      const prev = prevMdModeRef.current;
+      prevMdModeRef.current = mdMode;
+      if (prev === mdMode) return;
+      const view = cmRef.current?.view;
+      if (prev === "rendered" && view) {
+        // The hidden editor lost its scroll offset; reopen it where the
+        // preview was being read.
+        const line = Math.max(
+          1,
+          Math.min(previewLineRef.current, view.state.doc.lines),
+        );
+        view.requestMeasure();
+        view.dispatch({
+          effects: EditorView.scrollIntoView(view.state.doc.line(line).from, {
+            y: "start",
+          }),
+        });
+      } else if (prev === "raw") {
+        // Nothing fed the preview while it was hidden; give it the buffer.
+        if (view) setLiveText(view.state.doc.toString());
+        const line = topEditorLine();
+        if (previewRef.current) previewRef.current.scrollToSourceLine(line);
+        else pendingPreviewLineRef.current = line;
+      }
+    }, [mdMode, topEditorLine]);
+
+    // Side by side, the preview follows the editor as it scrolls.
+    useEffect(() => {
+      if (mdMode !== "split" || doc.status !== "ready") return;
+      const scroller = cmRef.current?.view?.scrollDOM;
+      if (!scroller) return;
+      let frame = 0;
+      const onScroll = () => {
+        if (frame) return;
+        frame = requestAnimationFrame(() => {
+          frame = 0;
+          previewRef.current?.scrollToSourceLine(topEditorLine());
+        });
+      };
+      scroller.addEventListener("scroll", onScroll, { passive: true });
+      return () => {
+        scroller.removeEventListener("scroll", onScroll);
+        cancelAnimationFrame(frame);
+      };
+    }, [mdMode, doc.status, topEditorLine]);
+
     const lspExt = useLspExtension(path, langId, doc.status === "ready");
     useEffect(() => {
       lspActiveRef.current = lspExt !== null;
@@ -543,6 +677,11 @@ export const EditorPane = memo(
           });
         },
         openSearch: () => {
+          // With the source hidden, search the preview instead.
+          if (mdModeRef.current === "rendered") {
+            previewRef.current?.openFind();
+            return;
+          }
           const view = cmRef.current?.view;
           if (view) openSearchPanel(view);
         },
@@ -686,6 +825,14 @@ export const EditorPane = memo(
         );
       }
       return (
+          <TextHeadPreview
+            path={path}
+            sizeLabel={formatBytes(doc.size)}
+            onOpenAnyway={canForce ? openAnyway : undefined}
+          />
+        );
+      }
+      return (
         <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
           <div className="text-sm text-foreground">
             {doc.status === "binary" ? "Binary file" : "File too large"}
@@ -763,26 +910,52 @@ export const EditorPane = memo(
             <HtmlPreview html={doc.content} path={path} workspaceRoot={workspaceRoot} />
           </div>
         ) : (
-          <CodeMirror
-            ref={cmRef}
-            value={doc.content}
-            onChange={onChange}
-            theme={themeExt}
-            extensions={extensions}
-            height="100%"
-            className="terax-code-editor flex-1 min-h-0 overflow-hidden"
-            basicSetup={{
-              lineNumbers: true,
-              highlightActiveLineGutter: true,
-              foldGutter: true,
-              bracketMatching: true,
-              closeBrackets: true,
-              autocompletion: true,
-              highlightActiveLine: true,
-              highlightSelectionMatches: true,
-              searchKeymap: true,
-            }}
-          />
+          <div className="flex min-h-0 flex-1">
+            <CodeMirror
+              ref={cmRef}
+              value={doc.content}
+              onChange={handleChange}
+              theme={themeExt}
+              extensions={extensions}
+              height="100%"
+              className={cn(
+                "terax-code-editor min-h-0 min-w-0 flex-1 overflow-hidden",
+                mdMode === "rendered" && "hidden",
+              )}
+              basicSetup={{
+                lineNumbers: true,
+                highlightActiveLineGutter: true,
+                foldGutter: true,
+                bracketMatching: true,
+                closeBrackets: true,
+                autocompletion: true,
+                highlightActiveLine: true,
+                highlightSelectionMatches: true,
+                searchKeymap: true,
+              }}
+            />
+            {mdMode !== "raw" && (
+              <div
+                className={cn(
+                  "min-h-0 min-w-0 flex-1",
+                  mdMode === "split" && "border-s border-border",
+                )}
+              >
+                <Suspense fallback={null}>
+                  <MarkdownDocumentView
+                    ref={setPreviewRef}
+                    path={path}
+                    status={previewStatus}
+                    workspaceRoot={workspaceRoot}
+                    visible={visible}
+                    onOpenFile={onOpenFile}
+                    onSourceLineChange={onPreviewLine}
+                    reserveCorner
+                  />
+                </Suspense>
+              </div>
+            )}
+          </div>
         )}
       </div>
     );

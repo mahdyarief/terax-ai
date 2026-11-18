@@ -1,2 +1,6 @@
 export { MarkdownStack } from "./MarkdownStackLazy";
-export { MarkdownViewToggle } from "./MarkdownViewToggle";
+export { MARKDOWN_FIND_EVENT } from "./lib/findEvent";
+export {
+  type MarkdownViewMode,
+  MarkdownViewToggle,
+} from "./MarkdownViewToggle";

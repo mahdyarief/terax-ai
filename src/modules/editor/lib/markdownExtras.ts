@@ -3,11 +3,18 @@ import {
   LanguageDescription,
   LanguageSupport,
 } from "@codemirror/language";
-import type { Extension } from "@codemirror/state";
+import {
+  EditorSelection,
+  type EditorState,
+  type Extension,
+  type StateCommand,
+  type TransactionSpec,
+} from "@codemirror/state";
 import {
   Decoration,
   type DecorationSet,
   EditorView,
+  keymap,
   MatchDecorator,
   ViewPlugin,
   type ViewUpdate,
@@ -115,6 +122,107 @@ const mdTheme = EditorView.theme({
   },
 });
 
+/** Length of the run of `char` ending just before `pos` (or starting at it). */
+function runLength(
+  state: EditorState,
+  pos: number,
+  char: string,
+  direction: -1 | 1,
+): number {
+  let length = 0;
+  for (;;) {
+    const at = direction === -1 ? pos - length - 1 : pos + length;
+    if (at < 0 || at >= state.doc.length) break;
+    if (state.sliceDoc(at, at + 1) !== char) break;
+    length += 1;
+  }
+  return length;
+}
+
+/**
+ * Wraps each selection in an emphasis marker, or removes the marker when the
+ * selection already carries it. Counting the asterisks on both sides keeps
+ * bold and italic independent: `***x***` is both, so italic strips one
+ * asterisk and bold strips two.
+ */
+function toggleEmphasis(marker: "*" | "**"): StateCommand {
+  const size = marker.length;
+  return ({ state, dispatch }) => {
+    const spec = state.changeByRange((range) => {
+      const { from, to } = range;
+      const stars = Math.min(
+        runLength(state, from, "*", -1),
+        runLength(state, to, "*", 1),
+      );
+      const wrapped = size === 2 ? stars >= 2 : stars % 2 === 1;
+      if (wrapped) {
+        return {
+          changes: [
+            { from: from - size, to: from },
+            { from: to, to: to + size },
+          ],
+          range: EditorSelection.range(from - size, to - size),
+        };
+      }
+      return {
+        changes: [
+          { from, insert: marker },
+          { from: to, insert: marker },
+        ],
+        range: EditorSelection.range(from + size, to + size),
+      };
+    });
+    dispatch(state.update(spec, { scrollIntoView: true, userEvent: "input" }));
+    return true;
+  };
+}
+
+export const toggleBold = toggleEmphasis("**");
+export const toggleItalic = toggleEmphasis("*");
+
+const BARE_URL = /^https?:\/\/\S+$/;
+
+/**
+ * Pasting a URL over selected text makes a link out of it. Returns null when
+ * the paste should behave normally: nothing selected, several lines selected,
+ * the clipboard is not a single URL, or the selection is itself a URL.
+ */
+export function linkPasteSpec(
+  state: EditorState,
+  pasted: string,
+): TransactionSpec | null {
+  const url = pasted.trim();
+  if (!BARE_URL.test(url) || state.selection.ranges.length !== 1) return null;
+  const { from, to } = state.selection.main;
+  if (from === to) return null;
+  const text = state.sliceDoc(from, to);
+  if (text.includes("\n") || BARE_URL.test(text.trim())) return null;
+  const insert = `[${text}](${url})`;
+  return {
+    changes: { from, to, insert },
+    selection: EditorSelection.cursor(from + insert.length),
+    userEvent: "input.paste",
+  };
+}
+
+const pasteHandler = EditorView.domEventHandlers({
+  paste: (event, view) => {
+    const spec = linkPasteSpec(
+      view.state,
+      event.clipboardData?.getData("text/plain") ?? "",
+    );
+    if (!spec) return false;
+    event.preventDefault();
+    view.dispatch(spec);
+    return true;
+  },
+});
+
+const formattingKeys = keymap.of([
+  { key: "Mod-b", run: toggleBold },
+  { key: "Mod-i", run: toggleItalic },
+]);
+
 export function markdownExtras(): Extension {
-  return [urlHighlighter, clickHandlers, mdTheme];
+  return [urlHighlighter, clickHandlers, pasteHandler, formattingKeys, mdTheme];
 }

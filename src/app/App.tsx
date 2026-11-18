@@ -12,6 +12,7 @@ import { quoteShellArg } from "@/lib/shellQuote";
 import { usePresence } from "@/lib/usePresence";
 import { useZoom } from "@/lib/useZoom";
 import { isMarkdownPath } from "@/lib/utils";
+import { MARKDOWN_FIND_EVENT, type MarkdownViewMode } from "@/modules/markdown";
 import {
   type AgentLaunchRequest,
   AgentNotificationsBridge,
@@ -1073,6 +1074,10 @@ export default function App() {
       "search.focus": () => {
         const editor = editorRefs.current.get(activeId);
         if (editor) editor.openSearch();
+        else if (
+          tabsRef.current.find((t) => t.id === activeId)?.kind === "markdown"
+        )
+          window.dispatchEvent(new CustomEvent(MARKDOWN_FIND_EVENT));
         else searchInlineRef.current?.focus();
       },
       "ai.toggle": togglePanelAndFocus,
@@ -2172,6 +2177,25 @@ export default function App() {
     [openFileTab],
   );
 
+  // A preview tab that switches to its source opens the editor at the line
+  // that was being read.
+  const handleSetMarkdownView = useCallback(
+    (id: number, mode: MarkdownViewMode, line?: number) => {
+      if (line !== undefined && mode !== "rendered") {
+        const handle = editorRefs.current.get(id);
+        if (handle) handle.gotoLine(line);
+        else pendingEditorNavigation.current.set(id, { line, focus: true });
+      }
+      setMarkdownView(id, mode);
+    },
+    [setMarkdownView],
+  );
+
+  const openLinkedFile = useCallback(
+    (path: string) => handleOpenFile(path, true),
+    [handleOpenFile],
+  );
+
   const openPaletteFile = useCallback(
     (path: string, target: OpenFileTarget) => {
       if (target.side) {
@@ -2427,7 +2451,8 @@ export default function App() {
                         onAiDiffReject={(id) => respondToApproval(id, false)}
                         onOpenCommitFile={openCommitFileDiffTab}
                         onGitHistorySearchHandle={setGitHistoryHandle}
-                        onSetMarkdownView={setMarkdownView}
+                        onSetMarkdownView={handleSetMarkdownView}
+                        onOpenFile={openLinkedFile}
                         workspaceRoot={explorerRoot}
                         secondaryActiveId={secondaryTabId}
                         secondaryActiveTab={secondaryActiveTab}

@@ -32,6 +32,8 @@ type Props = {
   onOpenCommitFile: GitHistoryStackProps["onOpenCommitFile"];
   onGitHistorySearchHandle: GitHistoryStackProps["onSearchHandle"];
   onSetMarkdownView: EditorStackProps["onSetMarkdownView"];
+  /** Open a file that a link in a markdown preview points at. */
+  onOpenFile?: (path: string) => void;
   /** Workspace root used to scope local assets in HTML previews. */
   workspaceRoot?: string | null;
   /** When set, the active tab is mirrored into a side-by-side secondary pane. */
@@ -62,6 +64,7 @@ function SurfaceLayers({
   onOpenCommitFile,
   onGitHistorySearchHandle,
   onSetMarkdownView,
+  onOpenFile,
   workspaceRoot,
 }: Props) {
   const kind = activeTab?.kind;
@@ -104,6 +107,7 @@ function SurfaceLayers({
           onDirtyChange={onEditorDirtyChange}
           onCloseTab={onEditorCloseTab}
           onSetMarkdownView={onSetMarkdownView}
+          onOpenFile={onOpenFile}
           workspaceRoot={workspaceRoot}
         />
       </div>
@@ -126,6 +130,7 @@ function SurfaceLayers({
           tabs={tabs}
           activeId={activeId}
           onSetMarkdownView={onSetMarkdownView}
+          onOpenFile={onOpenFile}
         />
       </div>
       <div

@@ -1,6 +1,9 @@
 import { TabErrorBoundary } from "@/components/TabErrorBoundary";
 import { cn, isMarkdownPath } from "@/lib/utils";
-import { MarkdownViewToggle } from "@/modules/markdown";
+import {
+  type MarkdownViewMode,
+  MarkdownViewToggle,
+} from "@/modules/markdown";
 import type { EditorTab, Tab } from "@/modules/tabs";
 import { useWindowInactive } from "@/modules/theme/WindowActivityBridge";
 import { useEffect, useRef } from "react";
@@ -12,7 +15,13 @@ type Props = {
   onDirtyChange: (id: number, dirty: boolean) => void;
   registerHandle: (id: number, handle: EditorPaneHandle | null) => void;
   onCloseTab: (id: number) => void;
-  onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
+  onSetMarkdownView: (
+    id: number,
+    mode: MarkdownViewMode,
+    line?: number,
+  ) => void;
+  /** Open a file that a link in a markdown preview points at. */
+  onOpenFile?: (path: string) => void;
   /** Workspace root used to scope local assets in HTML previews. */
   workspaceRoot?: string | null;
 };
@@ -24,6 +33,7 @@ export function EditorStack({
   registerHandle,
   onCloseTab,
   onSetMarkdownView,
+  onOpenFile,
   workspaceRoot,
 }: Props) {
   const editors = tabs.filter(
@@ -112,10 +122,9 @@ export function EditorStack({
             <div className="relative h-full overflow-hidden bg-background">
               {isMarkdownPath(t.path) && (
                 <MarkdownViewToggle
-                  mode="raw"
+                  mode={t.markdownView ?? "raw"}
                   onChange={(mode) => onSetMarkdownView(t.id, mode)}
-                  renderedDisabled={t.dirty}
-                  renderedHint="Save to preview"
+                  split
                 />
               )}
               <TabErrorBoundary tabTitle={t.title || t.path}>
@@ -126,7 +135,10 @@ export function EditorStack({
                   onDirtyChange={getDirtyCallback(t.id)}
                   onClose={getCloseCallback(t.id)}
                   mediaActive={visible && !windowInactive}
+                  visible={visible}
                   workspaceRoot={workspaceRoot}
+                  markdownView={t.markdownView}
+                  onOpenFile={onOpenFile}
                 />
               </TabErrorBoundary>
             </div>

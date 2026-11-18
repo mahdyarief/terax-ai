@@ -29,6 +29,16 @@ overrides:
   '@ai-sdk/openai-compatible@2>@ai-sdk/provider': 3.0.13
   '@ai-sdk/openai-compatible@2>@ai-sdk/provider-utils': 4.0.36
   'codemirror-languageserver@1>marked': 17.0.6
+  # Mermaid (markdown preview diagrams, lazy chunk) pins older copies of
+  # libraries the bundle already has: katex and marked directly, d3 v1/v2
+  # through d3-sankey, and cose-base 1 through the cose-bilkent layout. The
+  # newer versions export what those callers use. If a diagram type breaks
+  # after a bump, check these first (sankey, mindmap, math in labels).
+  'mermaid@12>katex': 0.19.1
+  'mermaid@12>marked': 17.0.6
+  'd3-sankey@0>d3-array': 3.2.5
+  'd3-sankey@0>d3-shape': 3.2.1
+  'cytoscape-cose-bilkent@4>cose-base': 2.2.0
 allowBuilds:
   esbuild: true
   msgpackr-extract: false

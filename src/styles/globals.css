@@ -13,6 +13,15 @@
    which switched off every hover style in the app. Apply them unconditionally. */
 @custom-variant hover (&:hover);
 
+/* Find-in-document matches in the markdown preview (CSS Custom Highlight API). */
+::highlight(terax-md-find) {
+  background-color: color-mix(in srgb, var(--primary) 28%, transparent);
+}
+::highlight(terax-md-find-current) {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+
 /* Loading indicators tick instead of animating every display frame. An
  * infinite smooth animation keeps the compositor producing frames at the
  * display rate for as long as it is on screen; `steps()` caps that at a

@@ -70,6 +70,9 @@ export type TerminalTab = TabBase & {
   customTitle?: string;
 };
 
+/** How a markdown file's editor tab is laid out. */
+export type MarkdownViewMode = "rendered" | "split" | "raw";
+
 export type EditorTab = TabBase & {
   id: number;
   kind: "editor";
@@ -83,6 +86,11 @@ export type EditorTab = TabBase & {
    */
   preview: boolean;
   overrideLanguage?: string | null;
+  /**
+   * Markdown files only: source, preview, or both side by side. The editor
+   * stays mounted in every mode, so undo history and the cursor survive.
+   */
+  markdownView?: MarkdownViewMode;
 };
 
 export type PreviewTab = TabBase & {
@@ -1186,7 +1194,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   );
 
   const setMarkdownView = useCallback(
-    (id: number, mode: "rendered" | "raw") => {
+    (id: number, mode: MarkdownViewMode) => {
       setTabs((curr) =>
         curr.map((t) => {
           if (
@@ -1194,28 +1202,28 @@ export function useTabs(initial?: Partial<TerminalTab>) {
             !isMarkdownPath((t as { path?: string }).path ?? "")
           )
             return t;
-          if (mode === "raw" && t.kind === "markdown") {
+          // A read-only preview tab becomes an editor tab the first time its
+          // source is asked for.
+          if (t.kind === "markdown") {
+            if (mode === "rendered") return t;
             return {
               ...t,
               kind: "editor" as const,
               dirty: false,
               preview: false,
+              markdownView: mode,
               overrideLanguage:
                 (t as { overrideLanguage?: string | null }).overrideLanguage ??
                 null,
             };
           }
-          if (mode === "rendered" && t.kind === "editor") {
-            if (t.dirty) return t;
-            return {
-              id: t.id,
-              kind: "markdown" as const,
-              spaceId: t.spaceId,
-              cold: t.cold,
-              title: t.title,
-              path: t.path,
-              overrideLanguage: t.overrideLanguage ?? null,
-            };
+          // An editor tab only changes its layout. It never turns back into a
+          // preview tab: that would unmount the editor and drop its undo
+          // history, cursor and unsaved text.
+          if (t.kind === "editor") {
+            return (t.markdownView ?? "raw") === mode
+              ? t
+              : { ...t, markdownView: mode };
           }
           return t;
         }),

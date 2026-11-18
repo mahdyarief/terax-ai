@@ -1,11 +1,15 @@
 import { cn } from "@/lib/utils";
 import type { MarkdownTab, Tab } from "@/modules/tabs";
 import { MarkdownPreviewPane } from "./MarkdownPreviewPane";
+import type { MarkdownViewMode } from "./MarkdownViewToggle";
 
 type Props = {
   tabs: Tab[];
   activeId: number;
-  onSetMarkdownView: (id: number, mode: "rendered" | "raw") => void;
+  /** `line` is the source line being read, so the editor can open there. */
+  onSetMarkdownView: (id: number, mode: MarkdownViewMode, line?: number) => void;
+  /** Open a file that a relative link in the document points at. */
+  onOpenFile?: (path: string) => void;
 };
 
 /** The folder the explorer shows: the active terminal's cwd, else any terminal's. */
@@ -16,7 +20,12 @@ function workspaceRootOf(tabs: Tab[], activeId: number): string | null {
   return null;
 }
 
-export function MarkdownStack({ tabs, activeId, onSetMarkdownView }: Props) {
+export function MarkdownStack({
+  tabs,
+  activeId,
+  onSetMarkdownView,
+  onOpenFile,
+}: Props) {
   const markdowns = tabs.filter(
     (t): t is MarkdownTab => t.kind === "markdown" && !t.cold,
   );
@@ -39,7 +48,8 @@ export function MarkdownStack({ tabs, activeId, onSetMarkdownView }: Props) {
               path={t.path}
               workspaceRoot={workspaceRoot}
               visible={visible}
-              onSetView={(mode) => onSetMarkdownView(t.id, mode)}
+              onSetView={(mode, line) => onSetMarkdownView(t.id, mode, line)}
+              onOpenFile={onOpenFile}
             />
           </div>
         );
