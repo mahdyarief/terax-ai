@@ -158,11 +158,16 @@ pub struct HeadResult {
 
 /// The start of a text file of any size, cut at a line boundary. Lets a table
 /// preview show the first rows of a file too large to open in the editor.
+///
+/// `partial_line` allows a cut in the middle of a line. A table needs whole
+/// rows, but minified JSON is one enormous line and would otherwise have no
+/// preview at all.
 #[tauri::command]
 pub async fn fs_read_head(
     path: String,
     workspace: Option<WorkspaceEnv>,
     max_bytes: Option<u64>,
+    partial_line: Option<bool>,
 ) -> Result<HeadResult, String> {
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
@@ -174,12 +179,17 @@ pub async fn fs_read_head(
         let limit = max_bytes.unwrap_or(MAX_HEAD_BYTES).clamp(1, MAX_HEAD_BYTES);
         let bytes = read_bounded(fs::File::open(&p).map_err(|e| e.to_string())?, limit)
             .map_err(|e| e.to_string())?;
-        head_of(bytes, limit, meta.len())
+        head_of(bytes, limit, meta.len(), partial_line.unwrap_or(false))
     })
     .await
 }
 
-fn head_of(mut bytes: Vec<u8>, limit: u64, size: u64) -> Result<HeadResult, String> {
+fn head_of(
+    mut bytes: Vec<u8>,
+    limit: u64,
+    size: u64,
+    partial_line: bool,
+) -> Result<HeadResult, String> {
     let truncated = bytes.len() as u64 > limit;
     if bytes[..bytes.len().min(BINARY_SNIFF_BYTES)].contains(&0) {
         return Err("binary file".into());
@@ -187,9 +197,19 @@ fn head_of(mut bytes: Vec<u8>, limit: u64, size: u64) -> Result<HeadResult, Stri
     if truncated {
         bytes.truncate(limit as usize);
         // Drop the partial last line (and any split UTF-8 sequence with it).
+        // When a mid-line cut is allowed, only do so if it keeps most of what
+        // was read; otherwise cut after the last complete character.
         match bytes.iter().rposition(|byte| *byte == b'\n') {
-            Some(end) => bytes.truncate(end + 1),
-            None => return Err("the first line is too long to preview".into()),
+            Some(end) if !partial_line || end + 1 >= bytes.len() / 2 => bytes.truncate(end + 1),
+            _ if partial_line => {
+                if let Err(error) = std::str::from_utf8(&bytes) {
+                    // `None` means the bytes simply stop inside a character.
+                    if error.error_len().is_none() {
+                        bytes.truncate(error.valid_up_to());
+                    }
+                }
+            }
+            _ => return Err("the first line is too long to preview".into()),
         }
     }
     let content = String::from_utf8(bytes).map_err(|_| "binary file".to_string())?;
@@ -465,7 +485,7 @@ mod tests {
     #[test]
     fn a_head_is_cut_at_the_last_whole_line() {
         // read_bounded hands over one byte past the limit when there is more.
-        let head = head_of(b"a,b\nc,d\ne,f".to_vec(), 10, 11).unwrap();
+        let head = head_of(b"a,b\nc,d\ne,f".to_vec(), 10, 11, false).unwrap();
         assert_eq!(head.content, "a,b\nc,d\n");
         assert!(head.truncated);
         assert_eq!(head.size, 11);
@@ -473,7 +493,7 @@ mod tests {
 
     #[test]
     fn a_head_that_holds_the_whole_file_is_not_truncated() {
-        let head = head_of(b"a,b\nc,d".to_vec(), 100, 7).unwrap();
+        let head = head_of(b"a,b\nc,d".to_vec(), 100, 7, false).unwrap();
         assert_eq!(head.content, "a,b\nc,d");
         assert!(!head.truncated);
     }
@@ -481,14 +501,36 @@ mod tests {
     #[test]
     fn a_head_never_splits_a_multibyte_character() {
         // The limit lands inside the second "é" (two bytes each).
-        let head = head_of("x\né\né".as_bytes().to_vec(), 6, 7).unwrap();
+        let head = head_of("x\né\né".as_bytes().to_vec(), 6, 7, false).unwrap();
         assert_eq!(head.content, "x\né\n");
     }
 
     #[test]
     fn a_head_refuses_binary_and_single_line_overflow() {
-        assert!(head_of(vec![b'a', 0, b'b'], 10, 3).is_err());
-        assert!(head_of(vec![b'a'; 11], 10, 11).is_err());
+        assert!(head_of(vec![b'a', 0, b'b'], 10, 3, false).is_err());
+        assert!(head_of(vec![b'a'; 11], 10, 11, false).is_err());
+    }
+
+    #[test]
+    fn head_may_cut_inside_a_line_when_asked() {
+        // Minified JSON: one line, no newline to cut at.
+        let head = head_of(vec![b'a'; 11], 10, 11, true).unwrap();
+        assert_eq!(head.content, "a".repeat(10));
+        assert!(head.truncated);
+
+        // The cut never splits a multi-byte character: "é" is two bytes.
+        let head = head_of("aaaaé".as_bytes().to_vec(), 5, 6, true).unwrap();
+        assert_eq!(head.content, "aaaa");
+
+        // A newline near the end is still preferred over a mid-line cut...
+        let head = head_of(b"aaaaaaa\nbbb".to_vec(), 10, 11, true).unwrap();
+        assert_eq!(head.content, "aaaaaaa\n");
+        // ...but not one that would throw away most of what was read.
+        let head = head_of(b"a\nbbbbbbbbb".to_vec(), 10, 11, true).unwrap();
+        assert_eq!(head.content, "a\nbbbbbbbb");
+
+        // Binary content is still refused.
+        assert!(head_of(vec![b'a', 0, b'b'], 2, 3, true).is_err());
     }
 
     #[test]

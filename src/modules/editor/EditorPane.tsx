@@ -75,6 +75,7 @@ import {
 } from "./lib/mediaPreview";
 import { fileNameOf, ImagePreview } from "./ImagePreview";
 import { CsvHeadPreview } from "./CsvHeadPreview";
+import { TextHeadPreview } from "./TextHeadPreview";
 import { MediaPreview } from "./MediaPreview";
 import { delimitedTextKind, isDelimitedPath } from "./lib/csvPreview";
 import { CsvPreview } from "./CsvPreview";
@@ -824,7 +825,9 @@ export const EditorPane = memo(
           />
         );
       }
-      return (
+      // Any other oversized text file (JSON, logs, ...) shows its beginning.
+      if (doc.status === "toolarge") {
+        return (
           <TextHeadPreview
             path={path}
             sizeLabel={formatBytes(doc.size)}
