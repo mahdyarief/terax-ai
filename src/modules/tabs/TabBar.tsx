@@ -495,7 +495,7 @@ export function TabBar({
                         e.stopPropagation();
                         onClose(t.id);
                       }}
-                      className="rounded p-0.5 opacity-0 transition-opacity hover:bg-accent hover:opacity-100 group-hover:opacity-60"
+                      className="rounded p-0.5 opacity-0 transition-opacity hover:bg-accent hover:opacity-100 group-hover:opacity-60 group-focus-visible:opacity-60 group-data-active:opacity-60"
                     >
                       <HugeiconsIcon
                         icon={Cancel01Icon}

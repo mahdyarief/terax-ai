@@ -277,7 +277,7 @@ export function ThemesSection() {
                   ) : null}
                 </div>
                 {isCustom ? (
-                  <span className="ml-1 flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100">
+                  <span className="ml-1 flex shrink-0 items-center gap-0.5 opacity-0 transition group-hover:opacity-100 group-focus-within:opacity-100">
                     <span
                       role="button"
                       aria-label={`Edit ${t.name}`}

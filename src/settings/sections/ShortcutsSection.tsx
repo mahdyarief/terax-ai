@@ -233,7 +233,7 @@ function ShortcutRow({
               <Button
                 variant="ghost"
                 size="icon"
-                className="size-7 text-muted-foreground hover:text-destructive opacity-0 transition-opacity group-hover:opacity-100"
+                className="size-7 text-muted-foreground hover:text-destructive opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100 group-focus-within:opacity-100"
                 onClick={onClear}
                 title="Clear shortcut"
               >

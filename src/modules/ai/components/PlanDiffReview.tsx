@@ -173,7 +173,7 @@ function PlanRow({
           type="button"
           size="icon"
           variant="ghost"
-          className="size-5 shrink-0 opacity-0 transition-opacity group-hover/row:opacity-100"
+          className="size-5 shrink-0 opacity-0 transition-opacity focus-visible:opacity-100 group-hover/row:opacity-100 group-focus-within/row:opacity-100"
           onClick={onReject}
           aria-label="Reject"
         >

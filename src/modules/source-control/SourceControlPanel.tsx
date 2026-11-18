@@ -1280,7 +1280,7 @@ const EntryRow = memo(function EntryRow({
           </button>
 
           {showDiscard ? (
-            <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 data-[focused=true]:opacity-100 data-[selected=true]:opacity-100">
+            <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 group-data-[focused=true]:opacity-100 group-data-[selected=true]:opacity-100">
               <IconActionButton
                 label={`Discard ${entry.path}`}
                 disabled={disabled}

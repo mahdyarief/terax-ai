@@ -80,7 +80,7 @@ export function Chip({
           type="button"
           onClick={onRemove}
           aria-label={removeLabel}
-          className="-mr-0.5 ml-0.5 grid size-3.5 shrink-0 place-items-center rounded-sm opacity-0 transition-opacity hover:!opacity-100 group-hover:opacity-60"
+          className="-mr-0.5 ml-0.5 grid size-3.5 shrink-0 place-items-center rounded-sm opacity-0 transition-opacity hover:!opacity-100 focus-visible:opacity-100 group-hover:opacity-60"
         >
           <HugeiconsIcon icon={Cancel01Icon} size={10} strokeWidth={2} />
         </button>

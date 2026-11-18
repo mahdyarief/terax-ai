@@ -8,6 +8,11 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Tailwind v4 only applies hover styles inside `@media (hover: hover)`. WebView2
+   on a touchscreen laptop reports `hover: none` even while a mouse is in use,
+   which switched off every hover style in the app. Apply them unconditionally. */
+@custom-variant hover (&:hover);
+
 /* Loading indicators tick instead of animating every display frame. An
  * infinite smooth animation keeps the compositor producing frames at the
  * display rate for as long as it is on screen; `steps()` caps that at a
