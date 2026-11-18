@@ -150,7 +150,7 @@ export function SpreadsheetPreview({
                   <td
                     // biome-ignore lint/suspicious/noArrayIndexKey: fixed spreadsheet column positions.
                     key={columnIndex}
-                    className="max-w-[28rem] whitespace-pre-wrap border-b border-r border-border/70 px-3 py-1.5 align-top text-foreground"
+                    className="select-text max-w-[28rem] whitespace-pre-wrap border-b border-r border-border/70 px-3 py-1.5 align-top text-foreground"
                   >
                     {formatCell(row[columnIndex])}
                   </td>
