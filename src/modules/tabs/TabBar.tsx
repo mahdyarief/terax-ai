@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { startTouchHold, type TouchHold } from "@/lib/touchHold";
 import { cn } from "@/lib/utils";
 import { AgentIcon } from "@/modules/agents/lib/agentIcon";
 import type { AgentLaunchRequest } from "@/modules/agents/lib/launcher";
@@ -115,6 +116,8 @@ export function TabBar({
     startX: number;
     fromId: number;
     active: boolean;
+    /** Set for a finger: it must rest on the tab before it can drag. */
+    hold: TouchHold | null;
   } | null>(null);
 
   // Play the enter animation only for tabs opened after the first paint, never
@@ -181,6 +184,7 @@ export function TabBar({
   const endDrag = (currentTarget: HTMLElement) => {
     const st = drag.current;
     if (st) currentTarget.releasePointerCapture?.(st.pointerId);
+    st?.hold?.cancel();
     drag.current = null;
     setDraggingId(null);
     setDropGap(null);
@@ -299,6 +303,10 @@ export function TabBar({
                       startX: e.clientX,
                       fromId: t.id,
                       active: false,
+                      hold:
+                        e.pointerType === "touch"
+                          ? startTouchHold(e.currentTarget)
+                          : null,
                     };
                     e.currentTarget.setPointerCapture(e.pointerId);
                   }}
@@ -307,6 +315,11 @@ export function TabBar({
                     if (!st || st.pointerId !== e.pointerId) return;
                     if (!st.active) {
                       if (Math.abs(e.clientX - st.startX) < 4) return;
+                      if (st.hold && !st.hold.armed) {
+                        // The finger moved before resting: it is scrolling the strip.
+                        endDrag(e.currentTarget);
+                        return;
+                      }
                       st.active = true;
                       setDraggingId(st.fromId);
                       document.body.style.userSelect = "none";
@@ -324,6 +337,14 @@ export function TabBar({
                     endDrag(e.currentTarget);
                   }}
                   onPointerCancel={(e) => endDrag(e.currentTarget)}
+                  onKeyDown={(e) => {
+                    // The close control sits inside this button, so it cannot take
+                    // focus itself; Delete closes the focused tab instead.
+                    if (e.key === "Delete" && tabs.length > 1) {
+                      e.preventDefault();
+                      onClose(t.id);
+                    }
+                  }}
                   onDoubleClick={() => isPreview && onPin(t.id)}
                   onAuxClick={(e) => {
                     if (e.button === 1 && tabs.length > 1) {
@@ -495,7 +516,7 @@ export function TabBar({
                         e.stopPropagation();
                         onClose(t.id);
                       }}
-                      className="rounded p-0.5 opacity-0 transition-opacity hover:bg-accent hover:opacity-100 group-hover:opacity-60 group-focus-visible:opacity-60 group-data-active:opacity-60"
+                      className="relative rounded p-0.5 opacity-0 transition-opacity before:absolute before:-inset-1 before:content-[''] hover:bg-accent hover:opacity-100 group-hover:opacity-60 group-focus-visible:opacity-60 group-data-active:opacity-60"
                     >
                       <HugeiconsIcon
                         icon={Cancel01Icon}

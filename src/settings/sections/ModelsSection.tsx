@@ -1127,55 +1127,56 @@ function CustomEndpointCard({
 
   return (
     <div className="flex flex-col rounded-lg border border-border/60 bg-card/60">
-      <button
-        type="button"
-        onClick={() => setExpanded((v) => !v)}
-        className="flex items-center gap-2 px-3 py-2 text-left"
-      >
-        <HugeiconsIcon
-          icon={ChevronDown}
-          size={12}
-          strokeWidth={2}
-          className={cn(
-            "shrink-0 text-muted-foreground/60 transition-transform",
-            !expanded && "-rotate-90",
-          )}
-        />
-        <ProviderIcon provider="openai-compatible" size={15} />
-        <span className="text-[12.5px] font-medium truncate">
-          {endpoint.name || "OpenAI Compatible"}
-        </span>
-        {endpoint.modelId.trim() && (
-          <span className="text-[10.5px] text-muted-foreground truncate font-mono">
-            {endpoint.modelId}
+      <div className="flex items-center pr-3">
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          className="flex min-w-0 flex-1 items-center gap-2 py-2 pl-3 pr-2 text-left"
+        >
+          <HugeiconsIcon
+            icon={ChevronDown}
+            size={12}
+            strokeWidth={2}
+            className={cn(
+              "shrink-0 text-muted-foreground/60 transition-transform",
+              !expanded && "-rotate-90",
+            )}
+          />
+          <ProviderIcon provider="openai-compatible" size={15} />
+          <span className="text-[12.5px] font-medium truncate">
+            {endpoint.name || "OpenAI Compatible"}
           </span>
-        )}
-        {configured ? (
-          <Badge
-            variant="outline"
-            className="ml-1 h-4 gap-1 border-border/60 bg-muted/40 px-1.5 text-[10px] font-normal text-muted-foreground"
-          >
-            <HugeiconsIcon
-              icon={CheckmarkCircle02Icon}
-              size={9}
-              strokeWidth={2}
-            />
-            Connected
-          </Badge>
-        ) : null}
+          {endpoint.modelId.trim() && (
+            <span className="text-[10.5px] text-muted-foreground truncate font-mono">
+              {endpoint.modelId}
+            </span>
+          )}
+          {configured ? (
+            <Badge
+              variant="outline"
+              className="ml-1 h-4 gap-1 border-border/60 bg-muted/40 px-1.5 text-[10px] font-normal text-muted-foreground"
+            >
+              <HugeiconsIcon
+                icon={CheckmarkCircle02Icon}
+                size={9}
+                strokeWidth={2}
+              />
+              Connected
+            </Badge>
+          ) : null}
+        </button>
         <Button
           size="icon"
           variant="ghost"
-          onClick={(e) => {
-            e.stopPropagation();
-            onRemove();
-          }}
+          onClick={onRemove}
           title="Remove endpoint"
-          className="ml-auto size-7 text-muted-foreground hover:text-destructive"
+          aria-label="Remove endpoint"
+          className="size-7 shrink-0 text-muted-foreground hover:text-destructive"
         >
           <HugeiconsIcon icon={Cancel01Icon} size={12} strokeWidth={1.75} />
         </Button>
-      </button>
+      </div>
 
       {expanded && (
         <div className="flex flex-col gap-2.5 border-t border-border/40 px-3 py-2.5">

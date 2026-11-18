@@ -17,37 +17,41 @@ function sourceFiles(dir: string): string[] {
   });
 }
 
-/** Class strings that hide an element until its group is hovered. */
+const HIDDEN = new Set(["opacity-0", "hidden", "invisible"]);
+const SHOWN = "(opacity-|(inline-)?(flex|block|grid)$|visible$)";
+const ON_HOVER = new RegExp(`^(group|peer)-hover(/[a-z0-9_-]+)?:${SHOWN}`);
+const ON_FOCUS = new RegExp(
+  `^(focus-visible|focus-within|(group|peer)-focus[a-z0-9_-]*(/[a-z0-9_-]+)?):${SHOWN}`,
+);
+
+/** Class strings that hide an element until its group or peer is hovered. */
 function hoverOnlyClassStrings(source: string): string[] {
   const strings = source.match(/"[^"\n]*"|`[^`]*`/g) ?? [];
   return strings.filter((value) => {
     const classes = value.slice(1, -1).split(/\s+/);
-    const hidden = classes.includes("opacity-0");
-    const shownOnHover = classes.some((name) =>
-      /^group-hover(\/[\w-]+)?:opacity-/.test(name),
+    return (
+      classes.some((name) => HIDDEN.has(name)) &&
+      classes.some((name) => ON_HOVER.test(name)) &&
+      !classes.some((name) => ON_FOCUS.test(name))
     );
-    const shownOnFocus = classes.some((name) =>
-      /^(focus-visible|focus-within|group-focus[\w-]*(\/[\w-]+)?):opacity-/.test(
-        name,
-      ),
-    );
-    return hidden && shownOnHover && !shownOnFocus;
   });
 }
 
 describe("hover-revealed controls", () => {
   it("spots a control that only hover can reveal", () => {
+    const found = (markup: string) => hoverOnlyClassStrings(markup).length;
+    expect(found('<b className="opacity-0 group-hover:opacity-100" />')).toBe(1);
+    expect(found('<b className="hidden group-hover/row:flex" />')).toBe(1);
+    expect(found('<b className="invisible peer-hover:visible" />')).toBe(1);
     expect(
-      hoverOnlyClassStrings('<b className="opacity-0 group-hover:opacity-100" />'),
-    ).toHaveLength(1);
-    expect(
-      hoverOnlyClassStrings(
+      found(
         '<b className="opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100" />',
       ),
-    ).toHaveLength(0);
+    ).toBe(0);
     expect(
-      hoverOnlyClassStrings('<b className="opacity-55 group-hover:opacity-95" />'),
-    ).toHaveLength(0);
+      found('<b className="hidden group-hover:flex group-focus-within:flex" />'),
+    ).toBe(0);
+    expect(found('<b className="opacity-55 group-hover:opacity-95" />')).toBe(0);
   });
 
   it("are all reachable by keyboard focus too", () => {

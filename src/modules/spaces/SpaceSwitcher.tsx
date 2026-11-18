@@ -5,6 +5,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { startTouchHold, type TouchHold } from "@/lib/touchHold";
 import { cn } from "@/lib/utils";
 import { useShortcutLabel } from "@/modules/shortcuts";
 import { labelFor, type Tab, TabIcon } from "@/modules/tabs";
@@ -58,6 +59,8 @@ type DragState = {
   kind: "space" | "tab";
   id: string | number;
   active: boolean;
+  /** Set for a finger: it must rest on the row before it can drag. */
+  hold: TouchHold | null;
 };
 
 type DropTarget =
@@ -159,6 +162,7 @@ export function SpaceSwitcher({
   const endDrag = (el: Element) => {
     const st = drag.current;
     if (st) el.releasePointerCapture?.(st.pointerId);
+    st?.hold?.cancel();
     drag.current = null;
     dropRef.current = null;
     setDragging(null);
@@ -181,6 +185,10 @@ export function SpaceSwitcher({
       kind,
       id,
       active: false,
+      hold:
+        e.pointerType === "touch"
+          ? startTouchHold(e.currentTarget as HTMLElement)
+          : null,
     };
     e.currentTarget.setPointerCapture(e.pointerId);
   };
@@ -189,7 +197,13 @@ export function SpaceSwitcher({
     const st = drag.current;
     if (!st || st.pointerId !== e.pointerId) return;
     if (!st.active) {
-      if (Math.hypot(e.clientX - st.startX, e.clientY - st.startY) < 5) return;
+      const moved = Math.hypot(e.clientX - st.startX, e.clientY - st.startY);
+      if (moved < 5) return;
+      if (st.hold && !st.hold.armed) {
+        // The finger moved before resting: it is scrolling, not dragging.
+        endDrag(e.currentTarget);
+        return;
+      }
       st.active = true;
       setDragging({ kind: st.kind, id: st.id });
       document.body.style.userSelect = "none";
@@ -644,7 +658,7 @@ function TabRow({
             onClose();
           }}
           aria-label="Close tab"
-          className="flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/tab:opacity-70 group-focus-within/tab:opacity-70 hover:opacity-100 focus-visible:opacity-100"
+          className="relative flex size-4 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:bg-accent hover:text-foreground group-hover/tab:opacity-70 group-focus-within/tab:opacity-70 hover:opacity-100 focus-visible:opacity-100 before:absolute before:-inset-1 before:content-['']"
         >
           <HugeiconsIcon icon={Cancel01Icon} size={11} strokeWidth={2} />
         </button>
