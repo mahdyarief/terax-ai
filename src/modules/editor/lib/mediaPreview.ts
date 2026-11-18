@@ -31,6 +31,21 @@ export function mediaPreviewKind(path: string): MediaPreviewKind | null {
   return null;
 }
 
+export function isSvgPath(path: string): boolean {
+  return path.toLowerCase().endsWith(".svg");
+}
+
+/** Above this an SVG opens as source only; see EditorPane. */
+export const SVG_RENDER_MAX_CHARS = 2 * 1024 * 1024;
+
+/**
+ * An SVG document as an <img> source. Loaded that way its scripts never run
+ * and it cannot fetch anything, so previewing the live buffer is safe.
+ */
+export function svgDataUrl(svg: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
 type MediaPlayback = Pick<
   HTMLMediaElement,
   "pause" | "addEventListener" | "removeEventListener"

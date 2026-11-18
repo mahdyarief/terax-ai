@@ -5,6 +5,7 @@ import {
   validateOfficeArchive,
 } from "./lib/externalFormat";
 import { buildPreviewSheets, type PreviewSheet } from "./lib/spreadsheetPreview";
+import { useFileRevision } from "./lib/useFileRevision";
 
 type State = {
   path: string;
@@ -25,11 +26,16 @@ export function SpreadsheetPreview({
 }) {
   const [state, setState] = useState<State>({ path });
   const [activeSheet, setActiveSheet] = useState(0);
+  const revision = useFileRevision(path);
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new file starts on its first sheet; a reload keeps the selection.
+  useEffect(() => setActiveSheet(0), [path]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revision re-reads the file after it changed on disk.
   useEffect(() => {
     let cancelled = false;
-    setState({ path });
-    setActiveSheet(0);
+    // A reload after a disk change keeps the current render until it is done.
+    setState((prev) => (prev.path === path ? prev : { path }));
     if (size > MAX_OFFICE_PREVIEW_BYTES) {
       setState({ path, error: "XLSX preview is limited to 20 MB." });
       return;
@@ -37,33 +43,31 @@ export function SpreadsheetPreview({
 
     void (async () => {
       try {
-        const bytes = await readBinary(path);
-        if (!bytes) throw new Error("Could not read spreadsheet.");
-        if (bytes.byteLength > MAX_OFFICE_PREVIEW_BYTES) {
+        const buffer = await readBinary(path);
+        if (buffer.byteLength > MAX_OFFICE_PREVIEW_BYTES) {
           throw new Error("XLSX preview is limited to 20 MB.");
         }
-        validateOfficeArchive(
-          bytes.buffer.slice(0, bytes.byteLength) as ArrayBuffer,
-          "XLSX",
-        );
+        validateOfficeArchive(buffer, "XLSX");
         const { default: readXlsxFile } = await import(
           "read-excel-file/browser"
         );
         // read-excel-file accepts File | Blob | ArrayBuffer; pass the buffer
         // directly rather than an object that only imitates a Blob.
-        const workbook = await (readXlsxFile as any)(
-          bytes.buffer.slice(0, bytes.byteLength) as ArrayBuffer,
-        );
+        const workbook = await (readXlsxFile as any)(buffer);
         const preview = buildPreviewSheets(workbook as any);
         if (!cancelled) {
           setState({ path, ...preview });
         }
       } catch (error) {
         if (!cancelled) {
-          setState({
-            path,
-            error: error instanceof Error ? error.message : String(error),
-          });
+          const message =
+            error instanceof Error ? error.message : String(error);
+          // A reload can catch the file mid-write; keep the last good render.
+          setState((prev) =>
+            prev.path === path && prev.sheets
+              ? prev
+              : { path, error: message },
+          );
         }
       }
     })();
@@ -71,7 +75,7 @@ export function SpreadsheetPreview({
     return () => {
       cancelled = true;
     };
-  }, [path, size]);
+  }, [path, size, revision]);
 
   if (state.path !== path || (!state.sheets && !state.error)) {
     return <PreviewMessage>Loading spreadsheet…</PreviewMessage>;
@@ -79,16 +83,20 @@ export function SpreadsheetPreview({
   if (state.error) return <PreviewMessage>{state.error}</PreviewMessage>;
 
   const sheets = state.sheets ?? [];
-  const current = sheets[activeSheet];
+  // A reload can come back with fewer sheets than the one selected.
+  const current = sheets[Math.min(activeSheet, sheets.length - 1)];
   if (!current)
     return <PreviewMessage>This workbook has no worksheets.</PreviewMessage>;
 
   const limited = current.truncated || state.truncated;
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div className="flex h-full min-h-0 w-full flex-col bg-background">
       <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border px-3 py-2 text-xs text-muted-foreground">
         <span>
-          {current.rows.length} rows · {current.columns} columns
+          {limited
+            ? `First ${current.rows.length} rows`
+            : `${current.rows.length} rows`}{" "}
+          · {current.columns} columns
           {limited ? " · preview limited" : ""}
         </span>
         {sheets.length > 1 && (

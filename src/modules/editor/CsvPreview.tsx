@@ -4,10 +4,35 @@ import { parseDelimitedPreview } from "./lib/csvPreview";
 type Props = {
   content: string;
   delimiter: "," | ";" | "\t";
-  onEdit: () => void;
+  /** Opens the file as plain text; omitted when that is not possible. */
+  onEdit?: () => void;
+  editLabel?: string;
+  /** Set when `content` is only the start of a larger file. */
+  partialOf?: string;
 };
 
-export function CsvPreview({ content, delimiter, onEdit }: Props) {
+/** "First 200 rows" when cut short, otherwise the real count; header excluded. */
+export function csvSummary(
+  dataRows: number,
+  columns: number,
+  truncated: boolean,
+  partialOf?: string,
+): string {
+  const rows =
+    truncated || partialOf
+      ? `First ${dataRows} rows`
+      : `${dataRows} ${dataRows === 1 ? "row" : "rows"}`;
+  const tail = partialOf ? ` · of a ${partialOf} file` : "";
+  return `${rows} · ${columns} columns${tail}`;
+}
+
+export function CsvPreview({
+  content,
+  delimiter,
+  onEdit,
+  editLabel = "Edit as text",
+  partialOf,
+}: Props) {
   const preview = useMemo(
     () => parseDelimitedPreview(content, delimiter),
     [content, delimiter],
@@ -15,19 +40,25 @@ export function CsvPreview({ content, delimiter, onEdit }: Props) {
   const [header = [], ...body] = preview.rows;
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div className="flex h-full min-h-0 w-full flex-col bg-background">
       <div className="flex shrink-0 items-center justify-between border-b border-border px-3 py-2 text-xs text-muted-foreground">
         <span>
-          {preview.rows.length} rows · {preview.columns} columns
-          {preview.truncated ? " · preview limited" : ""}
+          {csvSummary(
+            body.length,
+            preview.columns,
+            preview.truncated,
+            partialOf,
+          )}
         </span>
-        <button
-          type="button"
-          onClick={onEdit}
-          className="rounded border border-border px-2 py-1 text-foreground hover:bg-accent"
-        >
-          Edit as text
-        </button>
+        {onEdit && (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded border border-border px-2 py-1 text-foreground hover:bg-accent"
+          >
+            {editLabel}
+          </button>
+        )}
       </div>
       <div className="min-h-0 flex-1 overflow-auto">
         <table className="min-w-full border-separate border-spacing-0 text-left text-xs">

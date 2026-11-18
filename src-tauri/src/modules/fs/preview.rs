@@ -14,19 +14,31 @@ use tauri::{Manager, Runtime, UriSchemeContext, UriSchemeResponder};
 const MAX_PREVIEW_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PREVIEWS: usize = 32;
 
-/// Scripts stay inline-only (`'unsafe-inline' 'unsafe-eval'`) and there is no
-/// `connect-src`, so the frame cannot reach Tauri IPC, storage, the filesystem,
-/// or exfiltrate data over the network. Forms, frames, objects and `base` are
-/// also blocked. Stylesheets are the one deliberate relaxation: real HTML
-/// reports reference remote CDN stylesheets (and the fonts/images those pull in),
-/// so `style-src`/`font-src`/`img-src` permit `https:` in addition to inline
-/// data. This is what makes `terax-doc` previews render styled instead of bare.
+/// Policy for a preview whose scripts may run. Scripts stay inline-only
+/// (`'unsafe-inline' 'unsafe-eval'`) and there is no `connect-src`, so the
+/// frame cannot reach Tauri IPC, storage or the filesystem. Forms, frames,
+/// objects and `base` are also blocked. Stylesheets are the one deliberate
+/// relaxation: real HTML reports reference remote CDN stylesheets (and the
+/// fonts/images those pull in), so `style-src`/`font-src`/`img-src` permit
+/// `https:` in addition to inline data.
+///
+/// This does NOT stop a script from sending out what it can read: it can put
+/// data in an `https:` image URL or navigate its own frame, and no CSP
+/// directive blocks the latter. What a script can read is the document itself
+/// plus the local files the renderer inlined into it. So the renderer only
+/// asks for this policy when nothing local was inlined or the user trusted
+/// the folder; otherwise it gets [`CSP_STATIC`].
 const CSP: &str = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval'; style-src 'unsafe-inline' https:; font-src data: https:; img-src data: blob: https:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'";
+
+/// Policy for a preview that inlined local files and is not trusted: the same
+/// as [`CSP`] with scripts off, so nothing can read those files back out.
+const CSP_STATIC: &str = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline' https:; font-src data: https:; img-src data: blob: https:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'";
 
 struct Preview {
     owner: String,
     sequence: u64,
     html: Vec<u8>,
+    csp: &'static str,
 }
 
 #[derive(Default)]
@@ -48,7 +60,14 @@ pub async fn fs_publish_html(
     app: tauri::AppHandle,
     webview: tauri::Webview,
     html: String,
+    scripts: Option<bool>,
 ) -> Result<String, String> {
+    // Scripts are opt-in, so a caller that forgets the flag gets the safe policy.
+    let csp = if scripts.unwrap_or(false) {
+        CSP
+    } else {
+        CSP_STATIC
+    };
     let bytes = html.into_bytes();
     if bytes.len() > MAX_PREVIEW_BYTES {
         return Err(format!(
@@ -67,9 +86,15 @@ pub async fn fs_publish_html(
             .map_err(|_| "HTML preview state is unavailable".to_string())?;
         previews.next_sequence += 1;
         let sequence = previews.next_sequence;
-        previews
-            .entries
-            .insert(key, Preview { owner, sequence, html: bytes });
+        previews.entries.insert(
+            key,
+            Preview {
+                owner,
+                sequence,
+                html: bytes,
+                csp,
+            },
+        );
         if previews.entries.len() > MAX_PREVIEWS {
             // Drop the oldest publishes first; older frames have either loaded
             // (and removed themselves) or were superseded by a newer edit.
@@ -142,9 +167,9 @@ fn respond<R: Runtime>(
         };
         return plain(if found { 200 } else { 404 });
     }
-    let html = match state.state.lock() {
+    let (html, csp) = match state.state.lock() {
         Ok(mut previews) => match previews.entries.remove(&key) {
-            Some(preview) if preview.owner == owner => preview.html,
+            Some(preview) if preview.owner == owner => (preview.html, preview.csp),
             _ => return plain(404),
         },
         Err(_) => return plain(500),
@@ -152,7 +177,7 @@ fn respond<R: Runtime>(
     Response::builder()
         .status(200)
         .header("Content-Type", "text/html; charset=utf-8")
-        .header("Content-Security-Policy", CSP)
+        .header("Content-Security-Policy", csp)
         .header("X-Content-Type-Options", "nosniff")
         .header("Cache-Control", "no-store")
         .header("Referrer-Policy", "no-referrer")
@@ -227,6 +252,16 @@ mod tests {
         assert!(CSP.contains("connect-src 'none'"));
         assert!(CSP.contains("frame-src 'none'"));
         assert!(CSP.contains("object-src 'none'"));
+    }
+
+    #[test]
+    fn the_static_policy_differs_only_by_turning_scripts_off() {
+        assert!(CSP_STATIC.contains("script-src 'none'"));
+        assert!(!CSP_STATIC.contains("unsafe-eval"));
+        assert_eq!(
+            CSP_STATIC.replace("script-src 'none'", "script-src 'unsafe-inline' 'unsafe-eval'"),
+            CSP
+        );
     }
 
     #[test]

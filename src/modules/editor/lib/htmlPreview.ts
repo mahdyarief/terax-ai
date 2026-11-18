@@ -73,3 +73,46 @@ export function createHtmlPreviewPublisher({
     },
   };
 }
+
+export type PreviewScroll = { x: number; y: number };
+
+const SCROLL_MESSAGE = "terax-preview-scroll";
+
+/**
+ * Every edit loads a fresh frame, which would jump back to the top. This adds
+ * a small script that reports the frame's scroll position to the parent and
+ * restores `scroll` once the new document has laid out. It only runs when the
+ * preview is served with scripts on.
+ */
+export function withScrollBridge(html: string, scroll: PreviewScroll): string {
+  const x = Math.max(0, Math.round(scroll.x)) || 0;
+  const y = Math.max(0, Math.round(scroll.y)) || 0;
+  const script =
+    `<script data-terax-preview>(()=>{let u=0,t=0;` +
+    `const r=()=>{if(!u&&(${x}||${y}))scrollTo(${x},${y})};` +
+    `for(const e of["wheel","pointerdown","keydown","touchstart"])` +
+    `addEventListener(e,()=>{u=1},{passive:true,capture:true});` +
+    `addEventListener("DOMContentLoaded",r);addEventListener("load",r);` +
+    `addEventListener("scroll",()=>{if(t)return;t=setTimeout(()=>{t=0;` +
+    `parent.postMessage({type:"${SCROLL_MESSAGE}",x:scrollX,y:scrollY},"*")},100)},` +
+    `{passive:true})})()</script>`;
+  const close = html.toLowerCase().lastIndexOf("</body>");
+  return close < 0
+    ? html + script
+    : html.slice(0, close) + script + html.slice(close);
+}
+
+/** The scroll position a preview frame reported, or null for anything else. */
+export function readScrollMessage(data: unknown): PreviewScroll | null {
+  if (typeof data !== "object" || data === null) return null;
+  const { type, x, y } = data as Record<string, unknown>;
+  if (type !== SCROLL_MESSAGE) return null;
+  if (typeof x !== "number" || typeof y !== "number") return null;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x: Math.max(0, x), y: Math.max(0, y) };
+}
+
+/** Does this markup carry anything that would execute? (UI hint only.) */
+export function hasActiveContent(html: string): boolean {
+  return /<script\b/i.test(html) || /\son[a-z]+\s*=/i.test(html);
+}

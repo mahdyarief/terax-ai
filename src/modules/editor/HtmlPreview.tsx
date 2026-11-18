@@ -3,8 +3,15 @@ import { previewBoundary } from "@/modules/markdown/lib/assetPath";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
+import {
+  createHtmlPreviewPublisher,
+  hasActiveContent,
+  type PreviewScroll,
+  readScrollMessage,
+  withScrollBridge,
+} from "./lib/htmlPreview";
+import { isPreviewTrusted, trustPreview } from "./lib/htmlPreviewTrust";
 import { maybeInlineHtmlAssets } from "./lib/inlineHtmlAssets";
-import { createHtmlPreviewPublisher } from "./lib/htmlPreview";
 
 type Props = {
   html: string;
@@ -47,22 +54,36 @@ async function readBinaryForPreview(path: string): Promise<string> {
  * The document is served over the `terax-doc` scheme with a strict CSP header.
  * `sandbox` omits `allow-same-origin`, so the frame gets an opaque origin and
  * its scripts cannot reach this window, Tauri IPC, or storage.
+ *
+ * A script can still send out whatever it can read, and what it can read
+ * includes the local files inlined into the document. So scripts run only
+ * when nothing local was inlined, or after the user trusted the folder; until
+ * then the page is served with scripts off and a bar offers to turn them on.
  */
 export function HtmlPreview({ html, path, workspaceRoot }: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [scriptsBlocked, setScriptsBlocked] = useState(false);
   const publisher = useRef<ReturnType<typeof createHtmlPreviewPublisher> | null>(
     null,
   );
+  const frame = useRef<HTMLIFrameElement | null>(null);
+  const scroll = useRef<PreviewScroll>({ x: 0, y: 0 });
+  // Whether each published token was served with its scripts held back.
+  const blockedByToken = useRef(new Map<string, boolean>());
   const pathRef = useRef(path);
   pathRef.current = path;
   const workspaceRootRef = useRef(workspaceRoot);
   workspaceRootRef.current = workspaceRoot;
 
   useEffect(() => {
+    const blocked = blockedByToken.current;
     const instance = createHtmlPreviewPublisher({
       publish: async (source) => {
         const docPath = pathRef.current;
+        const boundary = docPath
+          ? previewBoundary(docPath, workspaceRootRef.current ?? null)
+          : null;
         const inlined = await maybeInlineHtmlAssets(
           source,
           docPath,
@@ -70,16 +91,23 @@ export function HtmlPreview({ html, path, workspaceRoot }: Props) {
             readText: readTextForPreview,
             readBinary: readBinaryForPreview,
           },
-          docPath
-            ? {
-                boundary: previewBoundary(docPath, workspaceRootRef.current ?? null),
-                isReadable: (abs) => checkReadable(abs).ok,
-              }
+          boundary
+            ? { boundary, isReadable: (abs) => checkReadable(abs).ok }
             : undefined,
         );
-        return invoke<string>("fs_publish_html", { html: inlined });
+        // Inlining leaves the markup untouched when it pulled in nothing.
+        const usedLocalFiles = inlined !== source;
+        const scripts =
+          !usedLocalFiles || (boundary !== null && isPreviewTrusted(boundary));
+        const token = await invoke<string>("fs_publish_html", {
+          html: scripts ? withScrollBridge(inlined, scroll.current) : inlined,
+          scripts,
+        });
+        blocked.set(token, !scripts && hasActiveContent(inlined));
+        return token;
       },
       drop: async (token) => {
+        blocked.delete(token);
         try {
           await invoke("fs_drop_html", { token });
         } catch {
@@ -87,6 +115,7 @@ export function HtmlPreview({ html, path, workspaceRoot }: Props) {
         }
       },
       onReady: (token) => {
+        setScriptsBlocked(blocked.get(token) ?? false);
         setSrc(convertFileSrc(token, "terax-doc"));
         setError(null);
       },
@@ -96,12 +125,37 @@ export function HtmlPreview({ html, path, workspaceRoot }: Props) {
     return () => {
       instance.dispose();
       publisher.current = null;
+      blocked.clear();
     };
   }, []);
 
+  // The frame reports its scroll position so the next render can restore it.
+  useEffect(() => {
+    const onMessage = (event: MessageEvent) => {
+      if (event.source !== frame.current?.contentWindow) return;
+      const next = readScrollMessage(event.data);
+      if (next) scroll.current = next;
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
+  // A different document starts at the top.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset when the file changes.
+  useEffect(() => {
+    scroll.current = { x: 0, y: 0 };
+  }, [path]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: path and workspaceRoot are read through refs when publishing.
   useEffect(() => {
     publisher.current?.request(html);
   }, [html, path, workspaceRoot]);
+
+  const allowScripts = () => {
+    if (!path) return;
+    trustPreview(previewBoundary(path, workspaceRoot ?? null));
+    publisher.current?.request(html);
+  };
 
   if (error) {
     return (
@@ -119,13 +173,31 @@ export function HtmlPreview({ html, path, workspaceRoot }: Props) {
     );
   }
   return (
-    <iframe
-      key={src}
-      src={src}
-      title="HTML preview"
-      sandbox="allow-scripts"
-      referrerPolicy="no-referrer"
-      className="h-full w-full border-none bg-white"
-    />
+    <div className="flex h-full min-h-0 flex-col">
+      {scriptsBlocked && (
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-muted/60 py-1.5 pl-3 pr-44 text-xs text-muted-foreground">
+          <span>
+            Scripts are off: this page loads local files, and its scripts could
+            read them and send them out.
+          </span>
+          <button
+            type="button"
+            onClick={allowScripts}
+            className="shrink-0 rounded border border-border bg-background px-2 py-0.5 text-foreground hover:bg-accent"
+          >
+            Run scripts for this folder
+          </button>
+        </div>
+      )}
+      <iframe
+        ref={frame}
+        key={src}
+        src={src}
+        title="HTML preview"
+        sandbox="allow-scripts"
+        referrerPolicy="no-referrer"
+        className="min-h-0 w-full flex-1 border-none bg-white"
+      />
+    </div>
   );
 }

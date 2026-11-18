@@ -6,11 +6,6 @@ import { invoke } from "@tauri-apps/api/core";
 
 type ReadResult = { kind: string; content?: string; mtime?: number };
 
-// Mirrors src-tauri::modules::fs::file::ReadResultWithBytes
-type ReadResultWithBytes =
-  | { kind: "binary"; content: string; size: number }
-  | { kind: "toolarge"; size: number };
-
 export { MAX_OFFICE_PREVIEW_BYTES, validateOfficeArchive } from "./officeArchive";
 
 type CommandOutput = {
@@ -160,39 +155,23 @@ export async function readFileText(
   return { text: res.content, mtime: res.mtime ?? 0 };
 }
 
-export async function readBinaryBase64(path: string): Promise<{
-  bytes: Uint8Array;
-  size: number;
-} | null> {
-  const res = await invoke<ReadResultWithBytes>("fs_read_binary", {
-    path,
-    workspace: currentWorkspaceEnv(),
-  }).catch(() => null);
-  if (res?.kind === "binary") {
-    const bytes = base64ToBytes(res.content);
-    return { bytes, size: res.size };
-  }
-  if (res?.kind === "toolarge") {
-    return {
-      bytes: new Uint8Array(),
-      size: res.size,
-    };
-  }
-  return null;
-}
-
-export async function readBinary(path: string): Promise<Uint8Array | null> {
-  const r = await readBinaryBase64(path);
-  return r ? r.bytes : null;
-}
-
-// base64 → Uint8Array (Tauri returns base64 strings)
-function base64ToBytes(base64: string): Uint8Array {
-  const raw = atob(base64);
-  const n = raw.length;
-  const out = new Uint8Array(n);
-  for (let i = 0; i < n; i++) out[i] = raw.charCodeAt(i);
-  return out;
+/**
+ * A file's bytes for an in-app preview. They cross IPC raw (`fs_read_bytes`),
+ * not as base64 inside JSON. Rejects with the backend's reason, e.g. when the
+ * file is over the 20 MB preview limit.
+ */
+export async function readBinary(path: string): Promise<ArrayBuffer> {
+  const res = await invoke<ArrayBuffer | Uint8Array | number[]>(
+    "fs_read_bytes",
+    { path, workspace: currentWorkspaceEnv() },
+  );
+  if (res instanceof ArrayBuffer) return res;
+  // Older IPC fallbacks hand back a typed array or a plain number array.
+  const bytes = res instanceof Uint8Array ? res : Uint8Array.from(res);
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
 }
 
 // Minimal change dispatch: trimming the common prefix/suffix keeps the

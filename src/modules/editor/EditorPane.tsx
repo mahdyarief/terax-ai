@@ -60,9 +60,16 @@ import { type LanguageResult, resolveLanguage } from "./lib/languageResolver";
 import { FORCE_READ_LIMIT, useDocument } from "./lib/useDocument";
 import { useEditorThemeExt } from "./lib/useEditorThemeExt";
 import { initVimGlobals, vimHandlersExtension } from "./lib/vim";
-import { mediaPreviewKind } from "./lib/mediaPreview";
+import {
+  isSvgPath,
+  mediaPreviewKind,
+  svgDataUrl,
+  SVG_RENDER_MAX_CHARS,
+} from "./lib/mediaPreview";
+import { fileNameOf, ImagePreview } from "./ImagePreview";
+import { CsvHeadPreview } from "./CsvHeadPreview";
 import { MediaPreview } from "./MediaPreview";
-import { delimitedTextKind } from "./lib/csvPreview";
+import { delimitedTextKind, isDelimitedPath } from "./lib/csvPreview";
 import { CsvPreview } from "./CsvPreview";
 import { DocxPreview } from "./DocxPreview";
 import { HtmlPreview } from "./HtmlPreview";
@@ -609,7 +616,9 @@ export const EditorPane = memo(
       // Office documents are read over IPC, so they need no asset grant.
       if (isDocx || isXlsx) {
         return (
-          <div className="flex h-full min-h-0 flex-col items-center justify-center bg-background p-4 overflow-auto">
+          // The previews scroll themselves; a centering, padded, scrolling
+          // wrapper around them doubled the scrollbars.
+          <div className="h-full min-h-0 bg-background">
             {isDocx && <DocxPreview path={path} size={doc.size} />}
             {isXlsx && <SpreadsheetPreview path={path} size={doc.size} />}
           </div>
@@ -639,22 +648,17 @@ export const EditorPane = memo(
               )}
             </div>
           );
+        if (isImage) {
+          return (
+            <ImagePreview
+              src={assetUrl}
+              name={fileNameOf(path)}
+              sizeLabel={formatBytes(doc.size)}
+            />
+          );
+        }
         return (
           <div className="flex h-full min-h-0 flex-col items-center justify-center bg-background p-4 overflow-auto">
-            {isImage && (
-              <img
-                src={assetUrl}
-                loading="lazy"
-                decoding="async"
-                className="max-w-full max-h-full object-contain rounded-md border border-border shadow-sm"
-                style={{
-                  backgroundImage:
-                    "conic-gradient(var(--muted) 0.25turn, transparent 0.25turn 0.5turn, var(--muted) 0.5turn 0.75turn, transparent 0.75turn)",
-                  backgroundSize: "20px 20px",
-                }}
-                alt={path.split("/").pop()}
-              />
-            )}
             {(kind === "video" || kind === "audio") && (
               <MediaPreview kind={kind} src={assetUrl} active={mediaActive} />
             )}
@@ -662,7 +666,7 @@ export const EditorPane = memo(
               <iframe
                 src={assetUrl}
                 className="w-full h-full border-none"
-                title={path.split("/").pop()}
+                title={fileNameOf(path)}
               />
             )}
           </div>
@@ -671,6 +675,16 @@ export const EditorPane = memo(
 
       const canForce =
         doc.status === "toolarge" && doc.size <= FORCE_READ_LIMIT;
+      // A table preview only needs the start of the file, whatever its size.
+      if (doc.status === "toolarge" && isDelimitedPath(path)) {
+        return (
+          <CsvHeadPreview
+            path={path}
+            sizeLabel={formatBytes(doc.size)}
+            onOpenAnyway={canForce ? openAnyway : undefined}
+          />
+        );
+      }
       return (
         <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
           <div className="text-sm text-foreground">
@@ -705,9 +719,39 @@ export const EditorPane = memo(
       );
     }
 
+    // SVG is text, so it lands here rather than in the binary branch above.
+    // Very large ones stay as source: encoding them for <img> on every
+    // keystroke would stall the editor.
+    const isSvg =
+      doc.status === "ready" &&
+      isSvgPath(path) &&
+      doc.content.length <= SVG_RENDER_MAX_CHARS;
+    if (doc.status === "ready" && isSvg && !htmlSource) {
+      return (
+        <div className="relative flex h-full min-h-0 flex-col zoom-exempt">
+          <MarkdownViewToggle
+            mode="rendered"
+            onChange={(mode) => setHtmlSourcePath(mode === "raw" ? path : null)}
+          />
+          <ImagePreview
+            src={svgDataUrl(doc.content)}
+            name={fileNameOf(path)}
+            sizeLabel={formatBytes(doc.size)}
+            reserveToggleSpace
+          />
+        </div>
+      );
+    }
+
     const isHtml = doc.status === "ready" && isHtmlPath(path);
     return (
       <div className="relative flex h-full min-h-0 flex-col zoom-exempt">
+        {isSvg && (
+          <MarkdownViewToggle
+            mode="raw"
+            onChange={(mode) => setHtmlSourcePath(mode === "raw" ? path : null)}
+          />
+        )}
         {isHtml && (
           <MarkdownViewToggle
             mode={htmlSource ? "raw" : "rendered"}

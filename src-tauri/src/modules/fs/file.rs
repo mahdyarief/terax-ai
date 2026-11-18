@@ -22,6 +22,8 @@ const MAX_BINARY_BYTES: u64 = 20 * 1024 * 1024; // 20 MB
 /// Ceiling for explicit "open anyway"; mirrored as FORCE_READ_LIMIT in useDocument.ts.
 const FORCE_MAX_READ_BYTES: u64 = 50 * 1024 * 1024;
 const BINARY_SNIFF_BYTES: usize = 8 * 1024;
+/// Ceiling for `fs_read_head`: plenty for a few hundred table rows.
+const MAX_HEAD_BYTES: u64 = 1024 * 1024;
 
 #[derive(Serialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
@@ -109,6 +111,93 @@ pub async fn fs_read_binary(
         })
     })
     .await
+}
+
+/// Same read as [`fs_read_binary`], but the bytes cross IPC raw (an
+/// `ArrayBuffer` in the renderer) instead of as a base64 string inside JSON,
+/// which cost a third more memory plus a decode pass for a 20 MB document.
+#[tauri::command]
+pub async fn fs_read_bytes(
+    path: String,
+    workspace: Option<WorkspaceEnv>,
+) -> Result<tauri::ipc::Response, String> {
+    blocking(move || {
+        let workspace = WorkspaceEnv::from_option(workspace);
+        let p = resolve_path(&path, &workspace);
+        let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
+        if !meta.is_file() {
+            return Err("only regular files can be read".into());
+        }
+        let too_large = || format!("file is larger than {} MB", MAX_BINARY_BYTES / 1024 / 1024);
+        if meta.len() > MAX_BINARY_BYTES {
+            return Err(too_large());
+        }
+        // Bounded read: the file may grow between the stat and the read.
+        let mut bytes = Vec::with_capacity(meta.len() as usize);
+        fs::File::open(&p)
+            .map_err(|e| e.to_string())?
+            .take(MAX_BINARY_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > MAX_BINARY_BYTES as usize {
+            return Err(too_large());
+        }
+        Ok(tauri::ipc::Response::new(bytes))
+    })
+    .await
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HeadResult {
+    content: String,
+    /// The file continues past `content`.
+    truncated: bool,
+    size: u64,
+}
+
+/// The start of a text file of any size, cut at a line boundary. Lets a table
+/// preview show the first rows of a file too large to open in the editor.
+#[tauri::command]
+pub async fn fs_read_head(
+    path: String,
+    workspace: Option<WorkspaceEnv>,
+    max_bytes: Option<u64>,
+) -> Result<HeadResult, String> {
+    blocking(move || {
+        let workspace = WorkspaceEnv::from_option(workspace);
+        let p = resolve_path(&path, &workspace);
+        let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
+        if !meta.is_file() {
+            return Err("only regular files can be read".into());
+        }
+        let limit = max_bytes.unwrap_or(MAX_HEAD_BYTES).clamp(1, MAX_HEAD_BYTES);
+        let bytes = read_bounded(fs::File::open(&p).map_err(|e| e.to_string())?, limit)
+            .map_err(|e| e.to_string())?;
+        head_of(bytes, limit, meta.len())
+    })
+    .await
+}
+
+fn head_of(mut bytes: Vec<u8>, limit: u64, size: u64) -> Result<HeadResult, String> {
+    let truncated = bytes.len() as u64 > limit;
+    if bytes[..bytes.len().min(BINARY_SNIFF_BYTES)].contains(&0) {
+        return Err("binary file".into());
+    }
+    if truncated {
+        bytes.truncate(limit as usize);
+        // Drop the partial last line (and any split UTF-8 sequence with it).
+        match bytes.iter().rposition(|byte| *byte == b'\n') {
+            Some(end) => bytes.truncate(end + 1),
+            None => return Err("the first line is too long to preview".into()),
+        }
+    }
+    let content = String::from_utf8(bytes).map_err(|_| "binary file".to_string())?;
+    Ok(HeadResult {
+        content,
+        truncated,
+        size,
+    })
 }
 
 #[tauri::command]
@@ -372,6 +461,35 @@ fn stat_path(path: String, workspace: Option<WorkspaceEnv>) -> Result<FileStat, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_head_is_cut_at_the_last_whole_line() {
+        // read_bounded hands over one byte past the limit when there is more.
+        let head = head_of(b"a,b\nc,d\ne,f".to_vec(), 10, 11).unwrap();
+        assert_eq!(head.content, "a,b\nc,d\n");
+        assert!(head.truncated);
+        assert_eq!(head.size, 11);
+    }
+
+    #[test]
+    fn a_head_that_holds_the_whole_file_is_not_truncated() {
+        let head = head_of(b"a,b\nc,d".to_vec(), 100, 7).unwrap();
+        assert_eq!(head.content, "a,b\nc,d");
+        assert!(!head.truncated);
+    }
+
+    #[test]
+    fn a_head_never_splits_a_multibyte_character() {
+        // The limit lands inside the second "é" (two bytes each).
+        let head = head_of("x\né\né".as_bytes().to_vec(), 6, 7).unwrap();
+        assert_eq!(head.content, "x\né\n");
+    }
+
+    #[test]
+    fn a_head_refuses_binary_and_single_line_overflow() {
+        assert!(head_of(vec![b'a', 0, b'b'], 10, 3).is_err());
+        assert!(head_of(vec![b'a'; 11], 10, 11).is_err());
+    }
 
     #[test]
     fn file_reads_stop_at_one_byte_over_the_limit() {

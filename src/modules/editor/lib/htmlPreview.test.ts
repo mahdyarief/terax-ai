@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createHtmlPreviewPublisher } from "./htmlPreview";
+import {
+  createHtmlPreviewPublisher,
+  hasActiveContent,
+  readScrollMessage,
+  withScrollBridge,
+} from "./htmlPreview";
 
 function setup(delayMs = 250) {
   const publish = vi.fn(async (html: string) => `token:${html}`);
@@ -15,6 +20,51 @@ function setup(delayMs = 250) {
   });
   return { publisher, publish, drop, onReady, onError };
 }
+
+describe("scroll bridge", () => {
+  it("adds the script before </body>, or at the end without one", () => {
+    const withBody = withScrollBridge("<body><p>x</p></BODY></html>", {
+      x: 0,
+      y: 420.4,
+    });
+    expect(withBody).toMatch(
+      /<\/p><script data-terax-preview>.*<\/script><\/BODY>/,
+    );
+    expect(withBody).toContain("scrollTo(0,420)");
+    expect(withScrollBridge("<p>x", { x: 0, y: 0 })).toMatch(
+      /^<p>x<script data-terax-preview>/,
+    );
+  });
+
+  it("never writes a non-numeric position into the script", () => {
+    const html = withScrollBridge("", {
+      x: Number.NaN,
+      y: "1);alert(1" as unknown as number,
+    });
+    expect(html).toContain("scrollTo(0,0)");
+    expect(html).not.toContain("alert");
+  });
+
+  it("accepts only its own well-formed scroll messages", () => {
+    expect(
+      readScrollMessage({ type: "terax-preview-scroll", x: 3, y: 90 }),
+    ).toEqual({ x: 3, y: 90 });
+    expect(readScrollMessage({ type: "other", x: 3, y: 90 })).toBeNull();
+    expect(
+      readScrollMessage({ type: "terax-preview-scroll", x: "3", y: 90 }),
+    ).toBeNull();
+    expect(
+      readScrollMessage({ type: "terax-preview-scroll", x: 1, y: Infinity }),
+    ).toBeNull();
+    expect(readScrollMessage("terax-preview-scroll")).toBeNull();
+  });
+
+  it("spots markup that would execute", () => {
+    expect(hasActiveContent("<p>plain</p>")).toBe(false);
+    expect(hasActiveContent("<SCRIPT>1</SCRIPT>")).toBe(true);
+    expect(hasActiveContent('<img src=x onerror="go()">')).toBe(true);
+  });
+});
 
 describe("createHtmlPreviewPublisher", () => {
   beforeEach(() => vi.useFakeTimers());

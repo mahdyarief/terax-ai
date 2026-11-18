@@ -395,6 +395,8 @@ pub fn run() {
             fs::tree::fs_read_dir,
             fs::file::fs_read_file,
             fs::file::fs_read_binary,
+            fs::file::fs_read_bytes,
+            fs::file::fs_read_head,
             fs::ai::ai_read_file,
             fs::ai::ai_read_dir,
             fs::ai::ai_grep,

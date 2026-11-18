@@ -70,6 +70,12 @@ export function parseDelimitedPreview(
   return { rows, columns, truncated };
 }
 
+/** Does the extension alone say this is a delimited table? */
+export function isDelimitedPath(path: string): boolean {
+  const ext = path.split(".").pop()?.toLowerCase();
+  return ext === "csv" || ext === "tsv" || ext === "tab";
+}
+
 export function delimitedTextKind(
   path: string,
   content: string,
