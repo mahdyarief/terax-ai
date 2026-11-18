@@ -106,7 +106,7 @@ impl Session {
     }
 
     #[cfg(test)]
-    fn attachment_token_for_test(&self) -> AttachToken {
+    pub(super) fn attachment_token_for_test(&self) -> AttachToken {
         self.attachment_token()
     }
 }
@@ -653,14 +653,19 @@ mod tests {
         fn open(hub: &Hub, label: &str) -> Self {
             let (tx, rx) = std_mpsc::channel();
             let label: Arc<str> = Arc::from(label);
+            // The page mints its own stream token; any non-zero value works.
+            let token = 1;
             hub.submit(Command::OpenStream {
                 label: label.clone(),
-                reply: Box::new(move |token| tx.send(token).unwrap()),
+                token,
+                epoch: 0,
+                reply: Box::new(move |result| tx.send(result).unwrap()),
             });
+            rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap();
             Self {
                 hub: hub.clone(),
                 label,
-                token: rx.recv_timeout(Duration::from_secs(5)).unwrap().unwrap(),
+                token,
                 received: Vec::new(),
                 acked: 0,
                 exit: None,
@@ -676,6 +681,7 @@ mod tests {
                 endpoint: Endpoint::Poll,
                 request: StreamRequest {
                     token: self.token,
+                    epoch: 0,
                     acks,
                 },
                 reply: Box::new(ChannelReply(tx)),

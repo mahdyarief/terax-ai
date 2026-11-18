@@ -342,7 +342,7 @@ fn a_backslash_in_a_file_name_is_not_a_separator_on_unix() {
 // -------------------------------------------- the real index's age on a copy
 
 #[cfg(unix)]
-fn set_mtime(path: &Path, when: SystemTime) {
+fn set_mtime(path: &Path, when: std::time::SystemTime) {
     std::fs::OpenOptions::new()
         .write(true)
         .open(path)
