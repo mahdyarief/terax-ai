@@ -154,6 +154,10 @@ pub struct HeadResult {
     /// The file continues past `content`.
     truncated: bool,
     size: u64,
+    /// Byte offset the next chunk starts at. Null-byte sniff failures and
+    /// partial-line trims change the byte length, so the renderer must not
+    /// compute this from the encoded content length itself.
+    next_offset: Option<u64>,
 }
 
 /// The start of a text file of any size, cut at a line boundary. Lets a table
@@ -168,6 +172,7 @@ pub async fn fs_read_head(
     workspace: Option<WorkspaceEnv>,
     max_bytes: Option<u64>,
     partial_line: Option<bool>,
+    offset: Option<u64>,
 ) -> Result<HeadResult, String> {
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
@@ -177,9 +182,15 @@ pub async fn fs_read_head(
             return Err("only regular files can be read".into());
         }
         let limit = max_bytes.unwrap_or(MAX_HEAD_BYTES).clamp(1, MAX_HEAD_BYTES);
-        let bytes = read_bounded(fs::File::open(&p).map_err(|e| e.to_string())?, limit)
-            .map_err(|e| e.to_string())?;
-        head_of(bytes, limit, meta.len(), partial_line.unwrap_or(false))
+        let start = offset.unwrap_or(0).min(meta.len());
+        let mut file = fs::File::open(&p).map_err(|e| e.to_string())?;
+        if start > 0 {
+            use std::io::Seek;
+            file.seek(std::io::SeekFrom::Start(start))
+                .map_err(|e| e.to_string())?;
+        }
+        let bytes = read_bounded(file, limit).map_err(|e| e.to_string())?;
+        head_of(bytes, limit, meta.len(), partial_line.unwrap_or(false), start)
     })
     .await
 }
@@ -189,6 +200,7 @@ fn head_of(
     limit: u64,
     size: u64,
     partial_line: bool,
+    offset: u64,
 ) -> Result<HeadResult, String> {
     let truncated = bytes.len() as u64 > limit;
     if bytes[..bytes.len().min(BINARY_SNIFF_BYTES)].contains(&0) {
@@ -211,12 +223,19 @@ fn head_of(
             }
             _ => return Err("the first line is too long to preview".into()),
         }
+        // A trim that consumes nothing would make the next page start where
+        // this one did; fall back to the raw window instead of stalling.
+        if bytes.is_empty() {
+            return Err("the first line is too long to preview".into());
+        }
     }
+    let consumed = bytes.len() as u64;
     let content = String::from_utf8(bytes).map_err(|_| "binary file".to_string())?;
     Ok(HeadResult {
         content,
         truncated,
         size,
+        next_offset: truncated.then(|| offset.saturating_add(consumed)),
     })
 }
 
@@ -485,7 +504,7 @@ mod tests {
     #[test]
     fn a_head_is_cut_at_the_last_whole_line() {
         // read_bounded hands over one byte past the limit when there is more.
-        let head = head_of(b"a,b\nc,d\ne,f".to_vec(), 10, 11, false).unwrap();
+        let head = head_of(b"a,b\nc,d\ne,f".to_vec(), 10, 11, false, 0).unwrap();
         assert_eq!(head.content, "a,b\nc,d\n");
         assert!(head.truncated);
         assert_eq!(head.size, 11);
@@ -493,7 +512,7 @@ mod tests {
 
     #[test]
     fn a_head_that_holds_the_whole_file_is_not_truncated() {
-        let head = head_of(b"a,b\nc,d".to_vec(), 100, 7, false).unwrap();
+        let head = head_of(b"a,b\nc,d".to_vec(), 100, 7, false, 0).unwrap();
         assert_eq!(head.content, "a,b\nc,d");
         assert!(!head.truncated);
     }
@@ -501,36 +520,36 @@ mod tests {
     #[test]
     fn a_head_never_splits_a_multibyte_character() {
         // The limit lands inside the second "é" (two bytes each).
-        let head = head_of("x\né\né".as_bytes().to_vec(), 6, 7, false).unwrap();
+        let head = head_of("x\né\né".as_bytes().to_vec(), 6, 7, false, 0).unwrap();
         assert_eq!(head.content, "x\né\n");
     }
 
     #[test]
     fn a_head_refuses_binary_and_single_line_overflow() {
-        assert!(head_of(vec![b'a', 0, b'b'], 10, 3, false).is_err());
-        assert!(head_of(vec![b'a'; 11], 10, 11, false).is_err());
+        assert!(head_of(vec![b'a', 0, b'b'], 10, 3, false, 0).is_err());
+        assert!(head_of(vec![b'a'; 11], 10, 11, false, 0).is_err());
     }
 
     #[test]
     fn head_may_cut_inside_a_line_when_asked() {
         // Minified JSON: one line, no newline to cut at.
-        let head = head_of(vec![b'a'; 11], 10, 11, true).unwrap();
+        let head = head_of(vec![b'a'; 11], 10, 11, true, 0).unwrap();
         assert_eq!(head.content, "a".repeat(10));
         assert!(head.truncated);
 
         // The cut never splits a multi-byte character: "é" is two bytes.
-        let head = head_of("aaaaé".as_bytes().to_vec(), 5, 6, true).unwrap();
+        let head = head_of("aaaaé".as_bytes().to_vec(), 5, 6, true, 0).unwrap();
         assert_eq!(head.content, "aaaa");
 
         // A newline near the end is still preferred over a mid-line cut...
-        let head = head_of(b"aaaaaaa\nbbb".to_vec(), 10, 11, true).unwrap();
+        let head = head_of(b"aaaaaaa\nbbb".to_vec(), 10, 11, true, 0).unwrap();
         assert_eq!(head.content, "aaaaaaa\n");
         // ...but not one that would throw away most of what was read.
-        let head = head_of(b"a\nbbbbbbbbb".to_vec(), 10, 11, true).unwrap();
+        let head = head_of(b"a\nbbbbbbbbb".to_vec(), 10, 11, true, 0).unwrap();
         assert_eq!(head.content, "a\nbbbbbbbb");
 
         // Binary content is still refused.
-        assert!(head_of(vec![b'a', 0, b'b'], 2, 3, true).is_err());
+        assert!(head_of(vec![b'a', 0, b'b'], 2, 3, true, 0).is_err());
     }
 
     #[test]
@@ -539,6 +558,22 @@ mod tests {
         // read past the sentinel byte used to report TooLarge.
         let bytes = read_bounded(std::io::repeat(b'x').take(1000), 32).unwrap();
         assert_eq!(bytes.len(), 33);
+    }
+
+    #[test]
+    fn a_truncated_head_reports_where_the_next_page_starts() {
+        // The 11-byte source is cut to 10, then trimmed back to the last whole
+        // line ("a,b\nc,d\n" = 8 bytes) before the page is returned.
+        let head = head_of(b"a,b\nc,d\ne,f".to_vec(), 10, 11, false, 0).unwrap();
+        assert_eq!(head.next_offset, Some(8));
+
+        // An offset is carried into the next page, not reset to the file start.
+        let head = head_of(b"a,b\nc,d\ne,f".to_vec(), 10, 11, false, 50).unwrap();
+        assert_eq!(head.next_offset, Some(58));
+
+        // A whole-file read has nothing to continue.
+        let head = head_of(b"a,b\nc,d".to_vec(), 100, 7, false, 0).unwrap();
+        assert_eq!(head.next_offset, None);
     }
 
     #[cfg(unix)]
