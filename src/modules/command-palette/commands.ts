@@ -6,6 +6,8 @@ import {
   DashboardSquare01Icon,
   FileEditIcon,
   FileSearchIcon,
+  Folder01Icon,
+  FolderAddIcon,
   Globe02Icon,
   IncognitoIcon,
   KeyboardIcon,
@@ -64,6 +66,8 @@ export type CommandPaletteActionContext = {
   windowLabel: string;
   openSpacesOverview: () => void;
   newSpace: () => void;
+  openFolder?: () => void;
+  openFolderAsSpace?: () => void;
   switchSpace: (id: string) => void;
 };
 
@@ -122,12 +126,28 @@ export function createCommandItems(
       run: ctx.openSpacesOverview,
     },
     {
+      id: "workspace.openFolder",
+      title: "Open Folder...",
+      group: "General",
+      keywords: ["folder", "open", "directory", "workspace", "project"],
+      icon: Folder01Icon,
+      run: ctx.openFolder ?? noop,
+    },
+    {
       id: "spaces.new",
       title: "New Space",
       group: "Spaces",
       keywords: ["space", "session", "workspace", "group", "create"],
       icon: DashboardSquare01Icon,
       run: ctx.newSpace,
+    },
+    {
+      id: "spaces.openFolderAsSpace",
+      title: "Open Folder as New Space...",
+      group: "Spaces",
+      keywords: ["space", "new", "folder", "open", "workspace"],
+      icon: FolderAddIcon,
+      run: ctx.openFolderAsSpace ?? noop,
     },
     ...ctx.spaces.map((sp) => {
       const host = sp.hostWindowLabel ?? "main";

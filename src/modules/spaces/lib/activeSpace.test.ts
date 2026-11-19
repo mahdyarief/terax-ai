@@ -76,4 +76,10 @@ describe("freshTabCwd", () => {
     expect(freshTabCwd(local, null, null, "C:/Users/me")).toBe("C:/Users/me");
     expect(freshTabCwd(local, null, null, null)).toBeNull();
   });
+
+  it("prefers spaceRoot if provided", () => {
+    expect(
+      freshTabCwd(local, null, "C:/work", "C:/Users/me", "D:/my-project"),
+    ).toBe("D:/my-project");
+  });
 });
