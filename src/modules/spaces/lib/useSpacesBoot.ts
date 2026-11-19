@@ -225,7 +225,8 @@ export function useSpacesBoot({
 
         // Active space must never be empty, else its tab list shows nothing.
         if (!restored.some((t) => t.spaceId === saveActive)) {
-          const cwd = freshTabCwd(env, restoredHome, launchCwd, home);
+          const activeSpaceRoot = hosted.find((s) => s.id === saveActive)?.root;
+          const cwd = freshTabCwd(env, restoredHome, launchCwd, home, activeSpaceRoot);
           restored.push(freshTerminalTab(saveActive, cwd, allocId));
         }
 

@@ -16,6 +16,8 @@ import {
   ArrowUpRight02Icon,
   Cancel01Icon,
   Delete02Icon,
+  Folder01Icon,
+  FolderAddIcon,
   PencilEdit02Icon,
   PlusSignIcon,
 } from "@hugeicons/core-free-icons";
@@ -35,6 +37,8 @@ type Props = {
   onOpenChange: (open: boolean) => void;
   tabs: Tab[];
   onNewSpace: () => void;
+  onOpenFolderAsSpace?: () => void;
+  onPickFolderForSpace?: (spaceId: string) => void;
   onDeleteSpace: (id: string) => void;
   onOpenSpaceInWindow: (id: string) => void;
   onBringSpaceToWindow: (id: string) => void;
@@ -86,6 +90,8 @@ export function SpaceSwitcher({
   onOpenChange,
   tabs,
   onNewSpace,
+  onOpenFolderAsSpace,
+  onPickFolderForSpace,
   onDeleteSpace,
   onOpenSpaceInWindow,
   onBringSpaceToWindow,
@@ -330,6 +336,11 @@ export function SpaceSwitcher({
               onOpenInWindow={() => onOpenSpaceInWindow(sp.id)}
               onBringBack={() => onBringSpaceToWindow(sp.id)}
               windowLabel={windowLabel}
+              onPickFolder={
+                onPickFolderForSpace
+                  ? () => onPickFolderForSpace(sp.id)
+                  : undefined
+              }
               onNewTab={() => onNewTabInSpace(sp.id)}
               onJumpTab={onJumpTab}
               onCloseTab={onCloseTab}
@@ -337,7 +348,7 @@ export function SpaceSwitcher({
           ))}
         </div>
         {!focusedWindow && (
-          <div className="mt-1.5 border-t border-border/60 pt-1.5">
+          <div className="mt-1.5 flex flex-col gap-1 border-t border-border/60 pt-1.5">
             <button
               type="button"
               onClick={onNewSpace}
@@ -346,6 +357,16 @@ export function SpaceSwitcher({
               <HugeiconsIcon icon={PlusSignIcon} size={14} strokeWidth={1.75} />
               <span className="flex-1">New space</span>
             </button>
+            {onOpenFolderAsSpace && (
+              <button
+                type="button"
+                onClick={onOpenFolderAsSpace}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-accent/60 hover:text-foreground"
+              >
+                <HugeiconsIcon icon={FolderAddIcon} size={14} strokeWidth={1.75} />
+                <span className="flex-1">Open folder as space…</span>
+              </button>
+            )}
           </div>
         )}
       </PopoverContent>
@@ -397,6 +418,7 @@ type SpaceRowProps = {
   onOpenInWindow: () => void;
   onBringBack: () => void;
   windowLabel: string;
+  onPickFolder?: () => void;
   onNewTab: () => void;
   onJumpTab: (id: number) => void;
   onCloseTab: (id: number) => void;
@@ -424,6 +446,7 @@ function SpaceRow({
   onOpenInWindow,
   onBringBack,
   windowLabel,
+  onPickFolder,
   onNewTab,
   onJumpTab,
   onCloseTab,
@@ -492,9 +515,19 @@ function SpaceRow({
             className="ml-0.5"
           />
         ) : (
-          <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
-            {space.name}
-          </span>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-medium text-foreground">
+              {space.name}
+            </div>
+            {space.root && (
+              <div
+                className="truncate text-[10px] text-muted-foreground/70"
+                title={space.root}
+              >
+                {space.root}
+              </div>
+            )}
+          </div>
         )}
         {!editing && (
           <>
@@ -519,6 +552,13 @@ function SpaceRow({
                 label="Rename space"
                 onClick={onStartRename}
               />
+              {onPickFolder && (
+                <RowAction
+                  icon={Folder01Icon}
+                  label={space.root ? "Change workspace folder" : "Set workspace folder"}
+                  onClick={onPickFolder}
+                />
+              )}
               {windowLabel === "main" && (
                 <RowAction
                   icon={ArrowUpRight02Icon}

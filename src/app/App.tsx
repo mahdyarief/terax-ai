@@ -347,6 +347,9 @@ export default function App() {
   const activeSpaceName = useSpaces(
     (s) => s.spaces.find((sp) => sp.id === s.activeId)?.name ?? null,
   );
+  const activeSpaceRoot = useSpaces(
+    (s) => s.spaces.find((sp) => sp.id === s.activeId)?.root ?? null,
+  );
   const spacesHydrated = useSpaces((s) => s.hydrated);
   const activeSpaceIdRef = useRef(activeSpaceId);
   useLayoutEffect(() => {
@@ -500,6 +503,7 @@ export default function App() {
     activeTab,
     tabs,
     launchCwd ?? home,
+    activeSpaceRoot,
   );
 
   useWindowTitle(
@@ -1344,6 +1348,93 @@ export default function App() {
     setActiveSpaceForNewTabs,
   ]);
 
+  const handleOpenFolder = useCallback(
+    async (targetPath?: string) => {
+      const chosen =
+        targetPath ??
+        (await invoke<string | null>("workspace_pick_folder", {
+          defaultPath: activeSpaceRoot ?? activeCwd ?? launchCwd ?? home ?? null,
+        }));
+      if (!chosen) return;
+
+      await native.workspaceAuthorize(chosen);
+      const state = useSpaces.getState();
+      const currentSpace = state.spaces.find((s) => s.id === state.activeId);
+      const folderName =
+        chosen.split(/[\\/]/).filter(Boolean).pop() || chosen;
+
+      if (currentSpace) {
+        state.setRoot(currentSpace.id, chosen);
+        if (/^(Space \d+|Default)$/.test(currentSpace.name)) {
+          state.rename(currentSpace.id, folderName);
+        }
+      }
+      if (
+        activeTab?.kind !== "terminal" ||
+        activeTab.cwd !== chosen
+      ) {
+        newTab(chosen);
+      }
+    },
+    [activeSpaceRoot, activeCwd, launchCwd, home, activeTab, newTab],
+  );
+
+  const handleOpenFolderAsSpace = useCallback(
+    async (targetPath?: string) => {
+      if (isSpaceWindow(windowLabel)) return null;
+      const chosen =
+        targetPath ??
+        (await invoke<string | null>("workspace_pick_folder", {
+          defaultPath: activeSpaceRoot ?? activeCwd ?? launchCwd ?? home ?? null,
+        }));
+      if (!chosen) return null;
+
+      await native.workspaceAuthorize(chosen);
+      const folderName =
+        chosen.split(/[\\/]/).filter(Boolean).pop() || chosen;
+      const { create, setActive } = useSpaces.getState();
+      const meta = create({
+        name: folderName,
+        root: chosen,
+        env: workspaceEnv,
+      });
+      setActiveSpaceForNewTabs(meta.id);
+      newTab(chosen);
+      setActive(meta.id);
+      return meta.id;
+    },
+    [
+      windowLabel,
+      activeSpaceRoot,
+      activeCwd,
+      launchCwd,
+      home,
+      workspaceEnv,
+      setActiveSpaceForNewTabs,
+      newTab,
+    ],
+  );
+
+  const handlePickFolderForSpace = useCallback(
+    async (spaceId: string) => {
+      const space = useSpaces.getState().spaces.find((s) => s.id === spaceId);
+      const chosen = await invoke<string | null>("workspace_pick_folder", {
+        defaultPath: space?.root ?? activeSpaceRoot ?? launchCwd ?? home ?? null,
+      });
+      if (!chosen) return;
+
+      await native.workspaceAuthorize(chosen);
+      const state = useSpaces.getState();
+      state.setRoot(spaceId, chosen);
+      const folderName =
+        chosen.split(/[\\/]/).filter(Boolean).pop() || chosen;
+      if (space && /^(Space \d+|Default)$/.test(space.name)) {
+        state.rename(spaceId, folderName);
+      }
+    },
+    [activeSpaceRoot, launchCwd, home],
+  );
+
   const handleDeleteSpace = useCallback(
     (id: string) => {
       const nextSpaceId = useSpaces.getState().remove(id);
@@ -2092,6 +2183,8 @@ export default function App() {
       onOpenChange={setSwitcherOpen}
       tabs={tabs}
       onNewSpace={() => void handleNewSpace()}
+      onOpenFolderAsSpace={() => void handleOpenFolderAsSpace()}
+      onPickFolderForSpace={(id) => void handlePickFolderForSpace(id)}
       onDeleteSpace={handleDeleteSpace}
       onOpenSpaceInWindow={handleOpenSpaceInWindow}
       onBringSpaceToWindow={handleBringSpaceToWindow}
@@ -2136,6 +2229,8 @@ export default function App() {
             windowLabel,
             openSpacesOverview: () => setSwitcherOpen(true),
             newSpace: () => void handleNewSpace(),
+            openFolder: () => void handleOpenFolder(),
+            openFolderAsSpace: () => void handleOpenFolderAsSpace(),
             switchSpace: (id) => useSpaces.getState().setActive(id),
           })
         : [],
@@ -2160,6 +2255,9 @@ export default function App() {
       askFromSelection,
       activeSpaceId,
       handleNewSpace,
+      handleOpenFolder,
+      handleOpenFolderAsSpace,
+      windowLabel,
     ],
   );
 
@@ -2386,6 +2484,7 @@ export default function App() {
                         <FileExplorer
                           ref={explorerRef}
                           rootPath={explorerRoot}
+                          onOpenFolder={() => void handleOpenFolder()}
                           gitStatus={
                             explorerGitDecorations ? sourceControl.status : null
                           }

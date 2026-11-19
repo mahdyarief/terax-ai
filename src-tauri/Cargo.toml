@@ -49,6 +49,7 @@ http-range = "0.1"
 memchr = "2"
 terax-control-protocol = { path = "crates/terax-control-protocol" }
 portable-pty = "0.9"
+rfd = "0.15"
 dirs = "7"
 log = "0.4"
 ignore = "0.4"

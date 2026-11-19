@@ -280,6 +280,26 @@ pub async fn workspace_current_dir(app: tauri::AppHandle) -> Result<String, Stri
     .await
 }
 
+#[tauri::command]
+pub async fn workspace_pick_folder(
+    default_path: Option<String>,
+) -> Result<Option<String>, String> {
+    crate::modules::fs::blocking(move || {
+        let mut dialog = rfd::FileDialog::new().set_title("Open Folder");
+        if let Some(path) = default_path.filter(|p| !p.trim().is_empty()) {
+            let p = PathBuf::from(path);
+            if p.is_dir() {
+                dialog = dialog.set_directory(&p);
+            } else if let Some(parent) = p.parent().filter(|parent| parent.is_dir()) {
+                dialog = dialog.set_directory(parent);
+            }
+        }
+        let selected = dialog.pick_folder();
+        Ok(selected.map(|p| crate::modules::fs::to_canon(&p)))
+    })
+    .await
+}
+
 // Snapshotted once at app startup so the live `current_dir()` drifting later
 // (file dialogs, plugin chdir) can't shift the value seen by IPC or spawn.
 static LAUNCH_CWD: OnceLock<Option<PathBuf>> = OnceLock::new();
