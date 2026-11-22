@@ -1,4 +1,3 @@
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -6,7 +5,10 @@ use serde::{Deserialize, Serialize};
 use super::errors::{GitError, Result};
 use super::plumbing::open_worktree;
 use super::{refs, worktree};
-use crate::modules::workspace::{WorkspaceEnv, WorkspaceRegistry};
+use super::utils::ResolvedGitDirectory;
+use crate::modules::workspace::{within, WorkspaceEnv, WorkspaceRegistry};
+use terax_workspace_core::paths::join;
+use terax_workspace_core::workspace::{EntryKind, ReadRequest};
 
 const CONFIG_LIMIT: u64 = 256 * 1024;
 
@@ -215,28 +217,35 @@ fn validate_template(template: &str) -> std::result::Result<(), &'static str> {
     Ok(())
 }
 
-pub(crate) fn read_confined(root: &Path, relative: &str) -> Result<Option<String>> {
-    let path = root.join(relative);
-    let resolved = match std::fs::canonicalize(&path) {
+/// A small text file under the repository, refused when it resolves outside
+/// it or is not a regular file. `None` when it does not exist.
+pub(crate) fn read_confined(repo: &ResolvedGitDirectory, relative: &str) -> Result<Option<String>> {
+    let ws = repo.backend();
+    let resolved = match ws.canonicalize(&join(&repo.ws_path, relative)) {
         Ok(path) => path,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(e.into()),
     };
-    if !resolved.starts_with(root) {
-        return Err(GitError::PathOutsideWorkspace(resolved));
+    if !within(ws.env(), &resolved, &repo.ws_path) {
+        return Err(GitError::PathOutsideWorkspace(PathBuf::from(resolved)));
     }
-    if !std::fs::metadata(&resolved)?.is_file() {
+    if ws.metadata(&resolved)?.kind != EntryKind::File {
         return Err(GitError::InvalidPath(format!(
             "{relative} must be a regular file"
         )));
     }
-    let mut text = String::new();
-    std::fs::File::open(&resolved)?
-        .take(CONFIG_LIMIT + 1)
-        .read_to_string(&mut text)?;
-    if text.len() as u64 > CONFIG_LIMIT {
+    let read = ws.read(
+        &resolved,
+        ReadRequest {
+            offset: 0,
+            limit: CONFIG_LIMIT,
+        },
+    )?;
+    if read.bytes.len() as u64 > CONFIG_LIMIT {
         return Err(GitError::InvalidPath(format!("{relative} exceeds 256 KiB")));
     }
+    let text = String::from_utf8(read.bytes)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     Ok(Some(text))
 }
 
@@ -252,8 +261,8 @@ pub fn read(
         ));
     }
     let mut config =
-        parse(&read_confined(&repo.local_path, ".terax/project.toml")?.unwrap_or_default())?;
-    if let Some(text) = read_confined(&repo.local_path, ".worktreeinclude")? {
+        parse(&read_confined(&repo, ".terax/project.toml")?.unwrap_or_default())?;
+    if let Some(text) = read_confined(&repo, ".worktreeinclude")? {
         for (line, entry) in text.lines().enumerate() {
             let entry = entry.trim();
             if entry.is_empty() || entry.starts_with('#') {
@@ -384,4 +393,46 @@ pub(crate) fn validate_location(path: &Path, repo: &Path, home: &Path) -> Result
         )));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::modules::git::utils::canonical_dir;
+
+    /// `.terax` linked out of the repository: the file's text stays under the
+    /// repository, but it resolves outside, and is refused.
+    #[test]
+    fn a_config_file_reached_through_a_link_out_of_the_repository_is_refused() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("project.toml"), "").unwrap();
+        let link = repo_dir.path().join(".terax");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        #[cfg(windows)]
+        {
+            // A junction needs no symlink privilege.
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(outside.path())
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "mklink /J failed");
+        }
+        let registry = WorkspaceRegistry::default();
+        registry.authorize(repo_dir.path()).unwrap();
+        let repo = canonical_dir(
+            &registry,
+            &repo_dir.path().to_string_lossy(),
+            &WorkspaceEnv::Local,
+        )
+        .unwrap();
+
+        let err = read_confined(&repo, ".terax/project.toml").unwrap_err();
+        assert!(matches!(err, GitError::PathOutsideWorkspace(_)), "{err:?}");
+        assert!(read_confined(&repo, ".worktreeinclude").unwrap().is_none());
+    }
 }

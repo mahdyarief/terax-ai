@@ -82,6 +82,9 @@ pub trait Workspace: Send + Sync {
     fn symlink_metadata(&self, path: &str) -> io::Result<Meta>;
     /// The canonical workspace path (symlinks and `..` resolved).
     fn canonicalize(&self, path: &str) -> io::Result<String>;
+    /// A symlink's target, as stored in the link. Anything that is not a
+    /// link fails with `ErrorKind::InvalidInput`.
+    fn read_link(&self, path: &str) -> io::Result<String>;
     /// The directory's entries, in no particular order.
     fn read_dir(&self, path: &str) -> io::Result<Vec<DirEntry>>;
     /// Reads from a regular file. Anything else (a directory, a FIFO, a

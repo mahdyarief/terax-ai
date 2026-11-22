@@ -93,6 +93,19 @@ fn reads_refuse_what_is_not_a_file(ws: &dyn Workspace, root: &str) {
         kind_of(ws.read(&dir, ReadRequest { offset: 0, limit: 10 })),
         ErrorKind::InvalidInput
     );
+    let file = join(root, "plain-for-link.txt");
+    ws.write_atomic(&file, b"x").unwrap();
+    for not_a_link in [file.clone(), root.to_string()] {
+        assert_eq!(
+            ws.read_link(&not_a_link).unwrap_err().kind(),
+            ErrorKind::InvalidInput,
+            "read_link on {not_a_link}"
+        );
+    }
+    assert_eq!(
+        ws.read_link(&join(root, "no-such-link")).unwrap_err().kind(),
+        ErrorKind::NotFound
+    );
 }
 
 fn create_file_never_overwrites(ws: &dyn Workspace, root: &str) {

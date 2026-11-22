@@ -206,6 +206,22 @@ impl Workspace for HostWorkspace {
         fs::symlink_metadata(self.host(path)).map(|m| meta_of(&m))
     }
 
+    fn read_link(&self, path: &str) -> io::Result<String> {
+        let host = self.host(path);
+        match fs::read_link(&host) {
+            Ok(target) => Ok(target.to_string_lossy().into_owned()),
+            // Windows reports a plain file as "not a reparse point"; say what
+            // every backend says.
+            Err(error) => match fs::symlink_metadata(&host) {
+                Ok(meta) if !meta.file_type().is_symlink() => Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "not a symbolic link",
+                )),
+                _ => Err(error),
+            },
+        }
+    }
+
     fn canonicalize(&self, path: &str) -> io::Result<String> {
         let canon = to_canon(fs::canonicalize(self.host(path))?);
         match &self.env {
@@ -384,6 +400,9 @@ mod tests {
         std::os::unix::fs::symlink(&target, &link).unwrap();
         assert_eq!(ws.symlink_metadata(&link).unwrap().kind, EntryKind::Symlink);
         assert_eq!(ws.metadata(&link).unwrap().kind, EntryKind::File);
+        assert_eq!(ws.read_link(&link).unwrap(), target);
+        std::os::unix::fs::symlink("missing", format!("{root}/dangling")).unwrap();
+        assert_eq!(ws.read_link(&format!("{root}/dangling")).unwrap(), "missing");
         let listed = ws.read_dir(&root).unwrap();
         assert!(listed.contains(&DirEntry { name: "link.txt".into(), kind: EntryKind::Symlink }));
     }

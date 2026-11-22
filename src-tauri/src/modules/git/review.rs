@@ -5,7 +5,6 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
-use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -26,6 +25,8 @@ use crate::modules::git::process::{
 use crate::modules::git::types::{GitOutput, TextSource, DEFAULT_TIMEOUT_SECS, MAX_OUTPUT_BYTES};
 use crate::modules::git::utils::ResolvedGitDirectory;
 use crate::modules::workspace::{WorkspaceEnv, WorkspaceRegistry};
+use terax_workspace_core::paths::join;
+use terax_workspace_core::workspace::{EntryKind, ReadRequest};
 
 const SUMMARY_CAP_BYTES: usize = 4 * 1024 * 1024;
 const PATCH_CAP_BYTES: usize = MAX_OUTPUT_BYTES;
@@ -378,39 +379,39 @@ enum UntrackedRead {
     Text(Vec<u8>),
 }
 
-fn read_untracked(local_root: &Path, rel: &str, max: u64) -> UntrackedRead {
-    let path = local_root.join(rel.trim_end_matches('/'));
-    let Ok(meta) = std::fs::symlink_metadata(&path) else {
+fn read_untracked(repo: &ResolvedGitDirectory, rel: &str, max: u64) -> UntrackedRead {
+    let ws = repo.backend();
+    let path = join(&repo.ws_path, rel.trim_end_matches('/'));
+    let Ok(meta) = ws.symlink_metadata(&path) else {
         return UntrackedRead::Missing;
     };
-    if meta.file_type().is_symlink() {
-        let target = std::fs::read_link(&path)
-            .map(|t| t.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        return UntrackedRead::Symlink(target);
+    match meta.kind {
+        EntryKind::Symlink => {
+            return UntrackedRead::Symlink(ws.read_link(&path).unwrap_or_default());
+        }
+        EntryKind::Dir => return UntrackedRead::Directory,
+        EntryKind::File => {}
+        EntryKind::Other => return UntrackedRead::Missing,
     }
-    if meta.is_dir() {
-        return UntrackedRead::Directory;
-    }
-    if !meta.is_file() {
-        return UntrackedRead::Missing;
-    }
-    if meta.len() > max {
+    if meta.len > max {
         // Still sniff the head so a huge binary is reported as binary.
-        if let Ok(mut file) = std::fs::File::open(&path) {
-            use std::io::Read;
-            let mut head = vec![0u8; diff::BINARY_SNIFF_BYTES];
-            if let Ok(n) = file.read(&mut head) {
-                if looks_binary(&head[..n]) {
-                    return UntrackedRead::Binary;
-                }
+        let head = ReadRequest {
+            offset: 0,
+            limit: diff::BINARY_SNIFF_BYTES as u64,
+        };
+        if let Ok(read) = ws.read(&path, head) {
+            let n = read.bytes.len().min(diff::BINARY_SNIFF_BYTES);
+            if looks_binary(&read.bytes[..n]) {
+                return UntrackedRead::Binary;
             }
         }
         return UntrackedRead::Large;
     }
-    match std::fs::read(&path) {
-        Ok(bytes) if looks_binary(&bytes) => UntrackedRead::Binary,
-        Ok(bytes) => UntrackedRead::Text(bytes),
+    match ws.read(&path, ReadRequest { offset: 0, limit: max }) {
+        // It grew past the cap since the stat.
+        Ok(read) if read.bytes.len() as u64 > max => UntrackedRead::Large,
+        Ok(read) if looks_binary(&read.bytes) => UntrackedRead::Binary,
+        Ok(read) => UntrackedRead::Text(read.bytes),
         Err(_) => UntrackedRead::Missing,
     }
 }
@@ -440,7 +441,7 @@ fn summarize_untracked(repo: &ResolvedGitDirectory, paths: &[String]) -> Vec<Dif
                 entry.approximate = true;
                 return entry;
             }
-            match read_untracked(&repo.local_path, path, UNTRACKED_COUNT_FILE_MAX.min(budget)) {
+            match read_untracked(repo, path, UNTRACKED_COUNT_FILE_MAX.min(budget)) {
                 UntrackedRead::Text(bytes) => {
                     counted += 1;
                     budget = budget.saturating_sub(bytes.len() as u64);
@@ -535,7 +536,7 @@ fn read_side(repo: &ResolvedGitDirectory, side: &DiffSide, path: &str) -> Result
         DiffSide::Index => read_rev_side(repo, &format!(":{path}")),
         DiffSide::Worktree { tree: Some(id) } => read_rev_side(repo, &format!("{id}:{path}")),
         DiffSide::Worktree { tree: None } => Ok(
-            match read_untracked(&repo.local_path, path, CONTENT_CAP_BYTES) {
+            match read_untracked(repo, path, CONTENT_CAP_BYTES) {
                 UntrackedRead::Text(bytes) => match decode_text(bytes) {
                     TextSource::Text(text) => SideContent::Text(text),
                     _ => SideContent::Missing,
@@ -618,7 +619,7 @@ fn file_facts(
         return Ok(None);
     }
     let mut summary = untracked_entry(path);
-    match read_untracked(&repo.local_path, path, UNTRACKED_COUNT_FILE_MAX) {
+    match read_untracked(repo, path, UNTRACKED_COUNT_FILE_MAX) {
         UntrackedRead::Text(bytes) => summary.added = count_lines(&bytes),
         UntrackedRead::Binary => summary.binary = true,
         UntrackedRead::Symlink(_) => {
@@ -647,7 +648,7 @@ fn fetch_parsed(
 ) -> Result<(ParsedFileDiff, bool)> {
     if facts.untracked {
         return Ok(
-            match read_untracked(&repo.local_path, &facts.summary.path, CONTENT_CAP_BYTES) {
+            match read_untracked(repo, &facts.summary.path, CONTENT_CAP_BYTES) {
                 UntrackedRead::Text(bytes) => {
                     let (parsed, cut) = diff::synthesize_added_file(&bytes, MAX_SYNTH_LINES);
                     (parsed, cut)
@@ -1106,7 +1107,10 @@ fn ensure_rename_revertible(repo: &ResolvedGitDirectory, old: &str) -> Result<()
             format!("{old} is not in HEAD; nothing was changed"),
         ));
     }
-    let occupied = std::fs::symlink_metadata(repo.local_path.join(old)).is_ok();
+    let occupied = repo
+        .backend()
+        .symlink_metadata(&join(&repo.ws_path, old))
+        .is_ok();
     let indexed = run(
         repo,
         os_args([
@@ -1173,7 +1177,11 @@ fn whole_file(
         }
         ApplyMode::Revert => {
             if facts.untracked {
-                if std::fs::symlink_metadata(repo.local_path.join(rel)).is_ok_and(|m| m.is_dir()) {
+                if repo
+                    .backend()
+                    .symlink_metadata(&join(&repo.ws_path, rel))
+                    .is_ok_and(|meta| meta.kind == EntryKind::Dir)
+                {
                     return Err(GitError::InvalidPath(format!("{rel} is a directory")));
                 }
                 run_ok(

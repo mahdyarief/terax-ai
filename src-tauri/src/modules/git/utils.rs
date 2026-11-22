@@ -102,7 +102,10 @@ pub fn canonical_dir(
     workspace: &WorkspaceEnv,
 ) -> Result<ResolvedGitDirectory> {
     let candidate = resolve_path(path, workspace);
-    if !candidate.is_dir() {
+    let is_dir = backend_for(workspace)
+        .metadata(path)
+        .is_ok_and(|meta| meta.kind == terax_workspace_core::workspace::EntryKind::Dir);
+    if !is_dir {
         return Err(GitError::NotADirectory(path.to_string()));
     }
     let local_path = registry
