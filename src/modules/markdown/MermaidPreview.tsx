@@ -80,7 +80,9 @@ export function MermaidPreview({ code }: { code: string }) {
       {state.error && (
         <div
           role="alert"
-          className="sticky top-0 z-10 border-b border-destructive/30 bg-destructive/10 px-4 py-1.5 pe-40 text-[11.5px] text-destructive backdrop-blur"
+          // Opaque instead of a backdrop blur: a blur promotes a compositing
+          // layer (see compositingBudget.test.ts).
+          className="sticky top-0 z-10 border-b border-destructive/30 bg-[color-mix(in_srgb,var(--destructive)_10%,var(--background))] px-4 py-1.5 pe-40 text-[11.5px] text-destructive"
         >
           Diagram could not be rendered: {state.error}
           {state.svg && (
