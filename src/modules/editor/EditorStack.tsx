@@ -1,5 +1,5 @@
 import { TabErrorBoundary } from "@/components/TabErrorBoundary";
-import { cn, isMarkdownPath } from "@/lib/utils";
+import { cn, defaultSourceView, hasSourcePreview } from "@/lib/utils";
 import {
   type MarkdownViewMode,
   MarkdownViewToggle,
@@ -120,9 +120,9 @@ export function EditorStack({
             aria-hidden={!visible}
           >
             <div className="relative h-full overflow-hidden bg-background">
-              {isMarkdownPath(t.path) && (
+              {hasSourcePreview(t.path) && (
                 <MarkdownViewToggle
-                  mode={t.markdownView ?? "raw"}
+                  mode={t.markdownView ?? defaultSourceView(t.path)}
                   onChange={(mode) => onSetMarkdownView(t.id, mode)}
                   split
                 />

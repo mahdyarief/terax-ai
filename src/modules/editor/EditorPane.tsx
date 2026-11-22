@@ -17,11 +17,14 @@ import { Prec } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { vim } from "@replit/codemirror-vim";
 import { useAssetGrant } from "@/lib/useAssetGrant";
-import { cn, isHtmlPath, isMarkdownPath } from "@/lib/utils";
 import {
-  type MarkdownViewMode,
-  MarkdownViewToggle,
-} from "@/modules/markdown";
+  cn,
+  defaultSourceView,
+  hasSourcePreview,
+  isHtmlPath,
+  isMermaidPath,
+} from "@/lib/utils";
+import { type MarkdownViewMode, MarkdownViewToggle } from "@/modules/markdown";
 import type { MarkdownViewHandle } from "@/modules/markdown/MarkdownPreviewPane";
 import CodeMirror, { type ReactCodeMirrorRef } from "@uiw/react-codemirror";
 import {
@@ -90,6 +93,12 @@ initVimGlobals();
 const MarkdownDocumentView = lazy(() =>
   import("@/modules/markdown/MarkdownPreviewPane").then((module) => ({
     default: module.MarkdownDocumentView,
+  })),
+);
+// Mermaid itself loads only once a diagram renders; this is just its pane.
+const MermaidPreview = lazy(() =>
+  import("@/modules/markdown/MermaidPreview").then((module) => ({
+    default: module.MermaidPreview,
   })),
 );
 
@@ -193,9 +202,11 @@ export const EditorPane = memo(
     // Markdown: the editor stays mounted in every mode (hidden in "rendered"),
     // so switching views keeps undo history, the cursor and unsaved text. The
     // preview renders the live buffer, not the file on disk.
-    const mdMode: MarkdownViewMode = isMarkdownPath(path)
-      ? (markdownView ?? "raw")
+    // Diagram files (.mmd, .mermaid) share this layout, with their own preview.
+    const mdMode: MarkdownViewMode = hasSourcePreview(path)
+      ? (markdownView ?? defaultSourceView(path))
       : "raw";
+    const isDiagram = isMermaidPath(path);
     const mdModeRef = useRef(mdMode);
     mdModeRef.current = mdMode;
     const previewRef = useRef<MarkdownViewHandle | null>(null);
@@ -910,7 +921,11 @@ export const EditorPane = memo(
         )}
         {isHtml && !htmlSource ? (
           <div className="h-full min-h-0 flex-1">
-            <HtmlPreview html={doc.content} path={path} workspaceRoot={workspaceRoot} />
+            <HtmlPreview
+              html={doc.content}
+              path={path}
+              workspaceRoot={workspaceRoot}
+            />
           </div>
         ) : (
           <div className="flex min-h-0 flex-1">
@@ -945,16 +960,20 @@ export const EditorPane = memo(
                 )}
               >
                 <Suspense fallback={null}>
-                  <MarkdownDocumentView
-                    ref={setPreviewRef}
-                    path={path}
-                    status={previewStatus}
-                    workspaceRoot={workspaceRoot}
-                    visible={visible}
-                    onOpenFile={onOpenFile}
-                    onSourceLineChange={onPreviewLine}
-                    reserveCorner
-                  />
+                  {isDiagram ? (
+                    <MermaidPreview code={previewText} />
+                  ) : (
+                    <MarkdownDocumentView
+                      ref={setPreviewRef}
+                      path={path}
+                      status={previewStatus}
+                      workspaceRoot={workspaceRoot}
+                      visible={visible}
+                      onOpenFile={onOpenFile}
+                      onSourceLineChange={onPreviewLine}
+                      reserveCorner
+                    />
+                  )}
                 </Suspense>
               </div>
             )}

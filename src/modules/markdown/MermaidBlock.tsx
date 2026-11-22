@@ -5,7 +5,7 @@ type Mermaid = typeof import("mermaid").default;
 let mermaidPromise: Promise<Mermaid> | null = null;
 
 /** Mermaid is large, so it loads only when a document has a diagram. */
-function loadMermaid(): Promise<Mermaid> {
+export function loadMermaid(): Promise<Mermaid> {
   mermaidPromise ??= import("mermaid").then((module) => module.default);
   return mermaidPromise;
 }

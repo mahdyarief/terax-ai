@@ -1,5 +1,5 @@
 import { planTabRetention } from "./planTabRetention";
-import { isMarkdownPath } from "@/lib/utils";
+import { defaultSourceView, hasSourcePreview } from "@/lib/utils";
 import {
   type AgentInstanceCount,
   createAgentPanePlan,
@@ -1197,11 +1197,8 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     (id: number, mode: MarkdownViewMode) => {
       setTabs((curr) =>
         curr.map((t) => {
-          if (
-            t.id !== id ||
-            !isMarkdownPath((t as { path?: string }).path ?? "")
-          )
-            return t;
+          const path = (t as { path?: string }).path ?? "";
+          if (t.id !== id || !hasSourcePreview(path)) return t;
           // A read-only preview tab becomes an editor tab the first time its
           // source is asked for.
           if (t.kind === "markdown") {
@@ -1221,7 +1218,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
           // preview tab: that would unmount the editor and drop its undo
           // history, cursor and unsaved text.
           if (t.kind === "editor") {
-            return (t.markdownView ?? "raw") === mode
+            return (t.markdownView ?? defaultSourceView(path)) === mode
               ? t
               : { ...t, markdownView: mode };
           }
