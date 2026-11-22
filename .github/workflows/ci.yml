@@ -45,9 +45,15 @@ jobs:
         continue-on-error: true
 
       - name: Build frontend
+        if: >-
+          github.event_name == 'pull_request' || (github.event_name == 'push' &&
+          contains(github.event.head_commit.message, 'chore(release): bump'))
         run: pnpm build
 
       - name: Size budget
+        if: >-
+          github.event_name == 'pull_request' || (github.event_name == 'push' &&
+          contains(github.event.head_commit.message, 'chore(release): bump'))
         run: pnpm size
 
       - name: Dead code (advisory)
@@ -83,7 +89,7 @@ jobs:
       - name: Terminal compositor pixel parity (DPR 1, 1.25, 1.5, 2)
         if: matrix.os == 'macos-latest'
         env:
-          TERAX_VISUAL_SOFTWARE: '1'
+          TERAX_VISUAL_SOFTWARE: "1"
         run: |
           pnpm exec playwright install chromium --no-shell
           pnpm test:terminal-scaling
@@ -114,7 +120,7 @@ jobs:
         with:
           workspaces: ./src-tauri -> target
 
-      - uses: taiki-e/install-action@v2.90.1
+      - uses: taiki-e/install-action@v2.90.3
         with:
           tool: cargo-nextest,cargo-machete
 
@@ -168,7 +174,7 @@ jobs:
         with:
           workspaces: ./src-tauri -> target
 
-      - uses: taiki-e/install-action@v2.90.1
+      - uses: taiki-e/install-action@v2.90.3
         with:
           tool: cargo-nextest
 
@@ -206,7 +212,7 @@ jobs:
           workspaces: ./src-tauri -> target
           key: coverage
 
-      - uses: taiki-e/install-action@v2.90.1
+      - uses: taiki-e/install-action@v2.90.3
         with:
           tool: cargo-llvm-cov,cargo-nextest
 

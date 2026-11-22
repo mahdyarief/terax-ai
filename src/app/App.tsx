@@ -817,15 +817,32 @@ export default function App() {
     [newTab],
   );
 
+  const [pendingMarkdownFragment, setPendingMarkdownFragment] = useState<{
+    path: string;
+    fragment: string;
+  } | null>(null);
   const handleOpenFile = useCallback(
-    (path: string, pin?: boolean) => {
+    (path: string, pin?: boolean, fragment?: string) => {
       // Markdown opens in its rendered view by default; a per-tab toggle flips
       // it to the raw editor. Other files default to preview (pin=false);
       // explicit actions like context-menu "Open" pass pin=true to persist.
-      if (isMarkdownPath(path)) newMarkdownTab(path);
-      else openFileTab(path, pin ?? false);
+      if (isMarkdownPath(path)) {
+        const normalizedPath = path.replace(/\\/g, "/");
+        setPendingMarkdownFragment(
+          fragment ? { path: normalizedPath, fragment } : null,
+        );
+        newMarkdownTab(path);
+      } else openFileTab(path, pin ?? false);
     },
     [openFileTab, newMarkdownTab],
+  );
+  const consumePendingMarkdownFragment = useCallback(
+    (path: string, fragment: string) => {
+      setPendingMarkdownFragment((pending) =>
+        pending?.path === path && pending.fragment === fragment ? null : pending,
+      );
+    },
+    [],
   );
 
   const openLaunchFiles = useCallback(
@@ -2192,7 +2209,8 @@ export default function App() {
   );
 
   const openLinkedFile = useCallback(
-    (path: string) => handleOpenFile(path, true),
+    (path: string, pin?: boolean, fragment?: string) =>
+      handleOpenFile(path, pin ?? true, fragment),
     [handleOpenFile],
   );
 
@@ -2453,6 +2471,10 @@ export default function App() {
                         onGitHistorySearchHandle={setGitHistoryHandle}
                         onSetMarkdownView={handleSetMarkdownView}
                         onOpenFile={openLinkedFile}
+                        pendingFragment={pendingMarkdownFragment}
+                        onConsumePendingFragment={
+                          consumePendingMarkdownFragment
+                        }
                         workspaceRoot={explorerRoot}
                         secondaryActiveId={secondaryTabId}
                         secondaryActiveTab={secondaryActiveTab}

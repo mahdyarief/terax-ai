@@ -9,7 +9,9 @@ type Props = {
   /** `line` is the source line being read, so the editor can open there. */
   onSetMarkdownView: (id: number, mode: MarkdownViewMode, line?: number) => void;
   /** Open a file that a relative link in the document points at. */
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: (path: string, pin?: boolean, fragment?: string) => void;
+  pendingFragment?: { path: string; fragment: string } | null;
+  onConsumePendingFragment?: (path: string, fragment: string) => void;
 };
 
 /** The folder the explorer shows: the active terminal's cwd, else any terminal's. */
@@ -25,6 +27,8 @@ export function MarkdownStack({
   activeId,
   onSetMarkdownView,
   onOpenFile,
+  pendingFragment,
+  onConsumePendingFragment,
 }: Props) {
   const markdowns = tabs.filter(
     (t): t is MarkdownTab => t.kind === "markdown" && !t.cold,
@@ -50,6 +54,23 @@ export function MarkdownStack({
               visible={visible}
               onSetView={(mode, line) => onSetMarkdownView(t.id, mode, line)}
               onOpenFile={onOpenFile}
+              scrollToFragment={
+                pendingFragment?.path.replace(/\\/g, "/") ===
+                t.path.replace(/\\/g, "/")
+                  ? pendingFragment.fragment
+                  : null
+              }
+              onFragmentConsumed={() => {
+                if (
+                  pendingFragment?.path.replace(/\\/g, "/") ===
+                  t.path.replace(/\\/g, "/")
+                ) {
+                  onConsumePendingFragment?.(
+                    pendingFragment.path,
+                    pendingFragment.fragment,
+                  );
+                }
+              }}
             />
           </div>
         );
