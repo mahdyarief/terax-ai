@@ -31,8 +31,15 @@ import {
   defaultRehypePlugins,
   defaultRemarkPlugins,
   Streamdown,
+  type StreamdownProps,
 } from "streamdown";
-import { previewBoundary, rehypeLocalImages } from "./lib/assetPath";
+import {
+  previewBoundary,
+  rehypeAllowBareRelativeLinks,
+  rehypeLocalImages,
+  rehypeRestoreDocHrefs,
+} from "./lib/assetPath";
+import { rehypeHeadingAnchors } from "./lib/headingAnchors";
 import { MARKDOWN_FIND_EVENT } from "./lib/findEvent";
 import { type Frontmatter, splitFrontmatter } from "./lib/frontmatter";
 import {
@@ -62,6 +69,67 @@ import {
   useMarkdownDocument,
 } from "./useMarkdownDocument";
 
+export function buildPreviewRehypePlugins({
+  path,
+  boundary,
+  assetUrlFor,
+}: {
+  path: string;
+  boundary: string;
+  assetUrlFor: (abs: string) => string | undefined;
+}) {
+  const d = defaultRehypePlugins;
+  const sanitize = d.sanitize;
+  const sanitizeForPreview = Array.isArray(sanitize)
+    ? ([
+        sanitize[0],
+        {
+          ...sanitize[1],
+          protocols: {
+            ...sanitize[1]?.protocols,
+            src: [
+              ...(sanitize[1]?.protocols?.src ?? ["http", "https"]),
+              "data",
+            ],
+          },
+        },
+      ] satisfies typeof sanitize)
+    : sanitize;
+  const harden = d.harden;
+  const hardenForPreview = Array.isArray(harden)
+    ? ([
+        harden[0],
+        {
+          ...harden[1],
+          defaultOrigin: `https://markdown-preview.invalid${path.startsWith("/") ? path : `/${path}`}`,
+          allowDefaultOrigin: true,
+          allowedLinkPrefixes: [...(harden[1]?.allowedLinkPrefixes ?? []), "#", "./", "../"],
+          allowedImagePrefixes: [
+            ...(harden[1]?.allowedImagePrefixes ?? []),
+            "asset://",
+            "./",
+            "../",
+          ],
+          allowDataImages: true,
+        },
+      ] satisfies typeof harden)
+    : harden;
+  return [
+    d.raw,
+    sanitizeForPreview,
+    rehypeHeadingAnchors,
+    rehypeLocalImages(path, (abs) => assetUrlFor(abs) ?? "data:,", {
+      boundary,
+      isReadable: (abs) => checkReadable(abs).ok,
+    }),
+    rehypeMarkMath,
+    rehypeAllowBareRelativeLinks(path),
+    rehypeKeepHref(),
+    hardenForPreview,
+    rehypeRestoreDocHrefs(),
+  ] satisfies StreamdownProps["rehypePlugins"];
+}
+
 export type MarkdownViewHandle = {
   /** Put this 1-based source line at the top of the preview. */
   scrollToSourceLine: (line: number) => void;
@@ -82,7 +150,9 @@ type ViewProps = {
    */
   onSetView?: (mode: "raw" | "split", line: number) => void;
   /** Open another file that a relative link points at. */
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: (path: string, pin?: boolean, fragment?: string) => void;
+  scrollToFragment?: string | null;
+  onFragmentConsumed?: () => void;
   /** Reports the source line at the top as the reader scrolls. */
   onSourceLineChange?: (line: number) => void;
   /** Keep the top-right corner clear for controls drawn over the pane. */
@@ -182,6 +252,8 @@ export const MarkdownDocumentView = forwardRef<MarkdownViewHandle, ViewProps>(
       visible,
       onSetView,
       onOpenFile,
+      scrollToFragment: fragmentToScroll,
+      onFragmentConsumed,
       onSourceLineChange,
       reserveCorner = false,
     },
@@ -395,15 +467,29 @@ export const MarkdownDocumentView = forwardRef<MarkdownViewHandle, ViewProps>(
       (href: string) => {
         const target = classifyLink(href, path);
         if (target.kind === "external") void openExternalUrl(href);
-        else if (target.kind === "anchor") scrollToFragment(target.fragment);
+        else if (target.kind === "anchor") scrollToFragment(target.fragment ?? "");
         else if (target.kind === "file") {
           if (samePath(target.path, path)) {
             scrollToFragment(target.fragment ?? "");
-          } else onOpenFileRef.current?.(target.path);
+          } else
+            onOpenFileRef.current?.(
+              target.path,
+              true,
+              target.fragment ?? undefined,
+            );
         }
       },
       [path, scrollToFragment],
     );
+
+    useEffect(() => {
+      if (!visible || fragmentToScroll === undefined || content === null) return;
+      const frame = window.requestAnimationFrame(() => {
+        scrollToFragment(fragmentToScroll ?? "");
+        onFragmentConsumed?.();
+      });
+      return () => window.cancelAnimationFrame(frame);
+    }, [visible, fragmentToScroll, content, scrollToFragment, onFragmentConsumed]);
 
     // Find: the app's search shortcut, or Ctrl/Cmd+F while this preview is the
     // one in use.
@@ -618,20 +704,10 @@ const MarkdownBody = memo(function MarkdownBody({
     [content, remarkMath, singleDollar],
   );
 
-  const rehypePlugins = useMemo(() => {
-    const d = defaultRehypePlugins;
-    return [
-      d.raw,
-      d.sanitize,
-      rehypeLocalImages(path, (abs) => assetUrlFor(abs) ?? "data:,", {
-        boundary,
-        isReadable: (abs) => checkReadable(abs).ok,
-      }),
-      rehypeMarkMath,
-      rehypeKeepHref,
-      d.harden,
-    ];
-  }, [path, boundary, assetUrlFor]);
+  const rehypePlugins = useMemo(
+    () => buildPreviewRehypePlugins({ path, boundary, assetUrlFor }),
+    [path, boundary, assetUrlFor],
+  );
 
   const remarkPlugins = useMemo(() => {
     const defaults = Object.values(defaultRemarkPlugins);

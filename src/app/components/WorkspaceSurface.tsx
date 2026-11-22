@@ -33,7 +33,9 @@ type Props = {
   onGitHistorySearchHandle: GitHistoryStackProps["onSearchHandle"];
   onSetMarkdownView: EditorStackProps["onSetMarkdownView"];
   /** Open a file that a link in a markdown preview points at. */
-  onOpenFile?: (path: string) => void;
+  onOpenFile?: (path: string, pin?: boolean, fragment?: string) => void;
+  pendingFragment?: { path: string; fragment: string } | null;
+  onConsumePendingFragment?: (path: string, fragment: string) => void;
   /** Workspace root used to scope local assets in HTML previews. */
   workspaceRoot?: string | null;
   /** When set, the active tab is mirrored into a side-by-side secondary pane. */
@@ -65,6 +67,8 @@ function SurfaceLayers({
   onGitHistorySearchHandle,
   onSetMarkdownView,
   onOpenFile,
+  pendingFragment,
+  onConsumePendingFragment,
   workspaceRoot,
 }: Props) {
   const kind = activeTab?.kind;
@@ -131,6 +135,8 @@ function SurfaceLayers({
           activeId={activeId}
           onSetMarkdownView={onSetMarkdownView}
           onOpenFile={onOpenFile}
+          pendingFragment={pendingFragment}
+          onConsumePendingFragment={onConsumePendingFragment}
         />
       </div>
       <div

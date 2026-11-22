@@ -53,6 +53,7 @@ type HastNode = {
  */
 export function rehypeKeepHref() {
   const visit = (node: HastNode) => {
+    if (!node || typeof node.type !== "string") return;
     if (node.type === "element" && node.tagName === "a") {
       const href = node.properties?.href;
       if (typeof href === "string") {
