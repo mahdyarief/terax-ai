@@ -72,6 +72,8 @@ type Props = {
   rootPath: string | null;
   activeFilePath?: string | null;
   onOpenFile: (path: string, pin?: boolean) => void;
+  /** Open a file on the right of a split view, beside the active tab. */
+  onOpenFileToSide?: (path: string) => void;
   onOpenFolder?: () => void;
   onPathRenamed?: (from: string, to: string) => void;
   onPathsDeleted?: (paths: string[]) => void;
@@ -216,6 +218,7 @@ export const FileExplorer = memo(
       rootPath,
       activeFilePath,
       onOpenFile,
+      onOpenFileToSide,
       onOpenFolder,
       onPathRenamed,
       onPathsDeleted,
@@ -934,6 +937,14 @@ export const FileExplorer = memo(
                       onSelect={() => onOpenFile(menuTarget.path, true)}
                     >
                       Open
+                    </ContextMenuItem>
+                  )}
+                  {!menuTarget.isDir && onOpenFileToSide && (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => onOpenFileToSide(menuTarget.path)}
+                    >
+                      Open to the Side
                     </ContextMenuItem>
                   )}
                   {menuTarget.isDir && onRevealInTerminal && (

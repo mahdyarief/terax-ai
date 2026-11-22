@@ -503,12 +503,15 @@ export default function App() {
   }, [rawSecondaryTabId, secondaryTabId]);
   const splitTabRight = useCallback(
     (tabId: number) => {
-      const plan = planSplitRight(tabsRef.current, activeId, tabId);
+      // Read through refs so the callback stays stable across tab switches;
+      // it reaches memoized children (tab bar, explorer).
+      const current = activeIdRef.current;
+      const plan = planSplitRight(tabsRef.current, current, tabId);
       if (!plan) return;
-      if (plan.activeId !== activeId) setActiveId(plan.activeId);
+      if (plan.activeId !== current) setActiveId(plan.activeId);
       setSecondaryTabId(plan.secondaryId);
     },
-    [activeId, setActiveId],
+    [setActiveId],
   );
   const closeSplit = useCallback(() => setSecondaryTabId(null), []);
   // The right-hand tab is already on screen: picking it in the tab bar moves
@@ -2347,28 +2350,43 @@ export default function App() {
     [handleOpenFile],
   );
 
+  // Open beside the active tab without stealing it: the file shows on the
+  // right of a split view and the active tab stays on the left.
+  const openFileToSide = useCallback(
+    (path: string, line?: number) => {
+      const existed = tabsRef.current.some(
+        (t) =>
+          t.kind === "editor" &&
+          t.path === path &&
+          t.spaceId === activeSpaceIdRef.current,
+      );
+      const id = openFileTab(path, true, { activate: false });
+      // A file that is already the active tab moves right; its neighbour
+      // takes the left.
+      if (id === activeIdRef.current) splitTabRight(id);
+      else setSecondaryTabId(id);
+      // A markdown file opened normally shows rendered; keep that beside too,
+      // unless it already had a tab with a layout of its own.
+      if (!existed && isMarkdownPath(path)) setMarkdownView(id, "rendered");
+      if (line !== undefined) {
+        const h = editorRefs.current.get(id);
+        if (h) h.gotoLine(line, { focus: false });
+        else pendingEditorNavigation.current.set(id, { line, focus: false });
+      }
+    },
+    [openFileTab, setMarkdownView, splitTabRight],
+  );
+
   const openPaletteFile = useCallback(
     (path: string, target: OpenFileTarget) => {
       if (target.side) {
-        // Open beside the active tab without stealing it: the new editor goes
-        // to the secondary pane, which mounts it on its own.
-        const id = openFileTab(path, true, { activate: false });
-        setSecondaryTabId(id);
-        if (target.line !== undefined) {
-          const h = editorRefs.current.get(id);
-          if (h) h.gotoLine(target.line, { focus: false });
-          else
-            pendingEditorNavigation.current.set(id, {
-              line: target.line,
-              focus: false,
-            });
-        }
+        openFileToSide(path, target.line);
         return;
       }
       if (target.line !== undefined) openContentHit(path, target.line);
       else handleOpenFile(path, true);
     },
-    [openContentHit, handleOpenFile, openFileTab],
+    [openContentHit, handleOpenFile, openFileToSide],
   );
 
   const openControlFile = useCallback(
@@ -2546,6 +2564,7 @@ export default function App() {
                           }
                           activeFilePath={explorerActiveFilePath}
                           onOpenFile={handleOpenFile}
+                          onOpenFileToSide={openFileToSide}
                           onPathRenamed={handleExplorerPathRenamed}
                           onPathsDeleted={handlePathsDeleted}
                           canReplacePath={canReplaceExplorerPath}
