@@ -8,8 +8,8 @@ edition = "2021"
 default-run = "terax"
 
 [workspace]
-members = ["crates/terax-cli", "crates/terax-control-protocol"]
-default-members = [".", "crates/terax-cli", "crates/terax-control-protocol"]
+members = ["crates/terax-cli", "crates/terax-control-protocol", "crates/terax-workspace-core"]
+default-members = [".", "crates/terax-cli", "crates/terax-control-protocol", "crates/terax-workspace-core"]
 resolver = "2"
 
 [workspace.package]
@@ -48,6 +48,7 @@ percent-encoding = "2"
 http-range = "0.1"
 memchr = "2"
 terax-control-protocol = { path = "crates/terax-control-protocol" }
+terax-workspace-core = { path = "crates/terax-workspace-core" }
 portable-pty = "0.9"
 rfd = "0.15"
 dirs = "7"

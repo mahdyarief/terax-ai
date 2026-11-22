@@ -14,6 +14,8 @@ use super::blocking;
 use super::index::FileIndexState;
 use super::mutate::note_changed;
 use crate::modules::workspace::{resolve_path, WorkspaceEnv};
+#[cfg(windows)]
+use terax_workspace_core::paths::canonical_wsl_path;
 
 const MAX_READ_BYTES: u64 = 10 * 1024 * 1024; // 10 MB
 /// Binary previews (DOCX/XLSX) carry base64 over IPC, so this matches
@@ -432,34 +434,6 @@ pub async fn fs_stat(
     .await
 }
 
-#[cfg(any(windows, test))]
-fn canonical_wsl_path(path: &str, distro: &str) -> Result<String, String> {
-    for host in ["wsl.localhost", "wsl$"] {
-        let prefix = format!("//{host}/{distro}");
-        if path
-            .get(..prefix.len())
-            .is_some_and(|p| p.eq_ignore_ascii_case(&prefix))
-        {
-            let tail = &path[prefix.len()..];
-            if tail.is_empty() {
-                return Ok("/".into());
-            }
-            if tail.starts_with('/') {
-                return Ok(tail.into());
-            }
-        }
-    }
-    let bytes = path.as_bytes();
-    if bytes.len() >= 3 && bytes[0].is_ascii_alphabetic() && &bytes[1..3] == b":/" {
-        return Ok(format!(
-            "/mnt/{}/{}",
-            (bytes[0] as char).to_ascii_lowercase(),
-            &path[3..]
-        ));
-    }
-    Err("canonical path is outside the workspace's WSL namespace".into())
-}
-
 fn validate_link_path(path: &str, local_only: Option<bool>) -> Result<(), String> {
     if local_only == Some(true)
         && path
@@ -607,27 +581,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn canonical_wsl_paths_keep_the_distro_namespace() {
-        assert_eq!(
-            canonical_wsl_path("//wsl.localhost/Ubuntu/home/me/target", "Ubuntu").unwrap(),
-            "/home/me/target"
-        );
-        assert_eq!(
-            canonical_wsl_path("//wsl$/Ubuntu/home/Target", "Ubuntu").unwrap(),
-            "/home/Target"
-        );
-        assert_eq!(
-            canonical_wsl_path("C:/work/target", "Ubuntu").unwrap(),
-            "/mnt/c/work/target"
-        );
-        assert_eq!(
-            canonical_wsl_path("//wsl.localhost/Ubuntu", "Ubuntu").unwrap(),
-            "/"
-        );
-        assert!(canonical_wsl_path("//wsl.localhost/Ubuntu-other/file", "Ubuntu").is_err());
-        assert!(canonical_wsl_path("//remote/share/file", "Ubuntu").is_err());
-    }
 
     #[cfg(windows)]
     #[tokio::test]

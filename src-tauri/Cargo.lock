@@ -5040,6 +5040,7 @@ dependencies = [
  "tempfile",
  "terax-cli",
  "terax-control-protocol",
+ "terax-workspace-core",
  "tokio",
  "toml 1.1.6+spec-1.1.0",
  "wasmparser",
@@ -5066,6 +5067,17 @@ version = "0.9.3"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "terax-workspace-core"
+version = "0.9.3"
+dependencies = [
+ "libc",
+ "proptest",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
