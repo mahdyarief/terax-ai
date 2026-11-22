@@ -131,6 +131,7 @@ mod tests {
         registry.authorize(dest.path()).unwrap();
         let index = FileIndexState::default();
         let key = super::super::index::IndexKey {
+            env: WorkspaceEnv::Local,
             root: std::fs::canonicalize(dest.path()).unwrap(),
             show_hidden: false,
             max_depth: None,

@@ -338,6 +338,16 @@ impl Workspace for HostWorkspace {
     fn glob(&self, request: &GlobRequest) -> Result<GlobResponse, String> {
         crate::grep::glob(&self.host(&request.root), &self.env, request)
     }
+
+    fn list_files(
+        &self,
+        root: &str,
+        show_hidden: bool,
+        max_depth: Option<usize>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<crate::index::FileIndex> {
+        crate::index::walk(&self.host(root), show_hidden, max_depth, cancelled)
+    }
 }
 
 #[cfg(all(test, unix))]

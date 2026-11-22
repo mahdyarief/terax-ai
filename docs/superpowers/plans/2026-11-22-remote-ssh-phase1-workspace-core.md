@@ -124,9 +124,10 @@ pub trait Workspace: Send + Sync {
 
 ### Task 7b: Move the file-index walk
 
-- [ ] `FileIndexState` (cache, warmers, invalidation from the watcher and from mutations) stays app-side, keyed by `(scope key, root)` instead of a host `PathBuf`; only the walk that fills it becomes `Workspace::list_files(root, show_hidden, max_depth, cancel)`.
-- [ ] `fs_search`, `fs_warm_index`, `fs_list_files` keep ranking (nucleo) app-side over the cached list.
-- [ ] Contract suite gains a walk case (ignore rules, depth cap, truncation, cancellation).
+- [x] `FileIndexState` (cache, warmers, invalidation from the watcher and from mutations) stays app-side, keyed by `(env, workspace root)`; only the walk that fills it is `Workspace::list_files(root, show_hidden, max_depth, cancel)`. `Packed` and `FileIndex` moved to the core and are serializable.
+- [x] `fs_search`, `fs_warm_index`, `fs_list_files` keep ranking (nucleo) app-side over the cached list.
+- [x] Contract suite gains a walk case (pruned and ignored directories, hidden entries, depth cap, directory flags, cancellation). Mutation-checked.
+- The invalidation prefix is still computed on the canonical host path, because watcher events and mutation notes report host paths (UNC for WSL). Task 8 decides the event path space; the remote backend needs events in workspace paths. The root checks in `search.rs` (`search_root`) also still stat the host path and move with it.
 
 ### Task 8: Move the watcher behind `Workspace::watch`
 

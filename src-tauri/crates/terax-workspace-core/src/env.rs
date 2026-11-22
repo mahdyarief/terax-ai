@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use serde::Deserialize;
 
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum WorkspaceEnv {
     #[default]

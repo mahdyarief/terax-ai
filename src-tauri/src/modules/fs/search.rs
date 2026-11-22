@@ -126,7 +126,7 @@ pub fn run_search(
     }
 
     let Some(file_index) =
-        index.get_or_build_cancelled(&search_key(&root_path, show_hidden), cancelled)
+        index.get_or_build_cancelled(&search_key(&root, &workspace, show_hidden), cancelled)
     else {
         return Ok(SearchResult::cancelled());
     };
@@ -170,9 +170,10 @@ fn search_root(root: &str, workspace: &WorkspaceEnv) -> Result<std::path::PathBu
     Ok(root_path)
 }
 
-fn search_key(root_path: &Path, show_hidden: Option<bool>) -> IndexKey {
+fn search_key(root: &str, workspace: &WorkspaceEnv, show_hidden: Option<bool>) -> IndexKey {
     IndexKey {
-        root: root_path.to_path_buf(),
+        env: workspace.clone(),
+        root: root.into(),
         show_hidden: show_hidden.unwrap_or(false),
         max_depth: None,
     }
@@ -211,8 +212,9 @@ pub fn run_warm_index(
     cancelled: &dyn Fn() -> bool,
 ) -> Result<(), String> {
     let workspace = WorkspaceEnv::from_option(workspace);
-    let root_path = search_root(&root, &workspace)?;
-    index.get_or_build_cancelled(&search_key(&root_path, show_hidden), cancelled);
+    // Validates the root the same way a search does.
+    search_root(&root, &workspace)?;
+    index.get_or_build_cancelled(&search_key(&root, &workspace, show_hidden), cancelled);
     Ok(())
 }
 
@@ -320,7 +322,8 @@ pub fn run_list_files(
     }
 
     let key = IndexKey {
-        root: root_path,
+        env: workspace,
+        root: root.into(),
         show_hidden: show_hidden.unwrap_or(false),
         max_depth: Some(depth),
     };

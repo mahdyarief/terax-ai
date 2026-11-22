@@ -7,6 +7,7 @@ pub mod env;
 pub mod grep;
 pub mod host;
 pub mod import;
+pub mod index;
 pub mod paths;
 pub mod workspace;
 

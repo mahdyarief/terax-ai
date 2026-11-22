@@ -15,6 +15,7 @@ use std::path::Path;
 
 use crate::env::WorkspaceEnv;
 use crate::grep::{GlobRequest, GlobResponse, GrepRequest, GrepResponse};
+use crate::index::FileIndex;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryKind {
@@ -124,4 +125,14 @@ pub trait Workspace: Send + Sync {
 
     /// Lists files under `request.root` matching a glob, honouring `.gitignore`.
     fn glob(&self, request: &GlobRequest) -> Result<GlobResponse, String>;
+
+    /// Lists the tree under `root` for the file finder, `.gitignore`
+    /// honoured and heavy directories pruned. `None` when cancelled.
+    fn list_files(
+        &self,
+        root: &str,
+        show_hidden: bool,
+        max_depth: Option<usize>,
+        cancelled: &dyn Fn() -> bool,
+    ) -> Option<FileIndex>;
 }

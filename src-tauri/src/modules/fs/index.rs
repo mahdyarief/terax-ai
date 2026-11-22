@@ -14,96 +14,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use ignore::WalkBuilder;
-
 use super::to_canon;
-
-/// Hard cap on entries a walk may visit. Protects against roots like $HOME
-/// where there is no .gitignore and the tree is effectively unbounded.
-pub const MAX_SCANNED: usize = 50_000;
-
-/// Directory names pruned unconditionally; they dominate scan time when present
-/// and are rarely useful in a file finder.
-pub const PRUNE_DIRS: &[&str] = &[
-    "node_modules",
-    ".git",
-    "target",
-    "dist",
-    "build",
-    ".next",
-    ".turbo",
-    ".cache",
-    ".venv",
-    "__pycache__",
-];
+use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv};
+pub use terax_workspace_core::index::{FileIndex, Packed, MAX_SCANNED, PRUNE_DIRS};
+#[cfg(test)]
+use terax_workspace_core::index::MAX_PACKED_BYTES;
 
 const MAX_SLOTS: usize = 2;
 const MAX_BUILDS: usize = 2;
 const CANCEL_POLL: Duration = Duration::from_millis(25);
 const TTL: Duration = Duration::from_secs(45);
-/// Upper bound on the packed path text of one index (about 50k typical paths).
-const MAX_PACKED_BYTES: usize = 16 * 1024 * 1024;
-const DIR_BIT: u32 = 1 << 31;
-
-/// Paths of one walk in a single string plus end offsets: about 12 bytes of
-/// overhead per entry instead of a heap allocation each.
-#[derive(Default)]
-pub struct Packed {
-    buf: String,
-    ends: Vec<u32>,
-}
-
-impl Packed {
-    /// False when the buffer budget is exhausted; the entry is not stored.
-    pub(crate) fn push(&mut self, rel: &str, is_dir: bool) -> bool {
-        if self.buf.len() + rel.len() > MAX_PACKED_BYTES || self.ends.len() >= MAX_SCANNED {
-            return false;
-        }
-        self.buf.push_str(rel);
-        let end = self.buf.len() as u32;
-        self.ends.push(if is_dir { end | DIR_BIT } else { end });
-        true
-    }
-
-    pub fn len(&self) -> usize {
-        self.ends.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.ends.is_empty()
-    }
-
-    pub fn get(&self, index: usize) -> (&str, bool) {
-        let start = if index == 0 {
-            0
-        } else {
-            (self.ends[index - 1] & !DIR_BIT) as usize
-        };
-        let raw = self.ends[index];
-        (
-            &self.buf[start..(raw & !DIR_BIT) as usize],
-            raw & DIR_BIT != 0,
-        )
-    }
-
-    pub fn iter(&self) -> impl Iterator<Item = (&str, bool)> {
-        (0..self.len()).map(|i| self.get(i))
-    }
-
-    #[cfg(test)]
-    fn heap_bytes(&self) -> usize {
-        self.buf.capacity() + self.ends.capacity() * std::mem::size_of::<u32>()
-    }
-}
-
-pub struct FileIndex {
-    pub entries: Packed,
-    /// The walk stopped at a budget; results are a prefix of the tree.
-    pub truncated: bool,
-}
-
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct IndexKey {
+    pub env: WorkspaceEnv,
+    /// The root as the workspace spells it. A `PathBuf` so two spellings of
+    /// one directory (`C:\x`, `C:/x`) share a slot.
     pub root: PathBuf,
     pub show_hidden: bool,
     pub max_depth: Option<usize>,
@@ -322,7 +247,9 @@ impl FileIndexState {
                     .unwrap_or_else(|e| e.into_inner()),
             );
         };
-        let prefix = event_prefix(&key.root);
+        // Watcher events and our own mutations report canonical host paths,
+        // so the prefix that matches them is computed on the host spelling.
+        let prefix = event_prefix(&resolve_path(&key.root.to_string_lossy(), &key.env));
         let walk = self.begin_walk(&prefix);
         let abandoned = || cancelled() && owned.build.waiters.load(Ordering::SeqCst) == 0;
         let index = if abandoned() {
@@ -431,57 +358,12 @@ fn build_index(key: &IndexKey) -> FileIndex {
 }
 
 fn build_index_cancelled(key: &IndexKey, cancelled: &dyn Fn() -> bool) -> Option<FileIndex> {
-    if cancelled() {
-        return None;
-    }
-    let walker = WalkBuilder::new(&key.root)
-        .hidden(!key.show_hidden)
-        .git_ignore(true)
-        .git_global(true)
-        .git_exclude(true)
-        .ignore(true)
-        .parents(true)
-        .follow_links(false)
-        .max_depth(key.max_depth)
-        .filter_entry(|dent| {
-            // Prune known-heavy dirs even when no .gitignore is present.
-            if dent.depth() == 0 {
-                return true;
-            }
-            match dent.file_name().to_str() {
-                Some(name) => !PRUNE_DIRS.contains(&name),
-                None => true,
-            }
-        })
-        .build();
-
-    let mut entries = Packed::default();
-    let mut scanned = 0usize;
-    let mut truncated = false;
-    for dent in walker {
-        if cancelled() {
-            return None;
-        }
-        let Ok(dent) = dent else { continue };
-        scanned += 1;
-        if scanned > MAX_SCANNED {
-            truncated = true;
-            break;
-        }
-        let Ok(relative) = dent.path().strip_prefix(&key.root) else {
-            continue;
-        };
-        let rel = to_canon(relative);
-        if rel.is_empty() {
-            continue;
-        }
-        let is_dir = dent.file_type().is_some_and(|t| t.is_dir());
-        if !entries.push(&rel, is_dir) {
-            truncated = true;
-            break;
-        }
-    }
-    Some(FileIndex { entries, truncated })
+    backend_for(&key.env).list_files(
+        &key.root.to_string_lossy(),
+        key.show_hidden,
+        key.max_depth,
+        cancelled,
+    )
 }
 
 #[cfg(test)]
@@ -737,6 +619,7 @@ mod tests {
 
     fn key(root: &Path) -> IndexKey {
         IndexKey {
+            env: WorkspaceEnv::Local,
             root: root.to_path_buf(),
             show_hidden: false,
             max_depth: None,

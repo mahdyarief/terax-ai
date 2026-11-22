@@ -19,6 +19,7 @@ pub fn run(ws: &dyn Workspace, root: &str) {
     rename_copy_remove(ws, root);
     canonical_paths(ws, root);
     search_engines(ws, root);
+    file_finder_walk(ws, root);
 }
 
 fn join(root: &str, name: &str) -> String {
@@ -252,4 +253,41 @@ fn search_engines(ws: &dyn Workspace, root: &str) {
     assert!(ws
         .glob(&GlobRequest { root: join(&tree, "nope"), pattern: "*".into(), max_results: None })
         .is_err());
+}
+
+fn file_finder_walk(ws: &dyn Workspace, root: &str) {
+    let tree = join(root, "walk");
+    for dir in ["src/deep", "node_modules/pkg", "ignored", ".hidden"] {
+        ws.create_dir_all(&join(&tree, dir)).unwrap();
+    }
+    for file in ["src/a.rs", "src/deep/b.rs", "node_modules/pkg/index.js", "ignored/x.txt", ".hidden/h.txt"] {
+        ws.write_atomic(&join(&tree, file), b"").unwrap();
+    }
+    ws.write_atomic(&join(&tree, ".ignore"), b"ignored/\n").unwrap();
+
+    let listed = |show_hidden: bool, max_depth: Option<usize>| {
+        let index = ws.list_files(&tree, show_hidden, max_depth, &|| false).expect("walk");
+        assert!(!index.truncated);
+        let mut entries: Vec<(String, bool)> =
+            index.entries.iter().map(|(rel, is_dir)| (rel.to_string(), is_dir)).collect();
+        entries.sort();
+        entries
+    };
+    let entry = |rel: &str, is_dir: bool| (rel.to_string(), is_dir);
+
+    assert_eq!(
+        listed(false, None),
+        [entry("src", true), entry("src/a.rs", false), entry("src/deep", true), entry("src/deep/b.rs", false)],
+        "pruned, ignored and hidden entries are left out; directories are flagged"
+    );
+    assert!(
+        listed(true, None).contains(&entry(".hidden/h.txt", false)),
+        "show_hidden lists dot entries"
+    );
+    assert_eq!(
+        listed(false, Some(1)),
+        [entry("src", true)],
+        "max_depth stops the walk"
+    );
+    assert!(ws.list_files(&tree, false, None, &|| true).is_none(), "a cancelled walk returns nothing");
 }
