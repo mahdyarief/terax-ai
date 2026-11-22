@@ -1,4 +1,5 @@
 import type { Tab } from "@/modules/tabs";
+import { slotOf, slotStyle } from "@/modules/tabs/lib/splitLayout";
 import type { TerminalSearchController } from "@/modules/terminal/search/TerminalSearchController";
 import { useEffect, useMemo, useRef } from "react";
 import { selectLiveTerminals } from "./lib/liveTerminals";
@@ -9,6 +10,8 @@ import type { TerminalPaneHandle } from "./TerminalPane";
 type Props = {
   tabs: Tab[];
   activeId: number;
+  /** Tab shown on the right of a split view, if any. */
+  secondaryId?: number | null;
   /** Register/unregister handle by leaf id (not tab id). */
   registerHandle: (leafId: number, handle: TerminalPaneHandle | null) => void;
   onSearchReady: (leafId: number, addon: TerminalSearchController) => void;
@@ -27,6 +30,7 @@ type Bundle = {
 export function TerminalStack({
   tabs,
   activeId,
+  secondaryId = null,
   registerHandle,
   onSearchReady,
   onCwd,
@@ -89,13 +93,14 @@ export function TerminalStack({
         className="zoom-exempt pointer-events-none absolute inset-0 overflow-hidden"
       />
       {terminals.map((t) => {
-        const tabVisible = t.id === activeId;
+        const slot = slotOf(t.id, activeId, secondaryId);
+        const tabVisible = slot !== null;
         return (
           <div
             key={t.id}
             data-terminal-tab={t.id}
-            className="absolute inset-0"
             style={{
+              ...slotStyle(slot, secondaryId !== null),
               visibility: tabVisible ? "visible" : "hidden",
               pointerEvents: tabVisible ? "auto" : "none",
             }}

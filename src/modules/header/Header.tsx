@@ -40,6 +40,12 @@ type Props = {
   onCloseTabsToRight: (id: number) => void;
   /** Chrome-style: close every tab except the given tab. */
   onCloseOtherTabs: (id: number) => void;
+  /** Tab shown on the right of the split view, if any. */
+  splitTabId?: number | null;
+  /** Show a tab on the right, beside the active one. */
+  onSplitRight?: (id: number) => void;
+  /** Back to a single view; the right-hand tab stays open. */
+  onCloseSplit?: () => void;
   /** Promote a preview (transient) tab to persistent. */
   onPin: (id: number) => void;
   /** Set a terminal tab's custom label; empty string resets to default. */
@@ -73,6 +79,9 @@ export function Header({
   onClose,
   onCloseTabsToRight,
   onCloseOtherTabs,
+  splitTabId,
+  onSplitRight,
+  onCloseSplit,
   onPin,
   onRename,
   onReorder,
@@ -182,6 +191,9 @@ export function Header({
           onClose={onClose}
           onCloseTabsToRight={onCloseTabsToRight}
           onCloseOtherTabs={onCloseOtherTabs}
+          splitTabId={splitTabId}
+          onSplitRight={onSplitRight}
+          onCloseSplit={onCloseSplit}
           onPin={onPin}
           onRename={onRename}
           onReorder={onReorder}

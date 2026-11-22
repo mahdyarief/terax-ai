@@ -137,6 +137,11 @@ import {
   useWorkspaceCwd,
   setTabHostingGuard,
 } from "@/modules/tabs";
+import {
+  planSplitRight,
+  reconcileSecondary,
+  SPLIT_DEFAULT,
+} from "@/modules/tabs/lib/splitView";
 import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
 import {
   clearFocusedTerminal,
@@ -482,15 +487,45 @@ export default function App() {
   const { hasComposer, keysLoaded } = useAiBootstrap();
 
   const activeTab = tabs.find((t) => t.id === activeId);
-  const [secondaryTabId, setSecondaryTabId] = useState<number | null>(null);
+  // Split view: the active tab on the left, `secondaryTabId` on the right.
+  const [rawSecondaryTabId, setSecondaryTabId] = useState<number | null>(null);
+  const [splitRatio, setSplitRatio] = useState(SPLIT_DEFAULT);
+  // Read through the rules on every render, so a stale id (closed, moved to
+  // another space, or now the active tab) never shows for a frame.
+  const secondaryTabId = reconcileSecondary(tabs, activeId, rawSecondaryTabId);
   const secondaryActiveTab =
     secondaryTabId == null
       ? undefined
       : tabs.find((t) => t.id === secondaryTabId);
   useEffect(() => {
-    if (secondaryTabId == null) return;
-    if (!tabs.some((t) => t.id === secondaryTabId)) setSecondaryTabId(null);
-  }, [tabs, secondaryTabId]);
+    if (rawSecondaryTabId !== null && secondaryTabId === null)
+      setSecondaryTabId(null);
+  }, [rawSecondaryTabId, secondaryTabId]);
+  const splitTabRight = useCallback(
+    (tabId: number) => {
+      const plan = planSplitRight(tabsRef.current, activeId, tabId);
+      if (!plan) return;
+      if (plan.activeId !== activeId) setActiveId(plan.activeId);
+      setSecondaryTabId(plan.secondaryId);
+    },
+    [activeId, setActiveId],
+  );
+  const closeSplit = useCallback(() => setSecondaryTabId(null), []);
+  // The right-hand tab is already on screen: picking it in the tab bar moves
+  // the keyboard into its pane instead of rearranging the split.
+  const selectTab = useCallback(
+    (id: number) => {
+      if (id !== secondaryTabId) {
+        setActiveId(id);
+        return;
+      }
+      const tab = tabsRef.current.find((t) => t.id === id);
+      if (tab?.kind === "terminal")
+        terminalRefs.current.get(tab.activeLeafId)?.focus();
+      else editorRefs.current.get(id)?.focus();
+    },
+    [secondaryTabId, setActiveId],
+  );
   const isTerminalTab = activeTab?.kind === "terminal";
   const isBlockTab = activeTerminalTab?.blocks === true;
   const isEditorTab = activeTab?.kind === "editor";
@@ -2441,7 +2476,10 @@ export default function App() {
             <Header
               tabs={spaceTabs}
               activeId={activeId}
-              onSelect={setActiveId}
+              onSelect={selectTab}
+              splitTabId={secondaryTabId}
+              onSplitRight={splitTabRight}
+              onCloseSplit={closeSplit}
               onNew={openNewTab}
               onNewBlock={openNewBlockTab}
               onNewPrivate={openNewPrivateTab}
@@ -2577,7 +2615,8 @@ export default function App() {
                         workspaceRoot={explorerRoot}
                         secondaryActiveId={secondaryTabId}
                         secondaryActiveTab={secondaryActiveTab}
-                        onCloseSecondary={() => setSecondaryTabId(null)}
+                        splitRatio={splitRatio}
+                        onSplitRatioChange={setSplitRatio}
                       />
                     </div>
 

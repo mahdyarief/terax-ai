@@ -40,6 +40,7 @@ import {
   GitCompareIcon,
   Globe02Icon,
   IncognitoIcon,
+  LayoutTwoColumnIcon,
   Message02Icon,
   PencilEdit02Icon,
   Tick02Icon,
@@ -75,6 +76,12 @@ type Props = {
   onCloseTabsToRight: (id: number) => void;
   /** Chrome-style: close every tab except the given tab. */
   onCloseOtherTabs: (id: number) => void;
+  /** Tab shown on the right of the split view, if any. */
+  splitTabId?: number | null;
+  /** Show a tab on the right, beside the active one. */
+  onSplitRight?: (id: number) => void;
+  /** Back to a single view; the right-hand tab stays open. */
+  onCloseSplit?: () => void;
   /** Pin (promote) a preview tab to persistent on double-click. */
   onPin: (id: number) => void;
   /** Set a terminal tab's custom label; empty string resets to default. */
@@ -99,6 +106,9 @@ export function TabBar({
   onClose,
   onCloseTabsToRight,
   onCloseOtherTabs,
+  splitTabId = null,
+  onSplitRight,
+  onCloseSplit,
   onPin,
   onRename,
   onReorder,
@@ -249,6 +259,7 @@ export function TabBar({
               const isPreview =
                 (t.kind === "editor" || t.kind === "git-diff") && t.preview;
               const isActive = t.id === activeId;
+              const isSplit = t.id === splitTabId;
               const isNew = !firstRender && !seen.has(t.id);
 
               const srcIndex = tabs.findIndex((x) => x.id === draggingId);
@@ -370,7 +381,7 @@ export function TabBar({
                   className={cn(
                     "group relative z-[1] h-7 shrink-0 justify-between gap-1.5 rounded-md bg-transparent text-xs transition-colors data-active:bg-transparent dark:data-active:bg-transparent",
                     isNew && "terax-tab-in",
-                    isActive
+                    isActive || isSplit
                       ? "text-foreground dark:text-foreground"
                       : "text-muted-foreground hover:text-foreground/80 dark:text-muted-foreground",
                     draggingId === t.id && "opacity-50",
@@ -492,6 +503,20 @@ export function TabBar({
                     <span className={cn("truncate", isPreview && "italic")}>
                       {labelFor(t)}
                     </span>
+                    {isSplit && (
+                      <span
+                        role="img"
+                        aria-label="Shown on the right of the split view"
+                        title="Shown on the right of the split view"
+                        className="flex shrink-0 text-primary/80"
+                      >
+                        <HugeiconsIcon
+                          icon={LayoutTwoColumnIcon}
+                          size={12}
+                          strokeWidth={1.75}
+                        />
+                      </span>
+                    )}
                     {t.kind === "editor" && t.dirty ? (
                       <span
                         aria-label="Unsaved changes"
@@ -568,6 +593,39 @@ export function TabBar({
                         )}
                       </>
                     )}
+                    {isSplit
+                      ? onCloseSplit && (
+                          <ContextMenuItem
+                            className="gap-2 rounded-xl px-2.5 py-1.5 text-[13px]"
+                            onSelect={onCloseSplit}
+                          >
+                            <HugeiconsIcon
+                              icon={LayoutTwoColumnIcon}
+                              size={13}
+                              strokeWidth={1.75}
+                            />
+                            <span className="flex-1">Close split view</span>
+                          </ContextMenuItem>
+                        )
+                      : onSplitRight && (
+                          <ContextMenuItem
+                            className="gap-2 rounded-xl px-2.5 py-1.5 text-[13px]"
+                            disabled={tabs.length <= 1}
+                            onSelect={() => onSplitRight(t.id)}
+                          >
+                            <HugeiconsIcon
+                              icon={LayoutTwoColumnIcon}
+                              size={13}
+                              strokeWidth={1.75}
+                            />
+                            <span className="flex-1">
+                              {splitTabId === null
+                                ? "Split right"
+                                : "Show on the right"}
+                            </span>
+                          </ContextMenuItem>
+                        )}
+                    <ContextMenuSeparator />
                     <ContextMenuItem
                       className="gap-2 rounded-xl px-2.5 py-1.5 text-[13px]"
                       disabled={!hasTabsToRight}

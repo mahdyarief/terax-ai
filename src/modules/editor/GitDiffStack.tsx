@@ -1,49 +1,63 @@
 import type { GitCommitFileDiffTab, GitDiffTab, Tab } from "@/modules/tabs";
+import { slotOf, slotStyle } from "@/modules/tabs/lib/splitLayout";
 import { GitDiffPane } from "./GitDiffPane";
 
 type Props = {
   tabs: Tab[];
   activeId: number;
+  /** Tab shown on the right of a split view, if any. */
+  secondaryId?: number | null;
 };
 
-export function GitDiffStack({ tabs, activeId }: Props) {
-  const active = tabs.find(
-    (t): t is GitDiffTab | GitCommitFileDiffTab =>
-      (t.kind === "git-diff" || t.kind === "git-commit-file") &&
-      t.id === activeId,
-  );
-  if (!active) return null;
-  if (active.kind === "git-diff") {
+function DiffPane({ tab }: { tab: GitDiffTab | GitCommitFileDiffTab }) {
+  if (tab.kind === "git-diff") {
     return (
-      <div className="h-full w-full">
-        <GitDiffPane
-          key={active.id}
-          active
-          source={{
-            kind: "working",
-            repoRoot: active.repoRoot,
-            path: active.path,
-            mode: active.mode,
-            originalPath: active.originalPath,
-          }}
-        />
-      </div>
+      <GitDiffPane
+        active
+        source={{
+          kind: "working",
+          repoRoot: tab.repoRoot,
+          path: tab.path,
+          mode: tab.mode,
+          originalPath: tab.originalPath,
+        }}
+      />
     );
   }
   return (
-    <div className="h-full w-full">
-      <GitDiffPane
-        key={active.id}
-        active
-        source={{
-          kind: "commit",
-          repoRoot: active.repoRoot,
-          sha: active.sha,
-          path: active.path,
-          originalPath: active.originalPath,
-        }}
-        chipLabel={active.shortSha}
-      />
+    <GitDiffPane
+      active
+      source={{
+        kind: "commit",
+        repoRoot: tab.repoRoot,
+        sha: tab.sha,
+        path: tab.path,
+        originalPath: tab.originalPath,
+      }}
+      chipLabel={tab.shortSha}
+    />
+  );
+}
+
+export function GitDiffStack({ tabs, activeId, secondaryId = null }: Props) {
+  const split = secondaryId !== null;
+  const shown = tabs.filter(
+    (t): t is GitDiffTab | GitCommitFileDiffTab =>
+      (t.kind === "git-diff" || t.kind === "git-commit-file") &&
+      slotOf(t.id, activeId, secondaryId) !== null,
+  );
+  if (shown.length === 0) return null;
+  return (
+    <div className="relative h-full w-full">
+      {shown.map((t) => (
+        <div
+          key={t.id}
+          className="pointer-events-auto"
+          style={slotStyle(slotOf(t.id, activeId, secondaryId), split)}
+        >
+          <DiffPane tab={t} />
+        </div>
+      ))}
     </div>
   );
 }

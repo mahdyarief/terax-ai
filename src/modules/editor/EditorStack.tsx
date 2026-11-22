@@ -1,10 +1,11 @@
 import { TabErrorBoundary } from "@/components/TabErrorBoundary";
-import { cn, defaultSourceView, hasSourcePreview } from "@/lib/utils";
+import { defaultSourceView, hasSourcePreview } from "@/lib/utils";
 import {
   type MarkdownViewMode,
   MarkdownViewToggle,
 } from "@/modules/markdown";
 import type { EditorTab, Tab } from "@/modules/tabs";
+import { slotOf, slotStyle } from "@/modules/tabs/lib/splitLayout";
 import { useWindowInactive } from "@/modules/theme/WindowActivityBridge";
 import { useEffect, useRef } from "react";
 import { EditorPane, type EditorPaneHandle } from "./EditorPane";
@@ -12,6 +13,8 @@ import { EditorPane, type EditorPaneHandle } from "./EditorPane";
 type Props = {
   tabs: Tab[];
   activeId: number;
+  /** Tab shown on the right of a split view, if any. */
+  secondaryId?: number | null;
   onDirtyChange: (id: number, dirty: boolean) => void;
   registerHandle: (id: number, handle: EditorPaneHandle | null) => void;
   onCloseTab: (id: number) => void;
@@ -29,6 +32,7 @@ type Props = {
 export function EditorStack({
   tabs,
   activeId,
+  secondaryId = null,
   onDirtyChange,
   registerHandle,
   onCloseTab,
@@ -106,17 +110,19 @@ export function EditorStack({
   const windowInactive = useWindowInactive();
 
   if (editors.length === 0) return null;
+  const split = secondaryId !== null;
   return (
     <div className="relative h-full w-full">
       {editors.map((t) => {
-        const visible = t.id === activeId;
+        const slot = slotOf(t.id, activeId, secondaryId);
+        const visible = slot !== null;
         return (
           <div
             key={t.id}
-            className={cn(
-              "absolute inset-0",
-              !visible && "invisible pointer-events-none",
-            )}
+            className={
+              visible ? "pointer-events-auto" : "invisible pointer-events-none"
+            }
+            style={slotStyle(slot, split)}
             aria-hidden={!visible}
           >
             <div className="relative h-full overflow-hidden bg-background">

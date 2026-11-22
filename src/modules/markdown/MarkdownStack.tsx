@@ -1,11 +1,13 @@
-import { cn } from "@/lib/utils";
 import type { MarkdownTab, Tab } from "@/modules/tabs";
+import { slotOf, slotStyle } from "@/modules/tabs/lib/splitLayout";
 import { MarkdownPreviewPane } from "./MarkdownPreviewPane";
 import type { MarkdownViewMode } from "./MarkdownViewToggle";
 
 type Props = {
   tabs: Tab[];
   activeId: number;
+  /** Tab shown on the right of a split view, if any. */
+  secondaryId?: number | null;
   /** `line` is the source line being read, so the editor can open there. */
   onSetMarkdownView: (id: number, mode: MarkdownViewMode, line?: number) => void;
   /** Open a file that a relative link in the document points at. */
@@ -25,6 +27,7 @@ function workspaceRootOf(tabs: Tab[], activeId: number): string | null {
 export function MarkdownStack({
   tabs,
   activeId,
+  secondaryId = null,
   onSetMarkdownView,
   onOpenFile,
   pendingFragment,
@@ -35,17 +38,19 @@ export function MarkdownStack({
   );
   if (markdowns.length === 0) return null;
   const workspaceRoot = workspaceRootOf(tabs, activeId);
+  const split = secondaryId !== null;
   return (
     <div className="relative h-full w-full">
       {markdowns.map((t) => {
-        const visible = t.id === activeId;
+        const slot = slotOf(t.id, activeId, secondaryId);
+        const visible = slot !== null;
         return (
           <div
             key={t.id}
-            className={cn(
-              "absolute inset-0",
-              !visible && "invisible pointer-events-none",
-            )}
+            className={
+              visible ? "pointer-events-auto" : "invisible pointer-events-none"
+            }
+            style={slotStyle(slot, split)}
             aria-hidden={!visible}
           >
             <MarkdownPreviewPane

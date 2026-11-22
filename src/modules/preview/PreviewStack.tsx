@@ -1,11 +1,13 @@
-import { cn } from "@/lib/utils";
 import type { PreviewTab, Tab } from "@/modules/tabs";
+import { slotOf, slotStyle } from "@/modules/tabs/lib/splitLayout";
 import { useEffect, useRef } from "react";
 import { PreviewPane, type PreviewPaneHandle } from "./PreviewPane";
 
 type Props = {
   tabs: Tab[];
   activeId: number;
+  /** Tab shown on the right of a split view, if any. */
+  secondaryId?: number | null;
   onUrlChange: (id: number, url: string) => void;
   registerHandle: (id: number, handle: PreviewPaneHandle | null) => void;
 };
@@ -13,6 +15,7 @@ type Props = {
 export function PreviewStack({
   tabs,
   activeId,
+  secondaryId = null,
   onUrlChange,
   registerHandle,
 }: Props) {
@@ -62,17 +65,19 @@ export function PreviewStack({
   }, [previews]);
 
   if (previews.length === 0) return null;
+  const split = secondaryId !== null;
   return (
     <div className="relative h-full w-full">
       {previews.map((t) => {
-        const visible = t.id === activeId;
+        const slot = slotOf(t.id, activeId, secondaryId);
+        const visible = slot !== null;
         return (
           <div
             key={t.id}
-            className={cn(
-              "absolute inset-0",
-              !visible && "invisible pointer-events-none",
-            )}
+            className={
+              visible ? "pointer-events-auto" : "invisible pointer-events-none"
+            }
+            style={slotStyle(slot, split)}
             aria-hidden={!visible}
           >
             <PreviewPane
