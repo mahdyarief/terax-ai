@@ -34,9 +34,11 @@ pub struct Location {
 impl Location {
     /// The location a host path names: a `\\wsl.localhost\<distro>\...` or
     /// `\\wsl$\<distro>\...` path (verbatim or not) is inside that distro,
-    /// anything else is local.
-    pub fn of_host(path: &Path) -> Self {
-        location_of_canon(&to_canon(path), cfg!(windows))
+    /// anything else is local. `None` when the path is not valid Unicode: its
+    /// lossy spelling could equal another, real path's, so it names nothing.
+    pub fn of_host(path: &Path) -> Option<Self> {
+        path.to_str()?;
+        Some(location_of_canon(&to_canon(path), cfg!(windows)))
     }
 
     /// The location a canonical workspace path names. Inside a WSL distro,
@@ -50,6 +52,13 @@ impl Location {
     pub fn contains(&self, other: &Location) -> bool {
         same_env(&self.env, &other.env) && path_within(&other.path, &self.path)
     }
+}
+
+fn inexact() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "path cannot be represented exactly",
+    )
 }
 
 /// Pure, with `windows` a parameter, so the WSL spellings are tested on every
@@ -216,15 +225,16 @@ fn covered(
 impl WorkspaceRegistry {
     pub fn authorize<P: AsRef<Path>>(&self, path: P) -> std::io::Result<PathBuf> {
         let canonical = std::fs::canonicalize(path.as_ref())?;
+        let location = Location::of_host(&canonical).ok_or_else(inexact)?;
         let mut set = self.roots.lock().expect("workspace registry poisoned");
-        set.insert(Location::of_host(&canonical));
+        set.insert(location);
         Ok(canonical)
     }
 
     pub fn is_authorized(&self, target: &Path) -> bool {
         let set = self.roots.lock().expect("workspace registry poisoned");
         let derived = self.derived.lock().expect("workspace registry poisoned");
-        covered(&Location::of_host(target), &set, &derived, 0)
+        Location::of_host(target).is_some_and(|target| covered(&target, &set, &derived, 0))
     }
 
     /// Authorizes `child` on the strength of `parent`, which must itself be
@@ -236,8 +246,8 @@ impl WorkspaceRegistry {
     /// covers nothing. The checks and the insertion share one critical section.
     pub fn authorize_derived(&self, child: &Path, parent: &Path) -> std::io::Result<PathBuf> {
         let child = std::fs::canonicalize(child)?;
-        let parent = Location::of_host(&std::fs::canonicalize(parent)?);
-        let child_location = Location::of_host(&child);
+        let parent = Location::of_host(&std::fs::canonicalize(parent)?).ok_or_else(inexact)?;
+        let child_location = Location::of_host(&child).ok_or_else(inexact)?;
         let roots = self.roots.lock().expect("workspace registry poisoned");
         let mut derived = self.derived.lock().expect("workspace registry poisoned");
         if !covered(&parent, &roots, &derived, 0) {
@@ -259,6 +269,7 @@ impl WorkspaceRegistry {
         let wanted: Vec<(WorkspaceEnv, String)> =
             [Location::of_host(child), Location::of_host(&canonical_or_resolved(child))]
                 .into_iter()
+                .flatten()
                 .map(|location| {
                     let key = location_key(&location);
                     (location.env, key)
@@ -887,7 +898,7 @@ mod auth_tests {
     use std::fs;
 
     fn loc(path: &Path) -> Location {
-        Location::of_host(path)
+        Location::of_host(path).expect("a Unicode path")
     }
 
     fn tempdir(label: &str) -> PathBuf {
@@ -899,6 +910,73 @@ mod auth_tests {
         p.push(format!("terax-auth-{label}-{nanos}-{}", std::process::id()));
         fs::create_dir_all(&p).expect("create tempdir");
         fs::canonicalize(&p).expect("canonicalize tempdir")
+    }
+
+    /// A name that is not valid Unicode: `repo` plus an invalid byte on Unix,
+    /// plus an unpaired surrogate on Windows. Its lossy spelling is `repo\u{FFFD}`.
+    fn non_unicode_name() -> std::ffi::OsString {
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStrExt;
+            std::ffi::OsStr::from_bytes(b"repo\xff").to_os_string()
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::ffi::OsStringExt;
+            std::ffi::OsString::from_wide(&[0x72, 0x65, 0x70, 0x6f, 0xD800])
+        }
+    }
+
+    /// A root named `repo\u{FFFD}` must not cover a sibling whose real name only
+    /// *displays* the same: grants compare names exactly, as `PathBuf` did.
+    #[test]
+    fn a_non_unicode_sibling_cannot_alias_an_authorized_root() {
+        let parent = tempdir("alias");
+        let root = parent.join("repo\u{FFFD}");
+        let outside = parent.join(non_unicode_name());
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::write(outside.join("secret.txt"), b"x").unwrap();
+        assert_eq!(
+            outside.to_string_lossy(),
+            root.to_string_lossy(),
+            "the fixture's two names display alike"
+        );
+
+        let reg = WorkspaceRegistry::default();
+        reg.authorize(&root).unwrap();
+        assert!(reg.is_authorized(&root.join("file.txt")));
+        assert!(!reg.is_authorized(&outside), "a look-alike sibling is not the root");
+        assert!(!reg.is_authorized(&outside.join("secret.txt")));
+        assert!(
+            reg.authorize(&outside).is_err(),
+            "a root that cannot be spelled exactly is refused"
+        );
+    }
+
+    /// A look-alike never reaches an authorization check as a string.
+    #[test]
+    fn a_path_that_cannot_be_spelled_exactly_is_never_covered() {
+        let parent = tempdir("alias-canon");
+        let outside = parent.join(non_unicode_name());
+        fs::create_dir(&outside).unwrap();
+        let link_free = outside.join("secret.txt");
+        fs::write(&link_free, b"x").unwrap();
+        let ws = backend_for(&WorkspaceEnv::Local);
+        // The frontend can only send the lossy spelling, which names another
+        // (missing) directory; the backend must not resolve it to this one.
+        let lossy = link_free.to_string_lossy().into_owned();
+        assert!(ws.canonicalize(&lossy).is_err());
+        // Even inside an authorized root, a path that cannot be spelled exactly
+        // is not covered (it could only be compared by its lossy spelling).
+        let reg = WorkspaceRegistry::default();
+        reg.authorize(&parent).unwrap();
+        for host in [outside.clone(), link_free.clone()] {
+            assert!(
+                !reg.is_authorized(&host),
+                "{host:?} cannot be represented exactly, so it is not covered"
+            );
+        }
     }
 
     #[test]
@@ -924,7 +1002,7 @@ mod auth_tests {
             local("//wsl.localhost/Ubuntu/home/u")
         );
         assert_eq!(
-            Location::of_host(Path::new(r"\\?\C:\Users\u")).path,
+            Location::of_host(Path::new(r"\\?\C:\Users\u")).unwrap().path,
             if cfg!(windows) { "C:/Users/u" } else { r"\\?\C:\Users\u" }
         );
     }

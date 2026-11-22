@@ -223,7 +223,16 @@ impl Workspace for HostWorkspace {
     }
 
     fn canonicalize(&self, path: &str) -> io::Result<String> {
-        let canon = to_canon(fs::canonicalize(self.host(path))?);
+        let canonical = fs::canonicalize(self.host(path))?;
+        // A lossy spelling could equal another, real path's; callers compare
+        // canonical paths to authorize, so refuse rather than approximate.
+        if canonical.to_str().is_none() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "canonical path is not valid Unicode",
+            ));
+        }
+        let canon = to_canon(canonical);
         match &self.env {
             WorkspaceEnv::Local => Ok(canon),
             #[cfg(windows)]
@@ -405,6 +414,17 @@ mod tests {
         assert_eq!(ws.read_link(&format!("{root}/dangling")).unwrap(), "missing");
         let listed = ws.read_dir(&root).unwrap();
         assert!(listed.contains(&DirEntry { name: "link.txt".into(), kind: EntryKind::Symlink }));
+    }
+
+    #[test]
+    fn a_canonical_path_that_is_not_unicode_is_refused() {
+        use std::os::unix::ffi::OsStrExt;
+        let (_dir, ws, root) = setup();
+        let odd = std::path::Path::new(&root).join(std::ffi::OsStr::from_bytes(b"repo\xff"));
+        fs::create_dir(&odd).unwrap();
+        std::os::unix::fs::symlink(&odd, format!("{root}/plain")).unwrap();
+        let err = ws.canonicalize(&format!("{root}/plain")).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]
