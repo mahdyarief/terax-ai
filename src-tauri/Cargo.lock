@@ -5073,6 +5073,10 @@ dependencies = [
 name = "terax-workspace-core"
 version = "0.9.3"
 dependencies = [
+ "globset",
+ "grep-regex",
+ "grep-searcher",
+ "ignore",
  "libc",
  "proptest",
  "serde",

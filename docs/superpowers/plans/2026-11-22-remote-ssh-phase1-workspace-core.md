@@ -115,12 +115,18 @@ pub trait Workspace: Send + Sync {
 - **Moved to Task 11:** `fs_read_project_memory`, `asset_grant`/asset serving, `ai_read_file`, `ai_read_dir`. Each opens a file and then checks the *opened handle's* real path (`/proc/self/fd`, `F_GETPATH`, `GetFinalPathNameByHandleW`) against the registry, so they are confinement checks rather than plain reads. Their three `opened_path` copies also differ on purpose (the AI path keeps the lossless verbatim Windows path; the others compare the stripped spelling), so merging them is a security-semantics change that belongs with the registry redesign, where a remote agent must run the same check on the server.
 - `read_policy.rs`, `clipboard.rs`, `preview.rs` and `local_file.rs` stay host-only.
 
-### Task 7: Move the search engines (`grep`, `glob`, `list_files`, index)
+### Task 7a: Move the grep and glob engines
 
-- [ ] Move the `ignore`/`grep-searcher` code from `fs/grep.rs`, `fs/search.rs` and `fs/index.rs` into `search/`, operating on host paths, with streaming through a `GrepSink` instead of Tauri channels.
-- [ ] `HostWorkspace::{grep, glob, list_files}` call the engine; `fs_grep`, `fs_grep_interactive`, `fs_glob`, `fs_search`, `fs_warm_index`, `fs_list_files`, `ai_glob`, `ai_grep` adapt sinks to their current Tauri channels/results.
-- [ ] `FileIndexState` (cache, warmers) stays app-side as state keyed by env; the indexing walk itself is the engine.
-- [ ] Contract suite gains engine cases: `.gitignore` respected, binary files skipped, result caps, cancellation.
+- [x] The `ignore`/`grep-searcher` walk of `fs/grep.rs` moved into the core (`grep.rs`) with serializable `GrepRequest` (regex or smart-case literal), `GlobRequest` and their responses, so they can cross the Phase 2 wire unchanged. Results are returned whole (capped), not streamed: today's commands return whole responses too, and a streaming sink can be added when the remote palette needs one.
+- [x] `Workspace::{grep, glob}`; `fs_grep`, `fs_grep_interactive` and `fs_glob` are thin shells. Cancellation stays app-side (`Supersede` tickets) and reaches the engine as a `cancel` closure.
+- [x] Contract suite gains engine cases: `.ignore` respected outside a git repo, hidden and binary files skipped, globs filter, result caps report truncation, cancellation, bad and empty patterns refused. Mutation-checked: dropping the ignore rule fails the suite.
+- `ai_glob` / `ai_grep` walk only authorized paths through the registry and move with Task 11.
+
+### Task 7b: Move the file-index walk
+
+- [ ] `FileIndexState` (cache, warmers, invalidation from the watcher and from mutations) stays app-side, keyed by `(scope key, root)` instead of a host `PathBuf`; only the walk that fills it becomes `Workspace::list_files(root, show_hidden, max_depth, cancel)`.
+- [ ] `fs_search`, `fs_warm_index`, `fs_list_files` keep ranking (nucleo) app-side over the cached list.
+- [ ] Contract suite gains a walk case (ignore rules, depth cap, truncation, cancellation).
 
 ### Task 8: Move the watcher behind `Workspace::watch`
 

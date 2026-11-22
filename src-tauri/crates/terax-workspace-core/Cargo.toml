@@ -6,6 +6,10 @@ license.workspace = true
 publish = false
 
 [dependencies]
+globset = "0.4"
+grep-regex = "0.1"
+grep-searcher = "0.1"
+ignore = "0.4"
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 

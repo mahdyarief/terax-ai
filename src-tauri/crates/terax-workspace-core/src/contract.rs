@@ -6,6 +6,7 @@
 
 use std::io::ErrorKind;
 
+use crate::grep::{GlobRequest, GrepPattern, GrepRequest};
 use crate::workspace::{EntryKind, ReadRequest, Workspace};
 
 pub fn run(ws: &dyn Workspace, root: &str) {
@@ -17,6 +18,7 @@ pub fn run(ws: &dyn Workspace, root: &str) {
     listing(ws, root);
     rename_copy_remove(ws, root);
     canonical_paths(ws, root);
+    search_engines(ws, root);
 }
 
 fn join(root: &str, name: &str) -> String {
@@ -175,4 +177,79 @@ fn canonical_paths(ws: &dyn Workspace, root: &str) {
         "a canonical path is itself a usable workspace path"
     );
     assert_eq!(kind_of(ws.canonicalize(&join(root, "missing"))), ErrorKind::NotFound);
+}
+
+fn search_engines(ws: &dyn Workspace, root: &str) {
+    let tree = join(root, "search");
+    for dir in ["src", "skipped", ".hidden"] {
+        ws.create_dir_all(&join(&tree, dir)).unwrap();
+    }
+    let files: [(&str, &[u8]); 6] = [
+        ("src/a.rs", b"fn needle() {}\n"),
+        ("src/b.txt", b"one\nneedle two\n"),
+        ("src/bin.dat", b"\0needle\n"),
+        ("skipped/c.txt", b"needle\n"),
+        (".hidden/d.txt", b"needle\n"),
+        // `.ignore` applies outside a git repository too.
+        (".ignore", b"skipped/\n"),
+    ];
+    for (name, bytes) in files {
+        ws.write_atomic(&join(&tree, name), bytes).unwrap();
+    }
+
+    let grep = |pattern: &str, globs: &[&str], max: Option<usize>, cancel: bool| {
+        let request = GrepRequest {
+            root: tree.clone(),
+            pattern: GrepPattern::Regex { pattern: pattern.into(), case_insensitive: false },
+            globs: globs.iter().map(|g| g.to_string()).collect(),
+            max_results: max,
+        };
+        ws.grep(&request, &move || cancel)
+    };
+    let rels = |hits: &[crate::grep::GrepHit]| {
+        let mut rels: Vec<_> = hits.iter().map(|h| h.rel.clone()).collect();
+        rels.sort();
+        rels
+    };
+
+    let all = grep("needle", &[], None, false).expect("grep");
+    assert_eq!(
+        rels(&all.hits),
+        ["src/a.rs", "src/b.txt"],
+        "ignored, hidden and binary files are skipped"
+    );
+    assert!(!all.truncated && !all.cancelled);
+    let two = all.hits.iter().find(|h| h.rel == "src/b.txt").unwrap();
+    assert_eq!((two.line, two.text.as_str()), (2, "needle two"));
+    assert!(two.path.ends_with("src/b.txt"), "hits carry a usable path: {}", two.path);
+
+    assert_eq!(rels(&grep("needle", &["*.rs"], None, false).unwrap().hits), ["src/a.rs"]);
+    let capped = grep("needle", &[], Some(1), false).unwrap();
+    assert_eq!(capped.hits.len(), 1);
+    assert!(capped.truncated, "a capped search says so");
+    let stopped = grep("needle", &[], None, true).unwrap();
+    assert!(stopped.cancelled && stopped.hits.is_empty());
+    assert!(grep("", &[], None, false).is_err(), "an empty pattern is refused");
+    assert!(grep("(", &[], None, false).is_err(), "a bad regex is refused");
+
+    let literal = GrepRequest {
+        root: tree.clone(),
+        pattern: GrepPattern::Literal { text: "NEEDLE()".into() },
+        globs: Vec::new(),
+        max_results: None,
+    };
+    assert!(
+        ws.grep(&literal, &|| false).unwrap().hits.is_empty(),
+        "a literal with capitals is case-sensitive and not a regex"
+    );
+
+    let globbed = ws
+        .glob(&GlobRequest { root: tree.clone(), pattern: "**/*.txt".into(), max_results: None })
+        .expect("glob");
+    let mut names: Vec<_> = globbed.hits.iter().map(|h| h.rel.as_str()).collect();
+    names.sort();
+    assert_eq!(names, ["src/b.txt"]);
+    assert!(ws
+        .glob(&GlobRequest { root: join(&tree, "nope"), pattern: "*".into(), max_results: None })
+        .is_err());
 }

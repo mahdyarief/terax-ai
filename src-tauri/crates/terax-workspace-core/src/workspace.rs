@@ -14,6 +14,7 @@ use std::io;
 use std::path::Path;
 
 use crate::env::WorkspaceEnv;
+use crate::grep::{GlobRequest, GlobResponse, GrepRequest, GrepResponse};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EntryKind {
@@ -112,4 +113,15 @@ pub trait Workspace: Send + Sync {
     /// "name copy", "name copy 2", ... instead of failing.
     fn import(&self, source: &Path, dest_dir: &str, rename_on_conflict: bool)
         -> io::Result<String>;
+
+    /// Searches file contents under `request.root`, honouring `.gitignore`.
+    /// Polls `cancel` and stops early when it turns true.
+    fn grep(
+        &self,
+        request: &GrepRequest,
+        cancel: &(dyn Fn() -> bool + Sync),
+    ) -> Result<GrepResponse, String>;
+
+    /// Lists files under `request.root` matching a glob, honouring `.gitignore`.
+    fn glob(&self, request: &GlobRequest) -> Result<GlobResponse, String>;
 }

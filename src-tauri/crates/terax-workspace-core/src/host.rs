@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::env::{resolve_path, WorkspaceEnv};
+use crate::grep::{GlobRequest, GlobResponse, GrepRequest, GrepResponse};
 use crate::paths::to_canon;
 use crate::workspace::{
     DirEntry, EntryKind, Meta, ReadOutcome, ReadRequest, Workspace, WriteOutcome,
@@ -324,6 +325,18 @@ impl Workspace for HostWorkspace {
         let dest = fs::canonicalize(self.host(dest_dir))?;
         crate::import::import_item(source, &dest, rename_on_conflict)
             .map(|name| name.to_string_lossy().into_owned())
+    }
+
+    fn grep(
+        &self,
+        request: &GrepRequest,
+        cancel: &(dyn Fn() -> bool + Sync),
+    ) -> Result<GrepResponse, String> {
+        crate::grep::grep(&self.host(&request.root), &self.env, request, cancel)
+    }
+
+    fn glob(&self, request: &GlobRequest) -> Result<GlobResponse, String> {
+        crate::grep::glob(&self.host(&request.root), &self.env, request)
     }
 }
 

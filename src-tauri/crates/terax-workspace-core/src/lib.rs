@@ -4,6 +4,7 @@
 //! Shared by the app and, later, by the remote agent.
 
 pub mod env;
+pub mod grep;
 pub mod host;
 pub mod import;
 pub mod paths;

@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use crate::env::WorkspaceEnv;
+
 /// The single canonical-to-display conversion: forward slashes, Windows
 /// verbatim `\\?\` prefix stripped. Route every such conversion through here.
 pub fn to_canon(p: impl AsRef<Path>) -> String {
@@ -15,6 +17,29 @@ pub fn to_canon(p: impl AsRef<Path>) -> String {
         // Backslashes are legal in Unix filenames; never rewrite them.
         s.into_owned()
     }
+}
+
+/// How a path under a search root is shown to the frontend. WSL roots keep the
+/// caller's spelling so the result stays a valid path inside the distro.
+pub fn display_path(
+    path: &Path,
+    root_path: &Path,
+    root_display: &str,
+    workspace: &WorkspaceEnv,
+) -> String {
+    if workspace.is_wsl() {
+        if let Ok(rel) = path.strip_prefix(root_path) {
+            let rel = to_canon(rel);
+            return if rel.is_empty() {
+                root_display.to_string()
+            } else if root_display.ends_with('/') {
+                format!("{root_display}{rel}")
+            } else {
+                format!("{root_display}/{rel}")
+            };
+        }
+    }
+    to_canon(path)
 }
 
 /// A child of a workspace directory. Workspace paths use `/` between
