@@ -145,23 +145,27 @@ pub trait Workspace: Send + Sync {
 - [x] `ensure_git_available` goes through `run_git`, so through `exec` too. Parsers and all higher-level git logic stay in the app.
 - Arguments are `OsString`; the Phase 2 wire format decides how non-UTF-8 arguments cross (expected: refuse them for remote workspaces).
 
-### Task 10: Route git's direct file access through the primitives
+### Order: Task 11 before Task 10
 
-Git touches files directly in 164 places. Migrate by file, one commit each, in this order (smallest blast radius first):
+Git holds `repo.local_path`, the registry's canonical *host* path (`\\wsl.localhost\<distro>\...` for WSL), and derives every path from it. The `Workspace` primitives take *workspace* paths, and `HostWorkspace` maps a Linux path into the distro, so a UNC path cannot be passed through. Routing git's file access first would only swap `std::fs` for a host-path shim and redo all of it after the registry changes. So the registry goes first (11a), then each module moves to workspace paths and the backend together (11b with 10).
 
-- [ ] `plumbing.rs` (1), `process.rs` (2), `task_state.rs` (2), `review.rs` (6), `utils.rs` (7), `project_config.rs` (9)
-- [ ] `task_worktree.rs` (21)
-- [ ] `checkpoint.rs` (42)
-- [ ] `worktree.rs` (42)
-- [ ] `git/watch.rs` (33): the git state poller. Where it stats `.git` internals in a tight loop, add a single `metadata_many` primitive (batch stat) to avoid 33 round trips per tick in Phase 3, and give it a host implementation now.
+### Task 11: Key `WorkspaceRegistry` by workspace
+
+- [x] **11a, registry internals.** A grant is a `Location { env, path }`: the canonical path in the workspace's own `/`-separated spelling (`C:/Users/x` local on Windows, `/home/x` in a distro or on a remote host). Containment is component-wise (`/a/b` is within `/a`, `/a/bc` is not) and only within the same workspace (distro names compare case-insensitively), so a root in one workspace never covers the same text in another. The host-path methods (`authorize`, `is_authorized`, `authorize_derived`, `revoke_derived`) stay as adapters through `Location::of_host`, which reads a `\\wsl.localhost\` / `\\wsl$\` path as that distro and anything else as local: on local and WSL roots this is the same coverage as before, and no caller changes. Tests: host spellings map to the right workspace; containment never crosses workspaces (mutation-checked).
+- [ ] **11b, callers to workspace paths**, module by module: add `authorize_in` / `is_authorized_in` / `authorize_derived_in` / `revoke_derived_in` taking a `Location` and canonicalizing through `backend_for(env).canonicalize`; move the callers (fs, shell/pty/lsp/control spawn cwd, then git with Task 10); delete each host adapter once nothing uses it.
+- [ ] **11c, confined reads.** One backend operation that opens a file, checks the opened handle's real path lies inside an authorized root, applies the secret-path policy to that real path, and reads with a limit. Port `fs_read_project_memory`, asset serving and `ai_read_file`/`ai_read_dir` to it, keeping each caller's error messages. The agent implements the same check on the server.
+
+### Task 10: Route git's direct file access through the primitives (with 11b)
+
+`ResolvedGitDirectory` carries the env and the workspace path; every `std::fs` call on a repo path goes through `backend_for(env)`, and authorization through the `*_in` registry methods. One commit per module, smallest blast radius first (production sites; tests stay on the host file system):
+
+- [ ] `plumbing.rs`, `process.rs` (`read_text_file`), `task_state.rs`, `review.rs`, `utils.rs` (`canonical_dir`, `resolve_within_repo`), `project_config.rs`
+- [ ] `task_worktree.rs`
+- [ ] `checkpoint.rs`
+- [ ] `worktree.rs`
+- [ ] `git/watch.rs`: the git state poller. Where it stats `.git` internals in a tight loop, add a single `metadata_many` primitive (batch stat) to avoid one round trip per file per tick in Phase 3, and give it a host implementation now.
 
 Each step: the module's existing tests (`*_tests.rs`, `hardening_tests.rs`, `edge_tests.rs`) stay green unchanged.
-
-### Task 11: Route `WorkspaceRegistry` canonicalization through the backend
-
-- [ ] `authorize`, `authorize_derived`, `canonical_or_resolved` and `authorize_spawn_cwd` canonicalize via `backend_for(env).canonicalize`. Registry keys become `(scope key, canonical path)`, so a remote root can never authorize a local path with the same text (or the reverse).
-- [ ] Confined reads: add one backend operation that opens a file, verifies the opened handle lies inside an authorized root, applies the secret-path policy to that real path, and reads with a limit. Port `fs_read_project_memory`, asset serving and `ai_read_file`/`ai_read_dir` to it, keeping each caller's error messages. The agent implements the same check on the server.
-- [ ] Tests: a WSL root does not cover the identical local path; existing derived-root (worktree) tests stay green.
 
 ### Task 12: Lock the invariants
 

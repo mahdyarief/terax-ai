@@ -5,6 +5,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
+use terax_workspace_core::paths::to_canon;
 
 // Short TTL keeps the auth-check TOCTOU window tight while still coalescing the
 // burst of canonicalize calls within a single panel refresh (~100ms).
@@ -19,14 +20,86 @@ struct CanonicalEntry {
 /// How far a chain of derived roots may nest (a worktree of a worktree's repo).
 const MAX_DERIVED_DEPTH: usize = 4;
 
+/// One authorized place: the workspace it lives in and its canonical path in
+/// that workspace's spelling, `/`-separated (`C:/Users/x` for a local
+/// workspace on Windows, `/home/x` inside a WSL distro or on a remote host).
+/// Keying grants by workspace keeps a root in one workspace from ever
+/// covering the same text in another.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Location {
+    pub env: WorkspaceEnv,
+    pub path: String,
+}
+
+impl Location {
+    /// The location a host path names: a `\\wsl.localhost\<distro>\...` or
+    /// `\\wsl$\<distro>\...` path (verbatim or not) is inside that distro,
+    /// anything else is local.
+    pub fn of_host(path: &Path) -> Self {
+        location_of_canon(&to_canon(path), cfg!(windows))
+    }
+
+    /// True when `other` is this location or lies beneath it.
+    pub fn contains(&self, other: &Location) -> bool {
+        same_env(&self.env, &other.env) && path_within(&other.path, &self.path)
+    }
+}
+
+/// Pure, with `windows` a parameter, so the WSL spellings are tested on every
+/// host. `canon` is a `to_canon` string.
+fn location_of_canon(canon: &str, windows: bool) -> Location {
+    if windows {
+        for host in ["//wsl.localhost/", "//wsl$/"] {
+            let Some(head) = canon.get(..host.len()) else {
+                continue;
+            };
+            if !head.eq_ignore_ascii_case(host) {
+                continue;
+            }
+            let rest = &canon[host.len()..];
+            let (distro, tail) = rest.split_once('/').unwrap_or((rest, ""));
+            if !distro.is_empty() {
+                return Location {
+                    env: WorkspaceEnv::Wsl {
+                        distro: distro.to_string(),
+                    },
+                    path: format!("/{tail}"),
+                };
+            }
+        }
+    }
+    Location {
+        env: WorkspaceEnv::Local,
+        path: canon.to_string(),
+    }
+}
+
+/// WSL distro names are case-insensitive to `wsl.exe` and the UNC provider.
+fn same_env(a: &WorkspaceEnv, b: &WorkspaceEnv) -> bool {
+    match (a, b) {
+        (WorkspaceEnv::Wsl { distro: a }, WorkspaceEnv::Wsl { distro: b }) => {
+            a.eq_ignore_ascii_case(b)
+        }
+        _ => a == b,
+    }
+}
+
+/// Component-wise prefix on `/`-separated paths: `/a/b` is within `/a`, but
+/// `/a/bc` is not. A trailing separator on either side is ignored.
+fn path_within(path: &str, root: &str) -> bool {
+    let root = root.trim_end_matches('/');
+    let path = path.trim_end_matches('/');
+    path == root || path.strip_prefix(root).is_some_and(|rest| rest.starts_with('/'))
+}
+
 #[derive(Default)]
 pub struct WorkspaceRegistry {
-    roots: Mutex<HashSet<PathBuf>>,
+    roots: Mutex<HashSet<Location>>,
     /// Roots that exist only because another authorized root vouches for them
     /// (a linked worktree and its parent repository): child -> parent. They
     /// stop counting the moment they are revoked or the parent is no longer
     /// authorized.
-    derived: Mutex<HashMap<PathBuf, PathBuf>>,
+    derived: Mutex<HashMap<Location, Location>>,
     canonical_cache: Mutex<HashMap<PathBuf, CanonicalEntry>>,
 }
 
@@ -57,6 +130,13 @@ fn canonical_or_resolved(path: &Path) -> PathBuf {
 /// both separators are one, and case does not matter (all three are properties
 /// of the file system there); elsewhere only a trailing separator is ignored.
 /// Pure, with `windows` a parameter, so it is tested on every host.
+/// How a grant is matched when revoking: local paths on Windows compare like
+/// that file system does; paths inside a distro are Linux paths.
+fn location_key(location: &Location) -> String {
+    let windows = cfg!(windows) && location.env == WorkspaceEnv::Local;
+    normalize_location(&location.path, windows)
+}
+
 fn normalize_location(path: &str, windows: bool) -> String {
     if !windows {
         return path.trim_end_matches('/').to_string();
@@ -75,34 +155,34 @@ fn normalize_location(path: &str, windows: bool) -> String {
 }
 
 fn covered(
-    target: &Path,
-    roots: &HashSet<PathBuf>,
-    derived: &HashMap<PathBuf, PathBuf>,
+    target: &Location,
+    roots: &HashSet<Location>,
+    derived: &HashMap<Location, Location>,
     depth: usize,
 ) -> bool {
-    if roots.iter().any(|root| target.starts_with(root)) {
+    if roots.iter().any(|root| root.contains(target)) {
         return true;
     }
     if depth >= MAX_DERIVED_DEPTH {
         return false;
     }
-    derived.iter().any(|(child, parent)| {
-        target.starts_with(child) && covered(parent, roots, derived, depth + 1)
-    })
+    derived
+        .iter()
+        .any(|(child, parent)| child.contains(target) && covered(parent, roots, derived, depth + 1))
 }
 
 impl WorkspaceRegistry {
     pub fn authorize<P: AsRef<Path>>(&self, path: P) -> std::io::Result<PathBuf> {
         let canonical = std::fs::canonicalize(path.as_ref())?;
         let mut set = self.roots.lock().expect("workspace registry poisoned");
-        set.insert(canonical.clone());
+        set.insert(Location::of_host(&canonical));
         Ok(canonical)
     }
 
     pub fn is_authorized(&self, target: &Path) -> bool {
         let set = self.roots.lock().expect("workspace registry poisoned");
         let derived = self.derived.lock().expect("workspace registry poisoned");
-        covered(target, &set, &derived, 0)
+        covered(&Location::of_host(target), &set, &derived, 0)
     }
 
     /// Authorizes `child` on the strength of `parent`, which must itself be
@@ -114,7 +194,8 @@ impl WorkspaceRegistry {
     /// covers nothing. The checks and the insertion share one critical section.
     pub fn authorize_derived(&self, child: &Path, parent: &Path) -> std::io::Result<PathBuf> {
         let child = std::fs::canonicalize(child)?;
-        let parent = std::fs::canonicalize(parent)?;
+        let parent = Location::of_host(&std::fs::canonicalize(parent)?);
+        let child_location = Location::of_host(&child);
         let roots = self.roots.lock().expect("workspace registry poisoned");
         let mut derived = self.derived.lock().expect("workspace registry poisoned");
         if !covered(&parent, &roots, &derived, 0) {
@@ -123,8 +204,8 @@ impl WorkspaceRegistry {
                 "parent is not an authorized root",
             ));
         }
-        if !covered(&child, &roots, &derived, 0) {
-            derived.insert(child.clone(), parent);
+        if !covered(&child_location, &roots, &derived, 0) {
+            derived.insert(child_location, parent);
         }
         Ok(child)
     }
@@ -133,15 +214,21 @@ impl WorkspaceRegistry {
     /// spelled differently from the canonical form the grant was stored under
     /// (git prints `C:/Users/x/wt`; the registry holds `\\?\C:\Users\x\wt`).
     pub fn revoke_derived(&self, child: &Path) -> bool {
-        let windows = cfg!(windows);
-        let wanted: Vec<String> = [child.to_path_buf(), canonical_or_resolved(child)]
-            .iter()
-            .map(|p| normalize_location(&p.to_string_lossy(), windows))
-            .collect();
+        let wanted: Vec<(WorkspaceEnv, String)> =
+            [Location::of_host(child), Location::of_host(&canonical_or_resolved(child))]
+                .into_iter()
+                .map(|location| {
+                    let key = location_key(&location);
+                    (location.env, key)
+                })
+                .collect();
         let mut derived = self.derived.lock().expect("workspace registry poisoned");
         let before = derived.len();
         derived.retain(|key, _| {
-            !wanted.contains(&normalize_location(&key.to_string_lossy(), windows))
+            let spelled = location_key(key);
+            !wanted
+                .iter()
+                .any(|(env, path)| same_env(env, &key.env) && *path == spelled)
         });
         derived.len() != before
     }
@@ -721,6 +808,10 @@ mod auth_tests {
     use std::env;
     use std::fs;
 
+    fn loc(path: &Path) -> Location {
+        Location::of_host(path)
+    }
+
     fn tempdir(label: &str) -> PathBuf {
         let mut p = env::temp_dir();
         let nanos = std::time::SystemTime::now()
@@ -730,6 +821,67 @@ mod auth_tests {
         p.push(format!("terax-auth-{label}-{nanos}-{}", std::process::id()));
         fs::create_dir_all(&p).expect("create tempdir");
         fs::canonicalize(&p).expect("canonicalize tempdir")
+    }
+
+    #[test]
+    fn host_paths_name_a_location_in_their_workspace() {
+        let wsl = |distro: &str, path: &str| Location {
+            env: WorkspaceEnv::Wsl {
+                distro: distro.into(),
+            },
+            path: path.into(),
+        };
+        let local = |path: &str| Location {
+            env: WorkspaceEnv::Local,
+            path: path.into(),
+        };
+        assert_eq!(location_of_canon("//wsl.localhost/Ubuntu/home/u", true), wsl("Ubuntu", "/home/u"));
+        assert_eq!(location_of_canon("//WSL$/Ubuntu/home/u", true), wsl("Ubuntu", "/home/u"));
+        assert_eq!(location_of_canon("//wsl.localhost/Ubuntu", true), wsl("Ubuntu", "/"));
+        assert_eq!(location_of_canon("C:/Users/u", true), local("C:/Users/u"));
+        assert_eq!(location_of_canon("//server/share/x", true), local("//server/share/x"));
+        // Elsewhere there is no WSL; the same text is a local path.
+        assert_eq!(
+            location_of_canon("//wsl.localhost/Ubuntu/home/u", false),
+            local("//wsl.localhost/Ubuntu/home/u")
+        );
+        assert_eq!(
+            Location::of_host(Path::new(r"\\?\C:\Users\u")).path,
+            if cfg!(windows) { "C:/Users/u" } else { r"\\?\C:\Users\u" }
+        );
+    }
+
+    #[test]
+    fn containment_is_by_component_and_never_crosses_workspaces() {
+        let at = |env: WorkspaceEnv, path: &str| Location {
+            env,
+            path: path.into(),
+        };
+        let ubuntu = || WorkspaceEnv::Wsl {
+            distro: "Ubuntu".into(),
+        };
+        let root = at(ubuntu(), "/home/u");
+        assert!(root.contains(&at(ubuntu(), "/home/u")));
+        assert!(root.contains(&at(ubuntu(), "/home/u/src/a.rs")));
+        assert!(root.contains(&at(ubuntu(), "/home/u/")));
+        assert!(!root.contains(&at(ubuntu(), "/home/user")));
+        assert!(!root.contains(&at(ubuntu(), "/home")));
+        assert!(
+            root.contains(&at(WorkspaceEnv::Wsl { distro: "ubuntu".into() }, "/home/u/x")),
+            "distro names are case-insensitive"
+        );
+        assert!(!root.contains(&at(WorkspaceEnv::Wsl { distro: "Debian".into() }, "/home/u")));
+        assert!(
+            !root.contains(&at(WorkspaceEnv::Local, "/home/u")),
+            "a WSL root does not cover the identical local path"
+        );
+        assert!(!at(WorkspaceEnv::Local, "/home/u").contains(&root));
+        assert!(at(WorkspaceEnv::Local, "/").contains(&at(WorkspaceEnv::Local, "/etc")));
+        assert!(at(WorkspaceEnv::Local, "C:/").contains(&at(WorkspaceEnv::Local, "C:/Users")));
+
+        let roots: HashSet<Location> = [root.clone()].into();
+        assert!(covered(&at(ubuntu(), "/home/u/x"), &roots, &HashMap::new(), 0));
+        assert!(!covered(&at(WorkspaceEnv::Local, "/home/u/x"), &roots, &HashMap::new(), 0));
     }
 
     #[test]
@@ -839,7 +991,7 @@ mod auth_tests {
         // from the task; that must not replace `task -> main`.
         reg.authorize_derived(&task, &task).unwrap();
         assert!(reg.is_authorized(&task), "the grant still reaches a root");
-        assert_eq!(reg.derived.lock().unwrap().get(&task), Some(&main));
+        assert_eq!(reg.derived.lock().unwrap().get(&loc(&task)), Some(&loc(&main)));
         assert!(reg.revoke_derived(&task));
         assert!(!reg.is_authorized(&task));
 
@@ -848,7 +1000,7 @@ mod auth_tests {
         reg.authorize(&other).unwrap();
         reg.authorize_derived(&task, &main).unwrap();
         reg.authorize_derived(&task, &other).unwrap();
-        assert_eq!(reg.derived.lock().unwrap().get(&task), Some(&main));
+        assert_eq!(reg.derived.lock().unwrap().get(&loc(&task)), Some(&loc(&main)));
     }
 
     #[test]
@@ -887,7 +1039,7 @@ mod auth_tests {
         }
         for task in &tasks {
             assert!(reg.is_authorized(task), "{task:?}");
-            assert_eq!(reg.derived.lock().unwrap().get(task), Some(&main));
+            assert_eq!(reg.derived.lock().unwrap().get(&loc(task)), Some(&loc(&main)));
         }
     }
 
@@ -928,7 +1080,7 @@ mod auth_tests {
         reg.authorize(&root).unwrap();
         reg.authorize_derived(&a, &root).unwrap();
         reg.authorize_derived(&b, &a).unwrap();
-        reg.derived.lock().unwrap().insert(a.clone(), b.clone());
+        reg.derived.lock().unwrap().insert(loc(&a), loc(&b));
         assert!(!reg.is_authorized(&a));
         assert!(!reg.is_authorized(&b));
     }
