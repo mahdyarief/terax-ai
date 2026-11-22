@@ -1,13 +1,14 @@
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::path::Path;
-use std::time::UNIX_EPOCH;
 
 use ignore::WalkBuilder;
 use serde::Serialize;
 
 use super::blocking;
-use crate::modules::workspace::{resolve_path, WorkspaceEnv};
+use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv};
+use terax_workspace_core::paths::join;
+use terax_workspace_core::workspace::EntryKind as WsKind;
 
 #[derive(Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -148,12 +149,15 @@ pub fn read_dir_entries(
     workspace: Option<WorkspaceEnv>,
 ) -> Result<Vec<DirEntry>, String> {
     let workspace = WorkspaceEnv::from_option(workspace);
-    let root = resolve_path(&path, &workspace);
-    let read = std::fs::read_dir(&root).map_err(|e| {
-        log::debug!("fs_read_dir({}) failed: {e}", root.display());
+    let ws = backend_for(&workspace);
+    let read = ws.read_dir(&path).map_err(|e| {
+        log::debug!("fs_read_dir({path}) failed: {e}");
         e.to_string()
     })?;
 
+    // Gitignore decorations walk host paths with the `ignore` crate; they move
+    // behind the backend with the search engines (phase 1, task 7).
+    let root = resolve_path(&path, &workspace);
     // Gate on a real repo: outside one the walk is pointless and would probe
     // each child for a nested `.git`, which trips macOS folder-access prompts.
     let git_decorations = git_decorations.unwrap_or(false) && in_git_repo(&root);
@@ -164,46 +168,36 @@ pub fn read_dir_entries(
     };
 
     let mut entries: Vec<DirEntry> = read
-        .filter_map(Result::ok)
+        .into_iter()
         .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
+            let name = entry.name;
+            if name.starts_with('.') && !show_hidden {
+                return None;
+            }
+            let child = join(&path, &name);
 
-            // `metadata()` follows symlinks → it returns the target's stat in
-            // one syscall (file_type + size + mtime all derived from it). We
-            // fall back to `symlink_metadata` for broken symlinks so we don't
-            // silently drop them from the listing.
-            let (meta, was_symlink) = match std::fs::metadata(entry.path()) {
+            // Follow symlinks for the target's kind, size and mtime; a broken
+            // symlink falls back to the link itself so it is still listed.
+            let (meta, was_symlink) = match ws.metadata(&child) {
                 Ok(m) => (Some(m), false),
-                Err(_) => (entry.metadata().ok(), true),
+                Err(_) => (ws.symlink_metadata(&child).ok(), true),
             };
             let meta = meta?;
 
             let kind = if was_symlink {
                 EntryKind::Symlink
-            } else if meta.is_dir() {
+            } else if meta.kind == WsKind::Dir {
                 EntryKind::Dir
             } else {
                 EntryKind::File
             };
 
-            if name.starts_with('.') && !show_hidden {
-                return None;
-            }
-
-            let size = meta.len();
-            let mtime = meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                .map(|d| d.as_millis() as u64)
-                .unwrap_or(0);
-
             let gitignored = git_decorations && !git_visible.contains(&name);
             Some(DirEntry {
                 name,
                 kind,
-                size,
-                mtime,
+                size: meta.len,
+                mtime: meta.mtime_ms,
                 gitignored,
             })
         })
@@ -241,24 +235,23 @@ pub fn subdirs(
     show_hidden: bool,
     workspace: Option<WorkspaceEnv>,
 ) -> Result<Vec<String>, String> {
-    let workspace = WorkspaceEnv::from_option(workspace);
-    let root = resolve_path(&path, &workspace);
-    let read = std::fs::read_dir(&root).map_err(|e| {
-        log::debug!("list_subdirs({}) read_dir failed: {e}", root.display());
+    let ws = backend_for(&WorkspaceEnv::from_option(workspace));
+    let read = ws.read_dir(&path).map_err(|e| {
+        log::debug!("list_subdirs({path}) read_dir failed: {e}");
         e.to_string()
     })?;
 
     let mut dirs: Vec<String> = read
-        .filter_map(Result::ok)
-        .filter(|entry| match entry.file_type() {
-            Ok(t) if t.is_dir() => true,
-            Ok(t) if t.is_symlink() => std::fs::metadata(entry.path())
-                .map(|m| m.is_dir())
-                .unwrap_or(false),
+        .into_iter()
+        .filter(|entry| show_hidden || !entry.name.starts_with('.'))
+        .filter(|entry| match entry.kind {
+            WsKind::Dir => true,
+            WsKind::Symlink => ws
+                .metadata(&join(&path, &entry.name))
+                .is_ok_and(|m| m.kind == WsKind::Dir),
             _ => false,
         })
-        .filter_map(|entry| entry.file_name().into_string().ok())
-        .filter(|name| show_hidden || !name.starts_with('.'))
+        .map(|entry| entry.name)
         .collect();
 
     dirs.sort_by(|a, b| natural_cmp(a, b));

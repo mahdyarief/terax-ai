@@ -3,7 +3,7 @@
 
 use std::fs;
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
 use crate::env::{resolve_path, WorkspaceEnv};
@@ -52,11 +52,144 @@ fn meta_of(meta: &fs::Metadata) -> Meta {
         len: meta.len(),
         mtime_ms: mtime_millis(meta),
         readonly: meta.permissions().readonly(),
+        token: conflict_token(meta),
     }
 }
 
 fn not_a_file() -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, "not a regular file")
+}
+
+// ── Platform primitives, on host paths ─────────────────────────────────
+
+#[cfg(unix)]
+pub fn conflict_token(metadata: &fs::Metadata) -> String {
+    use std::os::unix::fs::MetadataExt;
+    format!(
+        "{}:{}:{}:{}:{}:{}",
+        metadata.dev(),
+        metadata.ino(),
+        metadata.mode(),
+        metadata.size(),
+        metadata.mtime(),
+        metadata.mtime_nsec()
+    )
+}
+
+#[cfg(target_os = "windows")]
+pub fn conflict_token(metadata: &fs::Metadata) -> String {
+    use std::os::windows::fs::MetadataExt;
+    format!(
+        "{}:{}:{}:{}",
+        metadata.file_attributes(),
+        metadata.creation_time(),
+        metadata.last_write_time(),
+        metadata.file_size()
+    )
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+pub fn conflict_token(metadata: &fs::Metadata) -> String {
+    use std::time::UNIX_EPOCH;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+        .map_or(0, |duration| duration.as_nanos());
+    format!("{}:{modified}", metadata.len())
+}
+
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+fn c_path(path: &Path) -> io::Result<std::ffi::CString> {
+    use std::os::unix::ffi::OsStrExt;
+    std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))
+}
+
+#[cfg(target_os = "macos")]
+pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    let from = c_path(from)?;
+    let to = c_path(to)?;
+    let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "linux")]
+pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    let from = c_path(from)?;
+    let to = c_path(to)?;
+    let result = unsafe {
+        libc::renameat2(
+            libc::AT_FDCWD,
+            from.as_ptr(),
+            libc::AT_FDCWD,
+            to.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if result == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn move_file_windows(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
+    };
+
+    let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
+    let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
+    let flags = MOVEFILE_WRITE_THROUGH
+        | if replace {
+            MOVEFILE_REPLACE_EXISTING
+        } else {
+            0
+        };
+    let result = unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) };
+    if result != 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(target_os = "windows")]
+pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    move_file_windows(from, to, false)
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    if fs::symlink_metadata(to).is_ok() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "destination already exists",
+        ));
+    }
+    fs::rename(from, to)
+}
+
+#[cfg(unix)]
+pub fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
+    fs::rename(from, to)
+}
+
+#[cfg(target_os = "windows")]
+pub fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
+    move_file_windows(from, to, true)
+}
+
+#[cfg(not(any(unix, target_os = "windows")))]
+pub fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
+    fs::rename(from, to)
 }
 
 impl Workspace for HostWorkspace {
@@ -168,7 +301,11 @@ impl Workspace for HostWorkspace {
     }
 
     fn rename(&self, from: &str, to: &str) -> io::Result<()> {
-        fs::rename(self.host(from), self.host(to))
+        rename_no_replace(&self.host(from), &self.host(to))
+    }
+
+    fn replace_file(&self, from: &str, to: &str) -> io::Result<()> {
+        replace_file(&self.host(from), &self.host(to))
     }
 
     fn remove_file(&self, path: &str) -> io::Result<()> {

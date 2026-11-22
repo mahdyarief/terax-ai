@@ -17,6 +17,16 @@ pub fn to_canon(p: impl AsRef<Path>) -> String {
     }
 }
 
+/// A child of a workspace directory. Workspace paths use `/` between
+/// segments on every backend; Windows accepts it alongside `\`.
+pub fn join(dir: &str, name: &str) -> String {
+    if dir.ends_with('/') || dir.ends_with('\\') {
+        format!("{dir}{name}")
+    } else {
+        format!("{dir}/{name}")
+    }
+}
+
 // Pure so it stays unit-testable on any host. `\\?\C:\x` -> `C:/x`.
 #[cfg_attr(not(windows), allow(dead_code))]
 pub fn strip_verbatim(s: &str) -> String {
@@ -61,7 +71,15 @@ pub fn canonical_wsl_path(path: &str, distro: &str) -> Result<String, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{canonical_wsl_path, strip_verbatim};
+    use super::{canonical_wsl_path, join, strip_verbatim};
+
+    #[test]
+    fn join_adds_exactly_one_separator() {
+        assert_eq!(join("/home/me", "a.txt"), "/home/me/a.txt");
+        assert_eq!(join("/", "etc"), "/etc");
+        assert_eq!(join(r"C:\", "x"), r"C:\x");
+        assert_eq!(join(r"C:\work", "x"), r"C:\work/x");
+    }
     use proptest::prelude::*;
 
     #[test]

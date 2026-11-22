@@ -130,6 +130,27 @@ fn rename_copy_remove(ws: &dyn Workspace, root: &str) {
     assert_eq!(kind_of(ws.metadata(&from)), ErrorKind::NotFound);
     assert_eq!(ws.metadata(&to).unwrap().len, 7);
 
+    // Renaming onto an existing entry is the data-loss guard.
+    let occupied = join(&dir, "occupied.txt");
+    ws.write_atomic(&occupied, b"keep").unwrap();
+    let refused = kind_of(ws.rename(&to, &occupied));
+    assert!(
+        matches!(refused, ErrorKind::AlreadyExists | ErrorKind::DirectoryNotEmpty),
+        "rename onto an existing file must refuse, got {refused:?}"
+    );
+    assert_eq!(ws.read(&occupied, ReadRequest { offset: 0, limit: 10 }).unwrap().bytes, b"keep");
+    assert_eq!(ws.metadata(&to).unwrap().len, 7, "the source stays put");
+
+    // Replacing is a separate, explicit operation.
+    let token = ws.symlink_metadata(&occupied).unwrap().token;
+    assert_eq!(ws.symlink_metadata(&occupied).unwrap().token, token, "stable while unchanged");
+    ws.write_atomic(&occupied, b"changed!").unwrap();
+    assert_ne!(ws.symlink_metadata(&occupied).unwrap().token, token, "changes with the file");
+    ws.replace_file(&to, &occupied).expect("replace_file");
+    assert_eq!(kind_of(ws.metadata(&to)), ErrorKind::NotFound);
+    assert_eq!(ws.read(&occupied, ReadRequest { offset: 0, limit: 10 }).unwrap().bytes, b"payload");
+    ws.rename(&occupied, &to).unwrap();
+
     let copy = join(&dir, "copy.txt");
     assert_eq!(ws.copy_file(&to, &copy).expect("copy"), 7);
     let copied = ws.read(&copy, ReadRequest { offset: 0, limit: 100 }).unwrap();

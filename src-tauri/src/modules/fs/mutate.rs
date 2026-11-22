@@ -1,10 +1,13 @@
 use super::blocking;
 use super::index::FileIndexState;
-use crate::modules::workspace::{resolve_path, WorkspaceEnv, WorkspaceRegistry};
+use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv, WorkspaceRegistry};
 use serde::Serialize;
 use std::io;
 use std::path::Path;
 use tauri::{AppHandle, Manager, State};
+use terax_workspace_core::workspace::{EntryKind, Meta, Workspace};
+
+pub(super) use terax_workspace_core::host::rename_no_replace;
 
 /// Tells the file-list cache that something under `path` changed. The watcher
 /// only covers expanded directories, so our own mutations report themselves.
@@ -35,12 +38,16 @@ pub struct FsDeleteBatchResult {
     failed: usize,
 }
 
-fn metadata_if_exists(path: &Path) -> io::Result<Option<std::fs::Metadata>> {
-    match std::fs::symlink_metadata(path) {
+fn metadata_if_exists(ws: &dyn Workspace, path: &str) -> io::Result<Option<Meta>> {
+    match ws.symlink_metadata(path) {
         Ok(metadata) => Ok(Some(metadata)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) => Err(error),
     }
+}
+
+fn exists(ws: &dyn Workspace, path: &str) -> bool {
+    ws.metadata(path).is_ok()
 }
 
 fn is_conflict(error: &io::Error) -> bool {
@@ -50,6 +57,8 @@ fn is_conflict(error: &io::Error) -> bool {
     )
 }
 
+// Authorization still canonicalizes host paths against the registry; it
+// moves behind the backend with the registry itself (phase 1, task 11).
 fn resolve_authorized_root(
     root: &str,
     workspace: &WorkspaceEnv,
@@ -85,149 +94,20 @@ fn authorize_mutation_entry(path: &Path, root: &Path) -> Result<(), String> {
     }
 }
 
-#[cfg(unix)]
-fn conflict_token(metadata: &std::fs::Metadata) -> String {
-    use std::os::unix::fs::MetadataExt;
-    format!(
-        "{}:{}:{}:{}:{}:{}",
-        metadata.dev(),
-        metadata.ino(),
-        metadata.mode(),
-        metadata.size(),
-        metadata.mtime(),
-        metadata.mtime_nsec()
-    )
-}
-
-#[cfg(target_os = "windows")]
-fn conflict_token(metadata: &std::fs::Metadata) -> String {
-    use std::os::windows::fs::MetadataExt;
-    format!(
-        "{}:{}:{}:{}",
-        metadata.file_attributes(),
-        metadata.creation_time(),
-        metadata.last_write_time(),
-        metadata.file_size()
-    )
-}
-
-#[cfg(not(any(unix, target_os = "windows")))]
-fn conflict_token(metadata: &std::fs::Metadata) -> String {
-    use std::time::UNIX_EPOCH;
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map_or(0, |duration| duration.as_nanos());
-    format!("{}:{modified}", metadata.len())
-}
-
-fn move_conflict(metadata: &std::fs::Metadata, replaceable: bool) -> FsMoveResult {
+fn move_conflict(metadata: &Meta, replaceable: bool) -> FsMoveResult {
     FsMoveResult::Conflict {
         replaceable,
-        token: conflict_token(metadata),
+        token: metadata.token.clone(),
     }
 }
 
-#[cfg(any(target_os = "macos", target_os = "linux"))]
-fn c_path(path: &Path) -> io::Result<std::ffi::CString> {
-    use std::os::unix::ffi::OsStrExt;
-    std::ffi::CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains a NUL byte"))
-}
-
-#[cfg(target_os = "macos")]
-pub(super) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
-    let from = c_path(from)?;
-    let to = c_path(to)?;
-    let result = unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) };
-    if result == 0 {
-        Ok(())
+fn remove_path(ws: &dyn Workspace, path: &str) -> io::Result<()> {
+    // The entry itself, never a symlink's target: deleting a link to a
+    // directory removes the link only.
+    if ws.symlink_metadata(path)?.kind == EntryKind::Dir {
+        ws.remove_dir_all(path)
     } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
-#[cfg(target_os = "linux")]
-pub(super) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
-    let from = c_path(from)?;
-    let to = c_path(to)?;
-    let result = unsafe {
-        libc::renameat2(
-            libc::AT_FDCWD,
-            from.as_ptr(),
-            libc::AT_FDCWD,
-            to.as_ptr(),
-            libc::RENAME_NOREPLACE,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn move_file_windows(from: &Path, to: &Path, replace: bool) -> io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows_sys::Win32::Storage::FileSystem::{
-        MoveFileExW, MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH,
-    };
-
-    let from: Vec<u16> = from.as_os_str().encode_wide().chain(Some(0)).collect();
-    let to: Vec<u16> = to.as_os_str().encode_wide().chain(Some(0)).collect();
-    let flags = MOVEFILE_WRITE_THROUGH
-        | if replace {
-            MOVEFILE_REPLACE_EXISTING
-        } else {
-            0
-        };
-    let result = unsafe { MoveFileExW(from.as_ptr(), to.as_ptr(), flags) };
-    if result != 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
-#[cfg(target_os = "windows")]
-pub(super) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
-    move_file_windows(from, to, false)
-}
-
-#[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-pub(super) fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
-    if metadata_if_exists(to)?.is_some() {
-        return Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "destination already exists",
-        ));
-    }
-    std::fs::rename(from, to)
-}
-
-#[cfg(unix)]
-fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
-    std::fs::rename(from, to)
-}
-
-#[cfg(target_os = "windows")]
-fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
-    move_file_windows(from, to, true)
-}
-
-#[cfg(not(any(unix, target_os = "windows")))]
-fn replace_file(from: &Path, to: &Path) -> io::Result<()> {
-    std::fs::rename(from, to)
-}
-
-fn remove_path(path: &Path) -> io::Result<()> {
-    let metadata = std::fs::symlink_metadata(path)?;
-    if metadata.is_dir() {
-        std::fs::remove_dir_all(path)
-    } else {
-        std::fs::remove_file(path)
+        ws.remove_file(path)
     }
 }
 
@@ -241,20 +121,19 @@ pub async fn fs_create_file(
     let index = index.inner().clone();
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
-        let p = resolve_path(&path, &workspace);
-        create_file(&p)?;
-        note_changed(&index, &p);
+        create_file(&*backend_for(&workspace), &path)?;
+        note_changed(&index, &resolve_path(&path, &workspace));
         Ok(())
     })
     .await
 }
 
-fn create_file(p: &Path) -> Result<(), String> {
-    if p.exists() {
-        return Err(format!("already exists: {}", p.display()));
+fn create_file(ws: &dyn Workspace, path: &str) -> Result<(), String> {
+    if exists(ws, path) {
+        return Err(format!("already exists: {path}"));
     }
-    std::fs::write(p, "").map_err(|e| {
-        log::debug!("fs_create_file({}) failed: {e}", p.display());
+    ws.create_file(path).map_err(|e| {
+        log::debug!("fs_create_file({path}) failed: {e}");
         e.to_string()
     })
 }
@@ -271,20 +150,19 @@ pub async fn fs_create_dir(
     let index = index.inner().clone();
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
-        let p = resolve_path(&path, &workspace);
-        create_dir(&p)?;
-        note_changed(&index, &p);
+        create_dir(&*backend_for(&workspace), &path)?;
+        note_changed(&index, &resolve_path(&path, &workspace));
         Ok(())
     })
     .await
 }
 
-fn create_dir(p: &Path) -> Result<(), String> {
-    if p.exists() {
-        return Err(format!("already exists: {}", p.display()));
+fn create_dir(ws: &dyn Workspace, path: &str) -> Result<(), String> {
+    if exists(ws, path) {
+        return Err(format!("already exists: {path}"));
     }
-    std::fs::create_dir_all(p).map_err(|e| {
-        log::debug!("fs_create_dir({}) failed: {e}", p.display());
+    ws.create_dir_all(path).map_err(|e| {
+        log::debug!("fs_create_dir({path}) failed: {e}");
         e.to_string()
     })
 }
@@ -300,29 +178,25 @@ pub async fn fs_rename(
     let index = index.inner().clone();
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
-        let from_p = resolve_path(&from, &workspace);
-        let to_p = resolve_path(&to, &workspace);
-        rename(&from_p, &to_p)?;
-        note_changed(&index, &from_p);
-        note_changed(&index, &to_p);
+        rename(&*backend_for(&workspace), &from, &to)?;
+        note_changed(&index, &resolve_path(&from, &workspace));
+        note_changed(&index, &resolve_path(&to, &workspace));
         Ok(())
     })
     .await
 }
 
-fn rename(from_p: &Path, to_p: &Path) -> Result<(), String> {
-    if !from_p.exists() {
-        return Err(format!("not found: {}", from_p.display()));
+fn rename(ws: &dyn Workspace, from: &str, to: &str) -> Result<(), String> {
+    if !exists(ws, from) {
+        return Err(format!("not found: {from}"));
     }
-    if to_p.exists() {
-        return Err(format!("already exists: {}", to_p.display()));
+    if exists(ws, to) {
+        return Err(format!("already exists: {to}"));
     }
-    std::fs::rename(from_p, to_p).map_err(|e| {
-        log::debug!(
-            "fs_rename({} -> {}) failed: {e}",
-            from_p.display(),
-            to_p.display()
-        );
+    // The backend's rename never replaces, so a target created after the
+    // check above is refused rather than overwritten.
+    ws.rename(from, to).map_err(|e| {
+        log::debug!("fs_rename({from} -> {to}) failed: {e}");
         e.to_string()
     })
 }
@@ -340,7 +214,8 @@ pub async fn fs_move(
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
         let root = resolve_authorized_root(&root, &workspace, &app.state::<WorkspaceRegistry>())?;
-        let moved = fs_move_impl(&from, &to, &root, expected_conflict.as_deref(), &workspace)?;
+        let ws = backend_for(&workspace);
+        let moved = fs_move_impl(&*ws, &from, &to, &root, expected_conflict.as_deref())?;
         if moved == FsMoveResult::Moved {
             let index = app.state::<FileIndexState>();
             note_changed(&index, &resolve_path(&from, &workspace));
@@ -352,56 +227,48 @@ pub async fn fs_move(
 }
 
 fn fs_move_impl(
+    ws: &dyn Workspace,
     from: &str,
     to: &str,
     root: &Path,
     expected_conflict: Option<&str>,
-    workspace: &WorkspaceEnv,
 ) -> Result<FsMoveResult, String> {
-    let from_p = resolve_path(from, workspace);
-    let to_p = resolve_path(to, workspace);
+    let from_p = resolve_path(from, ws.env());
+    let to_p = resolve_path(to, ws.env());
     authorize_mutation_entry(&from_p, root)?;
     authorize_mutation_entry(&to_p, root)?;
     if from_p == to_p {
         return Ok(FsMoveResult::Moved);
     }
-    let from_meta = metadata_if_exists(&from_p)
+    let from_meta = metadata_if_exists(ws, from)
         .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("not found: {}", from_p.display()))?;
-    let to_meta = metadata_if_exists(&to_p).map_err(|error| error.to_string())?;
+        .ok_or_else(|| format!("not found: {from}"))?;
+    let to_meta = metadata_if_exists(ws, to).map_err(|error| error.to_string())?;
+    let replaceable =
+        |to_meta: &Meta| from_meta.kind != EntryKind::Dir && to_meta.kind != EntryKind::Dir;
 
     if let Some(to_meta) = to_meta {
-        let replaceable = !from_meta.is_dir() && !to_meta.is_dir();
-        let token = conflict_token(&to_meta);
-        if !replaceable || expected_conflict != Some(token.as_str()) {
-            return Ok(FsMoveResult::Conflict { replaceable, token });
+        let replaceable = replaceable(&to_meta);
+        if !replaceable || expected_conflict != Some(to_meta.token.as_str()) {
+            return Ok(move_conflict(&to_meta, replaceable));
         }
-        replace_file(&from_p, &to_p).map_err(|error| {
-            log::warn!(
-                "fs_move replace({} -> {}) failed: {error}",
-                from_p.display(),
-                to_p.display()
-            );
+        ws.replace_file(from, to).map_err(|error| {
+            log::warn!("fs_move replace({from} -> {to}) failed: {error}");
             error.to_string()
         })?;
         return Ok(FsMoveResult::Moved);
     }
 
-    match rename_no_replace(&from_p, &to_p) {
+    match ws.rename(from, to) {
         Ok(()) => Ok(FsMoveResult::Moved),
         Err(error) if is_conflict(&error) => {
-            let to_meta = metadata_if_exists(&to_p)
+            let to_meta = metadata_if_exists(ws, to)
                 .map_err(|metadata_error| metadata_error.to_string())?
                 .ok_or_else(|| "destination changed while moving".to_string())?;
-            let replaceable = !from_meta.is_dir() && !to_meta.is_dir();
-            Ok(move_conflict(&to_meta, replaceable))
+            Ok(move_conflict(&to_meta, replaceable(&to_meta)))
         }
         Err(error) => {
-            log::warn!(
-                "fs_move({} -> {}) failed: {error}",
-                from_p.display(),
-                to_p.display()
-            );
+            log::warn!("fs_move({from} -> {to}) failed: {error}");
             Err(error.to_string())
         }
     }
@@ -418,17 +285,16 @@ pub async fn fs_delete(
     let index = index.inner().clone();
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
-        let p = resolve_path(&path, &workspace);
-        delete_path(&p)?;
-        note_changed(&index, &p);
+        delete_path(&*backend_for(&workspace), &path)?;
+        note_changed(&index, &resolve_path(&path, &workspace));
         Ok(())
     })
     .await
 }
 
-fn delete_path(p: &Path) -> Result<(), String> {
-    remove_path(p).map_err(|e| {
-        log::warn!("fs_delete({}) failed: {e}", p.display());
+fn delete_path(ws: &dyn Workspace, path: &str) -> Result<(), String> {
+    remove_path(ws, path).map_err(|e| {
+        log::warn!("fs_delete({path}) failed: {e}");
         e.to_string()
     })
 }
@@ -451,7 +317,7 @@ pub async fn fs_delete_batch(
                 failed: paths.len(),
             };
         };
-        let result = fs_delete_batch_impl(paths, &root, &workspace);
+        let result = fs_delete_batch_impl(&*backend_for(&workspace), paths, &root);
         let index = app.state::<FileIndexState>();
         for deleted in &result.deleted {
             note_changed(&index, &resolve_path(deleted, &workspace));
@@ -465,22 +331,17 @@ pub async fn fs_delete_batch(
     })
 }
 
-fn fs_delete_batch_impl(
-    paths: Vec<String>,
-    root: &Path,
-    workspace: &WorkspaceEnv,
-) -> FsDeleteBatchResult {
+fn fs_delete_batch_impl(ws: &dyn Workspace, paths: Vec<String>, root: &Path) -> FsDeleteBatchResult {
     let mut deleted = Vec::with_capacity(paths.len());
     let mut failed = 0;
     for path in paths {
-        let resolved = resolve_path(&path, workspace);
-        let result = authorize_mutation_entry(&resolved, root)
-            .and_then(|()| remove_path(&resolved).map_err(|error| error.to_string()));
+        let result = authorize_mutation_entry(&resolve_path(&path, ws.env()), root)
+            .and_then(|()| remove_path(ws, &path).map_err(|error| error.to_string()));
         match result {
             Ok(()) => deleted.push(path),
             Err(error) => {
                 failed += 1;
-                log::warn!("fs_delete_batch({}) failed: {error}", resolved.display());
+                log::warn!("fs_delete_batch({path}) failed: {error}");
             }
         }
     }
@@ -490,6 +351,15 @@ fn fs_delete_batch_impl(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    fn local() -> Arc<dyn Workspace> {
+        backend_for(&WorkspaceEnv::Local)
+    }
+
+    fn at(p: &Path) -> String {
+        p.to_string_lossy().into_owned()
+    }
 
     fn s(p: std::path::PathBuf) -> String {
         p.to_string_lossy().into_owned()
@@ -503,11 +373,11 @@ mod tests {
     ) -> Result<FsMoveResult, String> {
         let root = std::fs::canonicalize(root).unwrap();
         fs_move_impl(
+            &*local(),
             &s(from.to_path_buf()),
             &s(to.to_path_buf()),
             &root,
             expected_conflict,
-            &WorkspaceEnv::Local,
         )
     }
 
@@ -522,13 +392,13 @@ mod tests {
     fn create_file_makes_empty_and_refuses_to_clobber() {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("new.txt");
-        create_file(&f).expect("create");
+        create_file(&*local(), &at(&f)).expect("create");
         assert!(f.exists());
         assert_eq!(std::fs::read(&f).unwrap(), b"");
 
         // A second create must error, not truncate existing content.
         std::fs::write(&f, b"data").unwrap();
-        let err = create_file(&f).unwrap_err();
+        let err = create_file(&*local(), &at(&f)).unwrap_err();
         assert!(err.contains("already exists"), "got: {err}");
         assert_eq!(std::fs::read(&f).unwrap(), b"data");
     }
@@ -537,9 +407,9 @@ mod tests {
     fn create_dir_builds_nested_chain_and_refuses_existing() {
         let dir = tempfile::tempdir().unwrap();
         let nested = dir.path().join("a/b/c");
-        create_dir(&nested).expect("create dir");
+        create_dir(&*local(), &at(&nested)).expect("create dir");
         assert!(nested.is_dir());
-        let err = create_dir(&nested).unwrap_err();
+        let err = create_dir(&*local(), &at(&nested)).unwrap_err();
         assert!(err.contains("already exists"), "got: {err}");
     }
 
@@ -550,18 +420,18 @@ mod tests {
         let to = dir.path().join("b.txt");
         std::fs::write(&from, b"payload").unwrap();
 
-        rename(&from, &to).expect("rename");
+        rename(&*local(), &at(&from), &at(&to)).expect("rename");
         assert!(!from.exists());
         assert_eq!(std::fs::read(&to).unwrap(), b"payload");
 
         // Missing source is reported, not silently ignored.
-        let err = rename(&from, &dir.path().join("c.txt")).unwrap_err();
+        let err = rename(&*local(), &at(&from), &at(&dir.path().join("c.txt"))).unwrap_err();
         assert!(err.contains("not found"), "got: {err}");
 
         // Refusing to overwrite an existing target is the data-loss guard.
         let occupied = dir.path().join("keep.txt");
         std::fs::write(&occupied, b"keep").unwrap();
-        let err = rename(&to, &occupied).unwrap_err();
+        let err = rename(&*local(), &at(&to), &at(&occupied)).unwrap_err();
         assert!(err.contains("already exists"), "got: {err}");
         assert_eq!(std::fs::read(&occupied).unwrap(), b"keep");
         assert!(to.exists());
@@ -664,7 +534,7 @@ mod tests {
         let root = std::fs::canonicalize(allowed.path()).unwrap();
 
         let error =
-            fs_move_impl(&s(from.clone()), &s(to), &root, None, &WorkspaceEnv::Local).unwrap_err();
+            fs_move_impl(&*local(), &s(from.clone()), &s(to), &root, None).unwrap_err();
 
         assert!(error.contains("outside the authorized workspace"));
         assert_eq!(std::fs::read(from).unwrap(), b"keep");
@@ -692,16 +562,16 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("x.txt");
         std::fs::write(&f, b"x").unwrap();
-        delete_path(&f).expect("delete file");
+        delete_path(&*local(), &at(&f)).expect("delete file");
         assert!(!f.exists());
 
         let sub = dir.path().join("sub");
         std::fs::create_dir_all(sub.join("inner")).unwrap();
         std::fs::write(sub.join("inner/y.txt"), b"y").unwrap();
-        delete_path(&sub).expect("delete dir");
+        delete_path(&*local(), &at(&sub)).expect("delete dir");
         assert!(!sub.exists());
 
-        let err = delete_path(&dir.path().join("missing")).unwrap_err();
+        let err = delete_path(&*local(), &at(&dir.path().join("missing"))).unwrap_err();
         assert!(!err.is_empty());
     }
 
@@ -716,7 +586,7 @@ mod tests {
         let root = std::fs::canonicalize(dir.path()).unwrap();
         let paths = vec![s(first.clone()), s(missing), s(second.clone())];
 
-        let result = fs_delete_batch_impl(paths.clone(), &root, &WorkspaceEnv::Local);
+        let result = fs_delete_batch_impl(&*local(), paths.clone(), &root);
 
         assert_eq!(result.deleted, vec![paths[0].clone(), paths[2].clone()]);
         assert_eq!(result.failed, 1);
@@ -737,7 +607,7 @@ mod tests {
         let link = dir.path().join("link");
         std::os::unix::fs::symlink(&real, &link).unwrap();
 
-        delete_path(&link).expect("delete symlink");
+        delete_path(&*local(), &at(&link)).expect("delete symlink");
         assert!(!link.exists(), "symlink itself should be gone");
         assert!(real.is_dir(), "target dir must survive");
         assert_eq!(std::fs::read(real.join("keep.txt")).unwrap(), b"keep");

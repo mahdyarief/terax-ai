@@ -32,6 +32,9 @@ pub struct Meta {
     /// Milliseconds since the Unix epoch; 0 when the platform has no mtime.
     pub mtime_ms: u64,
     pub readonly: bool,
+    /// Opaque; changes when the entry is modified or replaced. Lets a caller
+    /// confirm that what the user approved is still what is on disk.
+    pub token: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,7 +91,12 @@ pub trait Workspace: Send + Sync {
     /// Creates an empty file; fails with `AlreadyExists` if the path exists.
     fn create_file(&self, path: &str) -> io::Result<()>;
     fn create_dir_all(&self, path: &str) -> io::Result<()>;
+    /// Moves an entry. Never replaces one: an existing destination fails with
+    /// `AlreadyExists` (or `DirectoryNotEmpty`), atomically where the
+    /// platform allows, and both entries are left as they were.
     fn rename(&self, from: &str, to: &str) -> io::Result<()>;
+    /// Moves a file over an existing file, replacing it atomically.
+    fn replace_file(&self, from: &str, to: &str) -> io::Result<()>;
     fn remove_file(&self, path: &str) -> io::Result<()>;
     fn remove_dir_all(&self, path: &str) -> io::Result<()>;
     /// Copies one file's bytes; returns the number of bytes copied.
