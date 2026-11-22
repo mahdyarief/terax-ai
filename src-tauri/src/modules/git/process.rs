@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -13,6 +13,7 @@ use crate::modules::git::types::{
 use crate::modules::workspace::validate_wsl_distro_name;
 use crate::modules::workspace::{backend_for, WorkspaceEnv};
 use terax_workspace_core::exec::{capture::Limits, ExecSpec};
+use terax_workspace_core::workspace::{EntryKind, ReadRequest, Workspace};
 
 #[derive(Clone)]
 enum Availability {
@@ -192,28 +193,40 @@ where
         .collect())
 }
 
-pub fn read_text_file(path: &Path) -> Result<TextSource> {
-    let meta = match std::fs::symlink_metadata(path) {
+/// A worktree file's text. A symlink is refused (it would read whatever the
+/// link points at); a path that is gone, or is not a file, reads as missing.
+pub fn read_text_file(ws: &dyn Workspace, path: &str) -> Result<TextSource> {
+    let meta = match ws.symlink_metadata(path) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(TextSource::Missing),
         Err(e) => return Err(GitError::Io(e)),
     };
-    if meta.file_type().is_symlink() {
-        return Err(GitError::SymlinkRejected(path.to_path_buf()));
+    if meta.kind == EntryKind::Symlink {
+        return Err(GitError::SymlinkRejected(PathBuf::from(path)));
     }
-    if !meta.is_file() {
+    if meta.kind != EntryKind::File {
         return Ok(TextSource::Missing);
     }
-    let size = meta.len();
-    if size > MAX_FILE_BYTES {
-        return Err(GitError::FileTooLarge {
-            path: path.to_path_buf(),
-            size,
-            max: MAX_FILE_BYTES,
-        });
+    let too_large = |size: u64| GitError::FileTooLarge {
+        path: PathBuf::from(path),
+        size,
+        max: MAX_FILE_BYTES,
+    };
+    if meta.len > MAX_FILE_BYTES {
+        return Err(too_large(meta.len));
     }
-    let bytes = std::fs::read(path)?;
-    Ok(decode_text(bytes))
+    let read = ws.read(
+        path,
+        ReadRequest {
+            offset: 0,
+            limit: MAX_FILE_BYTES,
+        },
+    )?;
+    // It may have grown since the stat.
+    if read.bytes.len() as u64 > MAX_FILE_BYTES {
+        return Err(too_large(read.size.max(read.bytes.len() as u64)));
+    }
+    Ok(decode_text(read.bytes))
 }
 
 pub fn run_git<I, S>(

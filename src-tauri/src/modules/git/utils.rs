@@ -1,14 +1,42 @@
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+use std::sync::Arc;
+
 use crate::modules::git::errors::{GitError, Result};
-use crate::modules::workspace::{resolve_path, WorkspaceEnv, WorkspaceRegistry};
+use crate::modules::workspace::{backend_for, resolve_path, within, WorkspaceEnv, WorkspaceRegistry};
+use terax_workspace_core::paths::join;
+use terax_workspace_core::workspace::Workspace;
 
 #[derive(Clone, Debug)]
 pub struct ResolvedGitDirectory {
     pub workspace: WorkspaceEnv,
+    /// The path git is run in (its `-C` / working directory).
     pub git_path: String,
+    /// The canonical workspace path, which file access and authorization use.
+    pub ws_path: String,
+    /// The canonical host path. Being replaced by `ws_path` module by module
+    /// (phase 1, task 10).
     pub local_path: PathBuf,
+}
+
+impl ResolvedGitDirectory {
+    /// The backend that reaches this repository's files.
+    pub fn backend(&self) -> Arc<dyn Workspace> {
+        backend_for(&self.workspace)
+    }
+}
+
+/// `path` relative to `root`, `/`-separated, when it is `root` or lies beneath
+/// it (both canonical workspace paths).
+pub fn relative_to(root: &str, path: &str) -> Option<String> {
+    let root = root.trim_end_matches('/');
+    if path.trim_end_matches('/') == root {
+        return Some(String::new());
+    }
+    path.strip_prefix(root)
+        .and_then(|rest| rest.strip_prefix('/'))
+        .map(str::to_string)
 }
 
 pub fn split_upstream(upstream: &str) -> (Option<String>, Option<String>) {
@@ -80,6 +108,9 @@ pub fn canonical_dir(
     let local_path = registry
         .canonicalize_cached(&candidate)
         .map_err(GitError::Io)?;
+    let ws_path = registry
+        .canonicalize_in(&*backend_for(workspace), path)
+        .map_err(GitError::Io)?;
     let git_path = if workspace.is_wsl() {
         normalize_git_path(path)
     } else {
@@ -88,6 +119,7 @@ pub fn canonical_dir(
     Ok(ResolvedGitDirectory {
         workspace: workspace.clone(),
         git_path,
+        ws_path,
         local_path,
     })
 }
@@ -98,27 +130,32 @@ pub fn authorized_repo_root(
     workspace: &WorkspaceEnv,
 ) -> Result<ResolvedGitDirectory> {
     let canonical = canonical_dir(registry, path, workspace)?;
-    if !registry.is_authorized(&canonical.local_path) {
-        return Err(GitError::PathOutsideWorkspace(canonical.local_path.clone()));
+    if !registry.covers(&canonical.workspace, &canonical.ws_path) {
+        return Err(GitError::PathOutsideWorkspace(PathBuf::from(&canonical.ws_path)));
     }
     Ok(canonical)
 }
 
-pub fn resolve_within_repo(repo_root: &Path, rel: &str) -> Result<PathBuf> {
-    if !is_safe_pathspec(rel) {
+/// The canonical workspace path of `rel` under `repo_root` (itself canonical),
+/// refused when it resolves outside the repository. A path that does not
+/// exist (staging a removal) is validated through its nearest existing
+/// ancestor.
+pub fn resolve_within_repo(ws: &dyn Workspace, repo_root: &str, rel: &str) -> Result<String> {
+    // A rooted `rel` names a place outside the repository; joining it as text
+    // would quietly read it as a path inside instead.
+    if !is_safe_pathspec(rel) || rel.starts_with(['/', '\\']) {
         return Err(GitError::InvalidPath(rel.into()));
     }
-    let joined = repo_root.join(rel);
-    match std::fs::canonicalize(&joined) {
+    let joined = join(repo_root, rel);
+    match ws.canonicalize(&joined) {
         Ok(canonical) => {
-            if !canonical.starts_with(repo_root) {
-                return Err(GitError::PathOutsideWorkspace(canonical));
+            if !within(ws.env(), &canonical, repo_root) {
+                return Err(GitError::PathOutsideWorkspace(PathBuf::from(canonical)));
             }
             Ok(canonical)
         }
-        // Deleted path (staging a removal): validate via nearest existing ancestor.
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            resolve_deleted_within_repo(repo_root, &joined, rel)
+            resolve_deleted_within_repo(ws, repo_root, &joined, rel)
         }
         Err(e) => Err(GitError::Io(e)),
     }
@@ -135,9 +172,14 @@ pub fn is_safe_pathspec(rel: &str) -> bool {
     !rel.split(['/', '\\']).any(|c| c == "." || c == "..")
 }
 
-fn resolve_deleted_within_repo(repo_root: &Path, joined: &Path, rel: &str) -> Result<PathBuf> {
+fn resolve_deleted_within_repo(
+    ws: &dyn Workspace,
+    repo_root: &str,
+    joined: &str,
+    rel: &str,
+) -> Result<String> {
     let mut tail: Vec<&OsStr> = Vec::new();
-    let mut cursor = joined;
+    let mut cursor = Path::new(joined);
     loop {
         let name = cursor
             .file_name()
@@ -146,14 +188,14 @@ fn resolve_deleted_within_repo(repo_root: &Path, joined: &Path, rel: &str) -> Re
             .parent()
             .ok_or_else(|| GitError::InvalidPath(rel.into()))?;
         tail.push(name);
-        match std::fs::canonicalize(parent) {
+        match ws.canonicalize(&parent.to_string_lossy()) {
             Ok(canonical_parent) => {
-                if !canonical_parent.starts_with(repo_root) {
-                    return Err(GitError::PathOutsideWorkspace(canonical_parent));
+                if !within(ws.env(), &canonical_parent, repo_root) {
+                    return Err(GitError::PathOutsideWorkspace(PathBuf::from(canonical_parent)));
                 }
                 let mut resolved = canonical_parent;
                 for component in tail.iter().rev() {
-                    resolved.push(component);
+                    resolved = join(&resolved, &component.to_string_lossy());
                 }
                 return Ok(resolved);
             }
@@ -168,6 +210,26 @@ fn resolve_deleted_within_repo(repo_root: &Path, joined: &Path, rel: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn local() -> Arc<dyn Workspace> {
+        backend_for(&WorkspaceEnv::Local)
+    }
+
+    fn tmp_root() -> String {
+        local()
+            .canonicalize(&std::env::temp_dir().to_string_lossy())
+            .unwrap()
+    }
+
+    #[test]
+    fn relative_paths_are_taken_by_component() {
+        assert_eq!(relative_to("/r", "/r/a/b").as_deref(), Some("a/b"));
+        assert_eq!(relative_to("/r", "/r").as_deref(), Some(""));
+        assert_eq!(relative_to("/r/", "/r/a").as_deref(), Some("a"));
+        assert_eq!(relative_to("C:/", "C:/a").as_deref(), Some("a"));
+        assert_eq!(relative_to("/r", "/rx/a"), None);
+        assert_eq!(relative_to("/r/a", "/r"), None);
+    }
 
     #[test]
     fn verbatim_drive_paths_lose_only_their_prefix() {
@@ -298,15 +360,13 @@ mod tests {
 
     #[test]
     fn resolve_within_repo_rejects_colon_path() {
-        let tmp = std::env::temp_dir();
-        let err = resolve_within_repo(&tmp, "evil:path");
+        let err = resolve_within_repo(&*local(), &tmp_root(), "evil:path");
         assert!(matches!(err, Err(GitError::InvalidPath(_))));
     }
 
     #[test]
     fn resolve_within_repo_rejects_nul_path() {
-        let tmp = std::env::temp_dir();
-        let err = resolve_within_repo(&tmp, "evil\0path");
+        let err = resolve_within_repo(&*local(), &tmp_root(), "evil\0path");
         assert!(matches!(err, Err(GitError::InvalidPath(_))));
     }
 
@@ -324,18 +384,54 @@ mod tests {
         let base = std::env::temp_dir().join("terax_git_deleted_dir_test");
         let _ = std::fs::remove_dir_all(&base);
         std::fs::create_dir_all(base.join("envs/__pycache__")).unwrap();
-        let repo_root = std::fs::canonicalize(&base).unwrap();
-        std::fs::remove_dir_all(repo_root.join("envs")).unwrap();
-        let resolved =
-            resolve_within_repo(&repo_root, "envs/__pycache__/g1.pyc").expect("deleted path");
-        assert_eq!(resolved, repo_root.join("envs/__pycache__/g1.pyc"));
+        let repo_root = local().canonicalize(&base.to_string_lossy()).unwrap();
+        std::fs::remove_dir_all(base.join("envs")).unwrap();
+        let resolved = resolve_within_repo(&*local(), &repo_root, "envs/__pycache__/g1.pyc")
+            .expect("deleted path");
+        assert_eq!(resolved, format!("{repo_root}/envs/__pycache__/g1.pyc"));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// A link inside the repository that points out of it resolves outside, and
+    /// is refused even though the text of the path stays inside.
+    #[test]
+    fn resolve_within_repo_rejects_a_link_out_of_the_repository() {
+        let repo = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), b"x").unwrap();
+        let link = repo.path().join("escape");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(outside.path(), &link).unwrap();
+        #[cfg(windows)]
+        {
+            // A junction needs no symlink privilege.
+            let status = std::process::Command::new("cmd")
+                .args(["/C", "mklink", "/J"])
+                .arg(&link)
+                .arg(outside.path())
+                .stdout(std::process::Stdio::null())
+                .status()
+                .unwrap();
+            assert!(status.success(), "mklink /J failed");
+        }
+        let root = local().canonicalize(&repo.path().to_string_lossy()).unwrap();
+        for rel in ["escape/secret.txt", "escape/missing/new.txt"] {
+            let err = resolve_within_repo(&*local(), &root, rel);
+            assert!(matches!(err, Err(GitError::PathOutsideWorkspace(_))), "{rel}: {err:?}");
+        }
+    }
+
+    #[test]
+    fn resolve_within_repo_rejects_rooted_paths() {
+        for rooted in ["/etc/passwd", "\\windows\\system32"] {
+            let err = resolve_within_repo(&*local(), &tmp_root(), rooted);
+            assert!(matches!(err, Err(GitError::InvalidPath(_))), "{rooted}");
+        }
     }
 
     #[test]
     fn resolve_within_repo_rejects_deleted_escape() {
-        let tmp = std::env::temp_dir();
-        let err = resolve_within_repo(&tmp, "../outside.txt");
+        let err = resolve_within_repo(&*local(), &tmp_root(), "../outside.txt");
         assert!(matches!(err, Err(GitError::InvalidPath(_))));
     }
 }

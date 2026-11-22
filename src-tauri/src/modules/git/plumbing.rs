@@ -170,8 +170,8 @@ pub fn open_worktree(
         return Err(GitError::command("not a git repository", path));
     }
     let resolved = canonical_dir(registry, &toplevel, &start.workspace)?;
-    if !registry.is_authorized(&resolved.local_path) {
-        return Err(GitError::PathOutsideWorkspace(resolved.local_path));
+    if !registry.covers(&resolved.workspace, &resolved.ws_path) {
+        return Err(GitError::PathOutsideWorkspace(PathBuf::from(resolved.ws_path)));
     }
     Ok(resolved)
 }
@@ -224,7 +224,7 @@ pub(crate) fn forward_slashes(path: &str) -> String {
 /// last component is kept as written, so a tracked symlink names itself and is
 /// never swapped for the file it points to.
 pub fn relative_spec(repo: &ResolvedGitDirectory, rel: &str) -> Result<String> {
-    use crate::modules::git::utils::{is_safe_pathspec, resolve_within_repo};
+    use crate::modules::git::utils::{is_safe_pathspec, relative_to, resolve_within_repo};
     let normalized = forward_slashes(rel);
     if !is_safe_pathspec(&normalized) {
         return Err(GitError::InvalidPath(rel.to_string()));
@@ -235,11 +235,9 @@ pub fn relative_spec(repo: &ResolvedGitDirectory, rel: &str) -> Result<String> {
     if name.is_empty() {
         return Err(GitError::InvalidPath(rel.to_string()));
     }
-    let resolved = resolve_within_repo(&repo.local_path, dir)?;
-    let dir_spec = resolved
-        .strip_prefix(&repo.local_path)
-        .map(|p| forward_slashes(&p.to_string_lossy()))
-        .map_err(|_| GitError::InvalidPath(rel.to_string()))?;
+    let resolved = resolve_within_repo(&*repo.backend(), &repo.ws_path, dir)?;
+    let dir_spec = relative_to(&repo.ws_path, &resolved)
+        .ok_or_else(|| GitError::InvalidPath(rel.to_string()))?;
     Ok(if dir_spec.is_empty() {
         name.to_string()
     } else {

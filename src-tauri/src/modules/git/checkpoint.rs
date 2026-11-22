@@ -565,8 +565,12 @@ fn prepare_archive_index(repo: &ResolvedGitDirectory, temp: &TempIndex) -> Resul
         if record.get(2..8) == Some(b"160000") {
             let relative = std::str::from_utf8(path)
                 .map_err(|_| GitError::command("task archive", "non-UTF-8 submodule path"))?;
-            let directory = super::utils::resolve_within_repo(&repo.local_path, relative)?;
-            if directory.is_dir() && std::fs::read_dir(&directory)?.next().is_some() {
+            let ws = repo.backend();
+            let directory = super::utils::resolve_within_repo(&*ws, &repo.ws_path, relative)?;
+            let is_dir = ws
+                .metadata(&directory)
+                .is_ok_and(|meta| meta.kind == terax_workspace_core::workspace::EntryKind::Dir);
+            if is_dir && !ws.read_dir(&directory)?.is_empty() {
                 return Err(GitError::command("task archive", format!("submodule {relative} contains data that the task snapshot cannot preserve; deinitialize it after saving its work")));
             }
         }

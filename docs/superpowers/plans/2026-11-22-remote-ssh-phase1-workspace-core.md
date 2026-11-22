@@ -155,7 +155,7 @@ Git holds `repo.local_path`, the registry's canonical *host* path (`\\wsl.localh
 - [ ] **11b, callers to workspace paths**, module by module; delete each host adapter once nothing uses it.
   - [x] API: `registry.canonicalize_in(ws, path)` (through the backend, same 1 s cache), `registry.covers(env, canonical)` and `within(env, path, root)`. `Location::in_workspace` reads `/mnt/<drive>/...` inside a distro as that local drive (drvfs), because that is where `wsl_path_to_host` sends it and where the host-path adapters file it: grants made either way name the same location (tested on Windows against `canonical_wsl_path`).
   - [x] fs mutations (`resolve_authorized_root`, `authorize_mutation_entry`) and `copy_destination` authorize canonical workspace paths through the backend. Errors now print the workspace path.
-  - [ ] Git, with Task 10.
+  - [ ] Git, with Task 10 (foundation done).
   - Staying on the host adapters until their remote counterpart exists: `workspace_authorize` and `workspace_current_dir` (they return the host spelling the frontend keys on), spawn cwd for shell/pty/lsp/control (a process spawns on the host; the remote shell runs in the agent), and the fs watcher's `prepare_dirs` (the watcher engine runs on host paths; the remote one runs in the agent).
 - [ ] **11c, confined reads.** One backend operation that opens a file, checks the opened handle's real path lies inside an authorized root, applies the secret-path policy to that real path, and reads with a limit. Port `fs_read_project_memory`, asset serving and `ai_read_file`/`ai_read_dir` to it, keeping each caller's error messages. The agent implements the same check on the server.
 
@@ -163,7 +163,10 @@ Git holds `repo.local_path`, the registry's canonical *host* path (`\\wsl.localh
 
 `ResolvedGitDirectory` carries the env and the workspace path; every `std::fs` call on a repo path goes through `backend_for(env)`, and authorization through the `*_in` registry methods. One commit per module, smallest blast radius first (production sites; tests stay on the host file system):
 
-- [ ] `plumbing.rs`, `process.rs` (`read_text_file`), `task_state.rs`, `review.rs`, `utils.rs` (`canonical_dir`, `resolve_within_repo`), `project_config.rs`
+- [x] Foundation: `ResolvedGitDirectory` gains `ws_path` (canonical workspace path, through the backend) and `backend()`; `local_path` stays until the last module moves. Repository authorization (`authorized_repo_root`, `plumbing::repo_root`) uses `registry.covers`. `resolve_within_repo` takes the backend and workspace paths, with `relative_to` in place of host `strip_prefix`; its callers in operations, plumbing (`relative_spec`) and checkpoint (submodule check) move with it, and `read_text_file` reads through the backend.
+  - A rooted `rel` (`/etc/passwd`) is now refused up front: `PathBuf::join` used to replace the root with it (landing outside, so refused), but joining text would read it as a path inside the repository. Caught by `file_diff_rejects_paths_outside_the_repository`.
+  - Mutation testing showed nothing covered the containment check itself (a link inside the repository pointing out of it); `resolve_within_repo_rejects_a_link_out_of_the_repository` now does, for an existing and a not-yet-existing target (symlink on Unix, junction on Windows).
+- [ ] `task_state.rs`, `review.rs`, `project_config.rs`, the rest of `utils.rs` and `plumbing.rs` (`git_dir`, `common_dir`)
 - [ ] `task_worktree.rs`
 - [ ] `checkpoint.rs`
 - [ ] `worktree.rs`
