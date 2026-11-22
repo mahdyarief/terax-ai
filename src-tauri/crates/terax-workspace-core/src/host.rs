@@ -228,4 +228,25 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
         assert_eq!(ws.metadata(&fifo).unwrap().kind, EntryKind::Other);
     }
+
+    #[test]
+    fn does_not_follow_legacy_staging_symlink() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.txt");
+        std::fs::write(&outside, b"untouched").unwrap();
+
+        let target = dir.path().join("note.txt");
+        // Pre-stage a symlink at the legacy deterministic staging path.
+        let legacy = dir.path().join(".note.txt.terax.tmp");
+        symlink(&outside, &legacy).unwrap();
+
+        HostWorkspace::new(WorkspaceEnv::Local)
+            .write_atomic(target.to_str().unwrap(), b"payload")
+            .unwrap();
+
+        assert_eq!(std::fs::read(&target).unwrap(), b"payload");
+        // The pre-staged symlink target must not have been written through.
+        assert_eq!(std::fs::read(&outside).unwrap(), b"untouched");
+    }
 }

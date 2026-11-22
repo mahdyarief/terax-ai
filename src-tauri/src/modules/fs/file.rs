@@ -1,19 +1,14 @@
-use std::path::Path;
-use std::time::UNIX_EPOCH;
-use std::{
-    fs,
-    io::{Read, Write},
-};
+use std::io::ErrorKind;
 
 use serde::Serialize;
 use base64::Engine;
 use tauri::Emitter;
-use tempfile::NamedTempFile;
 
 use super::blocking;
 use super::index::FileIndexState;
 use super::mutate::note_changed;
-use crate::modules::workspace::{resolve_path, WorkspaceEnv};
+use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv};
+use terax_workspace_core::workspace::{EntryKind, ReadRequest, Workspace};
 #[cfg(windows)]
 use terax_workspace_core::paths::canonical_wsl_path;
 
@@ -60,14 +55,6 @@ pub struct FileStat {
     pub kind: StatKind,
 }
 
-fn mtime_millis(meta: &fs::Metadata) -> u64 {
-    meta.modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 #[derive(Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum ReadResultWithBytes {
@@ -87,23 +74,16 @@ pub async fn fs_read_binary(
     workspace: Option<WorkspaceEnv>,
 ) -> Result<ReadResultWithBytes, String> {
     blocking(move || {
-        let workspace = WorkspaceEnv::from_option(workspace);
-        let p = resolve_path(&path, &workspace);
-        let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
-        if !meta.is_file() {
+        let ws = backend_for(&WorkspaceEnv::from_option(workspace));
+        let meta = ws.metadata(&path).map_err(|e| e.to_string())?;
+        if meta.kind != EntryKind::File {
             return Err("only regular files can be read".into());
         }
-        let size = meta.len();
+        let size = meta.len;
         if size > MAX_BINARY_BYTES {
             return Ok(ReadResultWithBytes::TooLarge { size, limit: MAX_BINARY_BYTES });
         }
-        // Bounded read: the file may grow between the stat and the read.
-        let mut bytes = Vec::with_capacity(size as usize);
-        fs::File::open(&p)
-            .map_err(|e| e.to_string())?
-            .take(MAX_BINARY_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
+        let bytes = read_regular(&*ws, &path, 0, MAX_BINARY_BYTES, "only regular files can be read")?;
         if bytes.len() > MAX_BINARY_BYTES as usize {
             return Ok(ReadResultWithBytes::TooLarge { size, limit: MAX_BINARY_BYTES });
         }
@@ -124,23 +104,16 @@ pub async fn fs_read_bytes(
     workspace: Option<WorkspaceEnv>,
 ) -> Result<tauri::ipc::Response, String> {
     blocking(move || {
-        let workspace = WorkspaceEnv::from_option(workspace);
-        let p = resolve_path(&path, &workspace);
-        let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
-        if !meta.is_file() {
+        let ws = backend_for(&WorkspaceEnv::from_option(workspace));
+        let meta = ws.metadata(&path).map_err(|e| e.to_string())?;
+        if meta.kind != EntryKind::File {
             return Err("only regular files can be read".into());
         }
         let too_large = || format!("file is larger than {} MB", MAX_BINARY_BYTES / 1024 / 1024);
-        if meta.len() > MAX_BINARY_BYTES {
+        if meta.len > MAX_BINARY_BYTES {
             return Err(too_large());
         }
-        // Bounded read: the file may grow between the stat and the read.
-        let mut bytes = Vec::with_capacity(meta.len() as usize);
-        fs::File::open(&p)
-            .map_err(|e| e.to_string())?
-            .take(MAX_BINARY_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
+        let bytes = read_regular(&*ws, &path, 0, MAX_BINARY_BYTES, "only regular files can be read")?;
         if bytes.len() > MAX_BINARY_BYTES as usize {
             return Err(too_large());
         }
@@ -177,22 +150,15 @@ pub async fn fs_read_head(
     offset: Option<u64>,
 ) -> Result<HeadResult, String> {
     blocking(move || {
-        let workspace = WorkspaceEnv::from_option(workspace);
-        let p = resolve_path(&path, &workspace);
-        let meta = fs::metadata(&p).map_err(|e| e.to_string())?;
-        if !meta.is_file() {
+        let ws = backend_for(&WorkspaceEnv::from_option(workspace));
+        let meta = ws.metadata(&path).map_err(|e| e.to_string())?;
+        if meta.kind != EntryKind::File {
             return Err("only regular files can be read".into());
         }
         let limit = max_bytes.unwrap_or(MAX_HEAD_BYTES).clamp(1, MAX_HEAD_BYTES);
-        let start = offset.unwrap_or(0).min(meta.len());
-        let mut file = fs::File::open(&p).map_err(|e| e.to_string())?;
-        if start > 0 {
-            use std::io::Seek;
-            file.seek(std::io::SeekFrom::Start(start))
-                .map_err(|e| e.to_string())?;
-        }
-        let bytes = read_bounded(file, limit).map_err(|e| e.to_string())?;
-        head_of(bytes, limit, meta.len(), partial_line.unwrap_or(false), start)
+        let start = offset.unwrap_or(0).min(meta.len);
+        let bytes = read_regular(&*ws, &path, start, limit, "only regular files can be read")?;
+        head_of(bytes, limit, meta.len, partial_line.unwrap_or(false), start)
     })
     .await
 }
@@ -248,48 +214,46 @@ pub async fn fs_read_file(
     force: Option<bool>,
 ) -> Result<ReadResult, String> {
     blocking(move || {
-        let workspace = WorkspaceEnv::from_option(workspace);
-        read_file_sync(&resolve_path(&path, &workspace), force.unwrap_or(false))
+        let ws = backend_for(&WorkspaceEnv::from_option(workspace));
+        read_file_sync(&*ws, &path, force.unwrap_or(false))
     })
     .await
 }
 
-fn read_file_sync(p: &Path, force: bool) -> Result<ReadResult, String> {
-    let before = std::fs::metadata(p).map_err(|e| {
-        log::debug!("fs_read_file stat({}) failed: {e}", p.display());
+const NOT_EDITABLE: &str = "only regular files can be opened in the editor";
+
+fn read_file_sync(ws: &dyn Workspace, path: &str, force: bool) -> Result<ReadResult, String> {
+    let before = ws.metadata(path).map_err(|e| {
+        log::debug!("fs_read_file stat({path}) failed: {e}");
         e.to_string()
     })?;
-    if !before.is_file() {
-        return Err("only regular files can be opened in the editor".into());
+    if before.kind != EntryKind::File {
+        return Err(NOT_EDITABLE.into());
     }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    // A FIFO swapped in after the metadata check must not block open().
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK);
-    }
-    let file = options.open(p).map_err(|e| e.to_string())?;
-    let meta = file.metadata().map_err(|e| e.to_string())?;
-    if !meta.is_file() {
-        return Err("only regular files can be opened in the editor".into());
-    }
-
-    let size = meta.len();
     let limit = if force {
         FORCE_MAX_READ_BYTES
     } else {
         MAX_READ_BYTES
     };
-    if size > limit {
-        return Ok(ReadResult::TooLarge { size, limit });
+    if before.len > limit {
+        return Ok(ReadResult::TooLarge { size: before.len, limit });
     }
 
-    let bytes = read_bounded(file, limit).map_err(|e| {
-        log::debug!("fs_read_file read({}) failed: {e}", p.display());
-        e.to_string()
-    })?;
+    // The backend refuses anything that is not a regular file once opened
+    // (a FIFO or device swapped in after the check), without blocking.
+    let read = ws
+        .read(path, ReadRequest { offset: 0, limit })
+        .map_err(|e| match e.kind() {
+            ErrorKind::InvalidInput => NOT_EDITABLE.to_string(),
+            _ => {
+                log::debug!("fs_read_file read({path}) failed: {e}");
+                e.to_string()
+            }
+        })?;
+    if read.size > limit {
+        return Ok(ReadResult::TooLarge { size: read.size, limit });
+    }
+    let bytes = read.bytes;
     let size = bytes.len() as u64;
     if size > limit {
         return Ok(ReadResult::TooLarge { size, limit });
@@ -306,16 +270,27 @@ fn read_file_sync(p: &Path, force: bool) -> Result<ReadResult, String> {
         Ok(content) => Ok(ReadResult::Text {
             content,
             size,
-            mtime: mtime_millis(&meta),
+            mtime: read.mtime_ms,
         }),
         Err(_) => Ok(ReadResult::Binary { size }),
     }
 }
 
-fn read_bounded(reader: impl Read, limit: u64) -> std::io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    reader.take(limit + 1).read_to_end(&mut bytes)?;
-    Ok(bytes)
+/// Reads up to `limit + 1` bytes of a regular file, so callers can tell a
+/// file that grew past the limit after it was checked.
+fn read_regular(
+    ws: &dyn Workspace,
+    path: &str,
+    offset: u64,
+    limit: u64,
+    not_regular: &str,
+) -> Result<Vec<u8>, String> {
+    ws.read(path, ReadRequest { offset, limit })
+        .map(|read| read.bytes)
+        .map_err(|e| match e.kind() {
+            ErrorKind::InvalidInput => not_regular.to_string(),
+            _ => e.to_string(),
+        })
 }
 
 #[derive(Serialize, Clone)]
@@ -323,19 +298,6 @@ struct FileWrittenEvent {
     path: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     source: Option<String>,
-}
-
-/// Atomic write via O_EXCL tempfile in the target's parent, then rename.
-/// The random suffix is what blocks pre-staged symlink attacks.
-fn write_atomic(target: &Path, content: &[u8]) -> std::io::Result<()> {
-    let parent = target.parent().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no parent")
-    })?;
-    let mut tmp = NamedTempFile::new_in(parent)?;
-    tmp.as_file_mut().write_all(content)?;
-    tmp.as_file_mut().sync_all()?;
-    tmp.persist(target).map_err(|e| e.error)?;
-    Ok(())
 }
 
 /// Returns the new mtime so the editor can track disk state for conflict
@@ -352,21 +314,17 @@ pub async fn fs_write_file(
     let index = index.inner().clone();
     let (path, mtime) = blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
-        let target = resolve_path(&path, &workspace);
-        let original = fs::metadata(&target).ok();
-        write_atomic(&target, content.as_bytes()).map_err(|e| {
-            log::warn!("fs_write_file({}) failed: {e}", target.display());
-            e.to_string()
-        })?;
-
-        if let Some(perms) = original.as_ref().map(|m| m.permissions()) {
-            let _ = fs::set_permissions(&target, perms);
+        let written = backend_for(&workspace)
+            .write_atomic(&path, content.as_bytes())
+            .map_err(|e| {
+                log::warn!("fs_write_file({path}) failed: {e}");
+                e.to_string()
+            })?;
+        if written.created {
+            // The file index is host-side state keyed by host paths.
+            note_changed(&index, &resolve_path(&path, &workspace));
         }
-        if original.is_none() {
-            note_changed(&index, &target);
-        }
-        let mtime = fs::metadata(&target).map(|m| mtime_millis(&m)).unwrap_or(0);
-        Ok((path, mtime))
+        Ok((path, written.mtime_ms))
     })
     .await?;
     let _ = app.emit("fs:file-written", FileWrittenEvent { path, source });
@@ -392,14 +350,9 @@ pub async fn fs_canonicalize(
                 WorkspaceEnv::Local => Ok(canon),
             };
         }
-        let p = resolve_path(&path, &workspace);
-        let canon = std::fs::canonicalize(&p).map_err(|e| e.to_string())?;
-        let canon = super::to_canon(&canon);
-        #[cfg(windows)]
-        if let WorkspaceEnv::Wsl { distro } = &workspace {
-            return canonical_wsl_path(&canon, distro);
-        }
-        Ok(canon)
+        backend_for(&workspace)
+            .canonicalize(&path)
+            .map_err(|e| e.to_string())
     })
     .await
 }
@@ -421,7 +374,7 @@ pub async fn fs_stat(
             }
             return Ok(FileStat {
                 size: meta.len(),
-                mtime: mtime_millis(&meta),
+                mtime: terax_workspace_core::host::mtime_millis(&meta),
                 kind: if meta.is_dir() {
                     StatKind::Dir
                 } else {
@@ -447,26 +400,25 @@ fn validate_link_path(path: &str, local_only: Option<bool>) -> Result<(), String
 }
 
 fn stat_path(path: String, workspace: Option<WorkspaceEnv>) -> Result<FileStat, String> {
-    let workspace = WorkspaceEnv::from_option(workspace);
-    let p = resolve_path(&path, &workspace);
-    let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
-    if !meta.is_file() && !meta.is_dir() {
+    let ws = backend_for(&WorkspaceEnv::from_option(workspace));
+    let meta = ws.metadata(&path).map_err(|e| e.to_string())?;
+    if meta.kind != EntryKind::File && meta.kind != EntryKind::Dir {
         return Err("only regular files and directories can be opened".into());
     }
-    // fs::metadata follows symlinks, so the link check needs symlink_metadata.
-    let kind = if std::fs::symlink_metadata(&p)
-        .map(|m| m.file_type().is_symlink())
-        .unwrap_or(false)
+    // metadata follows symlinks, so the link check needs symlink_metadata.
+    let kind = if ws
+        .symlink_metadata(&path)
+        .is_ok_and(|m| m.kind == EntryKind::Symlink)
     {
         StatKind::Symlink
-    } else if meta.is_dir() {
+    } else if meta.kind == EntryKind::Dir {
         StatKind::Dir
     } else {
         StatKind::File
     };
     Ok(FileStat {
-        size: meta.len(),
-        mtime: mtime_millis(&meta),
+        size: meta.len,
+        mtime: meta.mtime_ms,
         kind,
     })
 }
@@ -474,6 +426,12 @@ fn stat_path(path: String, workspace: Option<WorkspaceEnv>) -> Result<FileStat, 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
+
+    fn read_path(path: &Path, force: bool) -> Result<ReadResult, String> {
+        let ws = backend_for(&WorkspaceEnv::Local);
+        read_file_sync(&*ws, &path.to_string_lossy(), force)
+    }
 
     #[test]
     fn a_head_is_cut_at_the_last_whole_line() {
@@ -527,14 +485,6 @@ mod tests {
     }
 
     #[test]
-    fn file_reads_stop_at_one_byte_over_the_limit() {
-        // Even a source whose metadata understated its size cannot grow the
-        // read past the sentinel byte used to report TooLarge.
-        let bytes = read_bounded(std::io::repeat(b'x').take(1000), 32).unwrap();
-        assert_eq!(bytes.len(), 33);
-    }
-
-    #[test]
     fn a_truncated_head_reports_where_the_next_page_starts() {
         // The 11-byte source is cut to 10, then trimmed back to the last whole
         // line ("a,b\nc,d\n" = 8 bytes) before the page is returned.
@@ -565,11 +515,11 @@ mod tests {
             &fifo,
             &linked_device,
         ] {
-            assert!(read_file_sync(path, false)
+            assert!(read_path(path, false)
                 .err()
                 .unwrap()
                 .contains("regular"));
-            assert!(read_file_sync(path, true)
+            assert!(read_path(path, true)
                 .err()
                 .unwrap()
                 .contains("regular"));
@@ -580,7 +530,6 @@ mod tests {
                 .contains("regular"));
         }
     }
-
 
     #[cfg(windows)]
     #[tokio::test]
@@ -725,7 +674,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let f = dir.path().join("a.txt");
         std::fs::write(&f, b"hello world").unwrap();
-        match read_file_sync(&f, false).unwrap() {
+        match read_path(&f, false).unwrap() {
             ReadResult::Text {
                 content,
                 size,
@@ -745,7 +694,7 @@ mod tests {
         let f = dir.path().join("a.bin");
         std::fs::write(&f, b"PNG\0\x89image").unwrap();
         assert!(matches!(
-            read_file_sync(&f, false).unwrap(),
+            read_path(&f, false).unwrap(),
             ReadResult::Binary { .. }
         ));
     }
@@ -757,7 +706,7 @@ mod tests {
         // Invalid UTF-8 with no null byte: must still classify as binary.
         std::fs::write(&f, [0xff, 0xfe, 0xfd, 0xfc]).unwrap();
         assert!(matches!(
-            read_file_sync(&f, false).unwrap(),
+            read_path(&f, false).unwrap(),
             ReadResult::Binary { .. }
         ));
     }
@@ -768,41 +717,13 @@ mod tests {
         let f = dir.path().join("big.txt");
         std::fs::write(&f, vec![b'a'; (MAX_READ_BYTES + 1) as usize]).unwrap();
         assert!(matches!(
-            read_file_sync(&f, false).unwrap(),
+            read_path(&f, false).unwrap(),
             ReadResult::TooLarge { .. }
         ));
         assert!(matches!(
-            read_file_sync(&f, true).unwrap(),
+            read_path(&f, true).unwrap(),
             ReadResult::Text { .. }
         ));
     }
 
-    #[test]
-    fn overwrites_existing_target() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("note.txt");
-        std::fs::write(&target, b"old").unwrap();
-        write_atomic(&target, b"new").unwrap();
-        assert_eq!(std::fs::read(&target).unwrap(), b"new");
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn does_not_follow_legacy_staging_symlink() {
-        use std::os::unix::fs::symlink;
-        let dir = tempfile::tempdir().unwrap();
-        let outside = dir.path().join("outside.txt");
-        std::fs::write(&outside, b"untouched").unwrap();
-
-        let target = dir.path().join("note.txt");
-        // Pre-stage a symlink at the legacy deterministic staging path.
-        let legacy = dir.path().join(".note.txt.terax.tmp");
-        symlink(&outside, &legacy).unwrap();
-
-        write_atomic(&target, b"payload").unwrap();
-
-        assert_eq!(std::fs::read(&target).unwrap(), b"payload");
-        // The pre-staged symlink target must not have been written through.
-        assert_eq!(std::fs::read(&outside).unwrap(), b"untouched");
-    }
 }
