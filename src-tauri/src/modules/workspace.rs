@@ -39,6 +39,13 @@ impl Location {
         location_of_canon(&to_canon(path), cfg!(windows))
     }
 
+    /// The location a canonical workspace path names. Inside a WSL distro,
+    /// `/mnt/<drive>/...` is the Windows drive itself (drvfs), which the host
+    /// reaches as `X:\\...`, so it is local: the same place `of_host` finds.
+    pub fn in_workspace(env: &WorkspaceEnv, canonical: &str) -> Self {
+        location_in_workspace(env, canonical, cfg!(windows))
+    }
+
     /// True when `other` is this location or lies beneath it.
     pub fn contains(&self, other: &Location) -> bool {
         same_env(&self.env, &other.env) && path_within(&other.path, &self.path)
@@ -74,6 +81,39 @@ fn location_of_canon(canon: &str, windows: bool) -> Location {
     }
 }
 
+/// Pure, with `windows` a parameter, like `location_of_canon`.
+fn location_in_workspace(env: &WorkspaceEnv, canonical: &str, windows: bool) -> Location {
+    if windows && matches!(env, WorkspaceEnv::Wsl { .. }) {
+        if let Some(path) = drvfs_drive_path(canonical) {
+            return Location {
+                env: WorkspaceEnv::Local,
+                path,
+            };
+        }
+    }
+    Location {
+        env: env.clone(),
+        path: canonical.to_string(),
+    }
+}
+
+/// `/mnt/c` -> `C:/`, `/mnt/c/x` -> `C:/x`; `None` for anything else.
+fn drvfs_drive_path(path: &str) -> Option<String> {
+    let rest = path.strip_prefix("/mnt/")?;
+    let (drive, tail) = rest.split_once('/').unwrap_or((rest, ""));
+    let mut letters = drive.chars();
+    let letter = letters.next().filter(char::is_ascii_alphabetic)?;
+    if letters.next().is_some() {
+        return None;
+    }
+    Some(format!("{}:/{tail}", letter.to_ascii_uppercase()))
+}
+
+/// True when the canonical workspace path `path` is `root` or lies beneath it.
+pub fn within(env: &WorkspaceEnv, path: &str, root: &str) -> bool {
+    Location::in_workspace(env, root).contains(&Location::in_workspace(env, path))
+}
+
 /// WSL distro names are case-insensitive to `wsl.exe` and the UNC provider.
 fn same_env(a: &WorkspaceEnv, b: &WorkspaceEnv) -> bool {
     match (a, b) {
@@ -101,6 +141,8 @@ pub struct WorkspaceRegistry {
     /// authorized.
     derived: Mutex<HashMap<Location, Location>>,
     canonical_cache: Mutex<HashMap<PathBuf, CanonicalEntry>>,
+    /// The same short-lived cache for canonical workspace paths.
+    workspace_cache: Mutex<HashMap<(WorkspaceEnv, String), (String, Instant)>>,
 }
 
 /// `path` canonicalized when it exists, otherwise its deepest existing ancestor
@@ -231,6 +273,42 @@ impl WorkspaceRegistry {
                 .any(|(env, path)| same_env(env, &key.env) && *path == spelled)
         });
         derived.len() != before
+    }
+
+    /// Whether the canonical workspace path `canonical` in `env` lies inside
+    /// an authorized root.
+    pub fn covers(&self, env: &WorkspaceEnv, canonical: &str) -> bool {
+        let set = self.roots.lock().expect("workspace registry poisoned");
+        let derived = self.derived.lock().expect("workspace registry poisoned");
+        covered(&Location::in_workspace(env, canonical), &set, &derived, 0)
+    }
+
+    /// `ws.canonicalize(path)`, coalesced over the same short window as
+    /// `canonicalize_cached`.
+    pub fn canonicalize_in(
+        &self,
+        ws: &dyn terax_workspace_core::workspace::Workspace,
+        path: &str,
+    ) -> std::io::Result<String> {
+        let key = (ws.env().clone(), path.to_string());
+        {
+            let cache = self.workspace_cache.lock().expect("canonical cache poisoned");
+            if let Some((canonical, at)) = cache.get(&key) {
+                if at.elapsed() < CANONICAL_TTL {
+                    return Ok(canonical.clone());
+                }
+            }
+        }
+        let canonical = ws.canonicalize(path)?;
+        let mut cache = self.workspace_cache.lock().expect("canonical cache poisoned");
+        if cache.len() >= CANONICAL_CACHE_CAP {
+            cache.retain(|_, (_, at)| at.elapsed() < CANONICAL_TTL);
+            if cache.len() >= CANONICAL_CACHE_CAP {
+                cache.clear();
+            }
+        }
+        cache.insert(key, (canonical.clone(), Instant::now()));
+        Ok(canonical)
     }
 
     pub fn canonicalize_cached<P: AsRef<Path>>(&self, path: P) -> std::io::Result<PathBuf> {
@@ -882,6 +960,75 @@ mod auth_tests {
         let roots: HashSet<Location> = [root.clone()].into();
         assert!(covered(&at(ubuntu(), "/home/u/x"), &roots, &HashMap::new(), 0));
         assert!(!covered(&at(WorkspaceEnv::Local, "/home/u/x"), &roots, &HashMap::new(), 0));
+    }
+
+    #[test]
+    fn drvfs_paths_inside_a_distro_are_the_local_drive() {
+        let ubuntu = WorkspaceEnv::Wsl {
+            distro: "Ubuntu".into(),
+        };
+        let local = |path: &str| Location {
+            env: WorkspaceEnv::Local,
+            path: path.into(),
+        };
+        assert_eq!(location_in_workspace(&ubuntu, "/mnt/c/proj", true), local("C:/proj"));
+        assert_eq!(location_in_workspace(&ubuntu, "/mnt/d", true), local("D:/"));
+        for not_a_drive in ["/mnt/cd/x", "/mnt/", "/mnt", "/home/u", "/mnt/1/x"] {
+            assert_eq!(
+                location_in_workspace(&ubuntu, not_a_drive, true).env,
+                ubuntu,
+                "{not_a_drive}"
+            );
+        }
+        assert_eq!(
+            location_in_workspace(&ubuntu, "/mnt/c/proj", false).env,
+            ubuntu,
+            "there is no drvfs off Windows"
+        );
+        assert_eq!(
+            location_in_workspace(&WorkspaceEnv::Local, "/mnt/c/proj", true),
+            local("/mnt/c/proj")
+        );
+    }
+
+    /// Grants made through the host-path adapters and checks made through the
+    /// backend's canonical workspace paths must name the same location, or a
+    /// root would stop covering itself while callers move over.
+    #[cfg(windows)]
+    #[test]
+    fn host_and_workspace_spellings_name_the_same_location() {
+        use terax_workspace_core::paths::canonical_wsl_path;
+        for host in [
+            "//wsl.localhost/Ubuntu/home/u/repo",
+            "//wsl$/Ubuntu/home/u",
+            "//wsl.localhost/Ubuntu",
+            "C:/Users/u/proj",
+            "C:/",
+        ] {
+            let workspace = canonical_wsl_path(host, "Ubuntu").unwrap();
+            let env = WorkspaceEnv::Wsl {
+                distro: "Ubuntu".into(),
+            };
+            assert_eq!(
+                Location::in_workspace(&env, &workspace),
+                location_of_canon(host, true),
+                "{host} -> {workspace}"
+            );
+        }
+    }
+
+    #[test]
+    fn workspace_paths_are_covered_by_component_within_their_workspace() {
+        let reg = WorkspaceRegistry::default();
+        let root = tempdir("covers-root");
+        reg.authorize(&root).unwrap();
+        let ws = backend_for(&WorkspaceEnv::Local);
+        let canonical = reg.canonicalize_in(&*ws, &root.to_string_lossy()).unwrap();
+        assert!(reg.covers(&WorkspaceEnv::Local, &canonical));
+        assert!(reg.covers(&WorkspaceEnv::Local, &format!("{canonical}/src/a.rs")));
+        assert!(!reg.covers(&WorkspaceEnv::Local, &format!("{canonical}-sibling")));
+        assert!(within(&WorkspaceEnv::Local, &format!("{canonical}/a"), &canonical));
+        assert!(!within(&WorkspaceEnv::Local, &canonical, &format!("{canonical}/a")));
     }
 
     #[test]

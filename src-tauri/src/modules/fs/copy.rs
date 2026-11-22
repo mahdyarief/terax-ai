@@ -1,7 +1,8 @@
 use super::{index::FileIndexState, mutate::note_dir_changed, to_canon};
-use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv, WorkspaceRegistry};
+use crate::modules::workspace::{backend_for, resolve_path, within, WorkspaceEnv, WorkspaceRegistry};
+use terax_workspace_core::workspace::EntryKind;
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tauri::Manager;
 
 const MAX_COPY_SOURCES: usize = 1024;
@@ -42,23 +43,25 @@ pub async fn fs_copy(
     .map_err(|error| error.to_string())?
 }
 
+/// The destination's canonical workspace path, when it is a directory inside
+/// the authorized root.
 fn copy_destination(
     dest_dir: &str,
     root: &str,
     workspace: &WorkspaceEnv,
     registry: &WorkspaceRegistry,
-) -> Result<PathBuf, String> {
-    let root = resolve_path(root, workspace);
-    let dest = resolve_path(dest_dir, workspace);
-    if !root.is_absolute() || !dest.is_absolute() {
+) -> Result<String, String> {
+    if !resolve_path(root, workspace).is_absolute() || !resolve_path(dest_dir, workspace).is_absolute()
+    {
         return Err("copy destination and workspace root must be absolute".into());
     }
-    let root = std::fs::canonicalize(root).map_err(|error| error.to_string())?;
-    let dest = std::fs::canonicalize(dest).map_err(|error| error.to_string())?;
-    if !registry.is_authorized(&root) || !dest.starts_with(&root) {
+    let ws = backend_for(workspace);
+    let root = ws.canonicalize(root).map_err(|error| error.to_string())?;
+    let dest = ws.canonicalize(dest_dir).map_err(|error| error.to_string())?;
+    if !registry.covers(workspace, &root) || !within(workspace, &dest, &root) {
         return Err("copy destination is outside the authorized workspace".into());
     }
-    if !dest.is_dir() {
+    if ws.metadata(&dest).map_err(|error| error.to_string())?.kind != EntryKind::Dir {
         return Err("copy destination is not a directory".into());
     }
     Ok(dest)
@@ -76,8 +79,6 @@ fn copy_batch(
     if sources.len() > MAX_COPY_SOURCES {
         return Err(format!("copy at most {MAX_COPY_SOURCES} items at a time"));
     }
-    // Authorization still canonicalizes host paths against the registry; it
-    // moves behind the backend with the registry itself (phase 1, task 11).
     let dest = copy_destination(dest_dir, root, workspace, registry)?;
     let ws = backend_for(workspace);
     let mut result = CopyResult::default();
@@ -94,7 +95,7 @@ fn copy_batch(
         }
     }
     if !result.created.is_empty() {
-        note_dir_changed(index, &dest);
+        note_dir_changed(index, &resolve_path(&dest, workspace));
     }
     Ok(result)
 }
@@ -107,7 +108,7 @@ mod tests {
         to_canon(path)
     }
 
-    fn copy(sources: &[PathBuf], dest: &Path, rename: bool) -> CopyResult {
+    fn copy(sources: &[std::path::PathBuf], dest: &Path, rename: bool) -> CopyResult {
         let registry = WorkspaceRegistry::default();
         registry.authorize(dest).unwrap();
         copy_batch(

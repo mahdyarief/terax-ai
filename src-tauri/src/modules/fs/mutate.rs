@@ -1,6 +1,6 @@
 use super::blocking;
 use super::index::FileIndexState;
-use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv, WorkspaceRegistry};
+use crate::modules::workspace::{backend_for, resolve_path, within, WorkspaceEnv, WorkspaceRegistry};
 use serde::Serialize;
 use std::io;
 use std::path::Path;
@@ -55,40 +55,36 @@ fn is_conflict(error: &io::Error) -> bool {
     )
 }
 
-// Authorization still canonicalizes host paths against the registry; it
-// moves behind the backend with the registry itself (phase 1, task 11).
+/// The root's canonical workspace path, when the registry covers it.
 fn resolve_authorized_root(
+    ws: &dyn Workspace,
     root: &str,
-    workspace: &WorkspaceEnv,
     registry: &WorkspaceRegistry,
-) -> Result<std::path::PathBuf, String> {
-    let resolved = resolve_path(root, workspace);
+) -> Result<String, String> {
     let canonical = registry
-        .canonicalize_cached(resolved)
+        .canonicalize_in(ws, root)
         .map_err(|error| format!("workspace root is not accessible: {error}"))?;
-    if registry.is_authorized(&canonical) {
+    if registry.covers(ws.env(), &canonical) {
         Ok(canonical)
     } else {
-        Err(format!(
-            "workspace root is not authorized: {}",
-            canonical.display()
-        ))
+        Err(format!("workspace root is not authorized: {canonical}"))
     }
 }
 
-fn authorize_mutation_entry(path: &Path, root: &Path) -> Result<(), String> {
-    let parent = path
+/// The entry itself may be a symlink or not exist yet; its parent is what
+/// must resolve inside the root.
+fn authorize_mutation_entry(ws: &dyn Workspace, path: &str, root: &str) -> Result<(), String> {
+    let parent = Path::new(path)
         .parent()
-        .ok_or_else(|| format!("path has no parent: {}", path.display()))?;
-    let canonical = std::fs::canonicalize(parent)
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .ok_or_else(|| format!("path has no parent: {path}"))?;
+    let canonical = ws
+        .canonicalize(&parent.to_string_lossy())
         .map_err(|error| format!("path parent is not accessible: {error}"))?;
-    if canonical.starts_with(root) {
+    if within(ws.env(), &canonical, root) {
         Ok(())
     } else {
-        Err(format!(
-            "path is outside the authorized workspace: {}",
-            path.display()
-        ))
+        Err(format!("path is outside the authorized workspace: {path}"))
     }
 }
 
@@ -211,8 +207,8 @@ pub async fn fs_move(
 ) -> Result<FsMoveResult, String> {
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
-        let root = resolve_authorized_root(&root, &workspace, &app.state::<WorkspaceRegistry>())?;
         let ws = backend_for(&workspace);
+        let root = resolve_authorized_root(&*ws, &root, &app.state::<WorkspaceRegistry>())?;
         let moved = fs_move_impl(&*ws, &from, &to, &root, expected_conflict.as_deref())?;
         if moved == FsMoveResult::Moved {
             let index = app.state::<FileIndexState>();
@@ -228,13 +224,13 @@ fn fs_move_impl(
     ws: &dyn Workspace,
     from: &str,
     to: &str,
-    root: &Path,
+    root: &str,
     expected_conflict: Option<&str>,
 ) -> Result<FsMoveResult, String> {
     let from_p = resolve_path(from, ws.env());
     let to_p = resolve_path(to, ws.env());
-    authorize_mutation_entry(&from_p, root)?;
-    authorize_mutation_entry(&to_p, root)?;
+    authorize_mutation_entry(ws, from, root)?;
+    authorize_mutation_entry(ws, to, root)?;
     if from_p == to_p {
         return Ok(FsMoveResult::Moved);
     }
@@ -307,15 +303,15 @@ pub async fn fs_delete_batch(
     let count = paths.len();
     tauri::async_runtime::spawn_blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
-        let Ok(root) =
-            resolve_authorized_root(&root, &workspace, &app.state::<WorkspaceRegistry>())
+        let ws = backend_for(&workspace);
+        let Ok(root) = resolve_authorized_root(&*ws, &root, &app.state::<WorkspaceRegistry>())
         else {
             return FsDeleteBatchResult {
                 deleted: Vec::new(),
                 failed: paths.len(),
             };
         };
-        let result = fs_delete_batch_impl(&*backend_for(&workspace), paths, &root);
+        let result = fs_delete_batch_impl(&*ws, paths, &root);
         let index = app.state::<FileIndexState>();
         for deleted in &result.deleted {
             note_changed(&index, &resolve_path(deleted, &workspace));
@@ -329,11 +325,11 @@ pub async fn fs_delete_batch(
     })
 }
 
-fn fs_delete_batch_impl(ws: &dyn Workspace, paths: Vec<String>, root: &Path) -> FsDeleteBatchResult {
+fn fs_delete_batch_impl(ws: &dyn Workspace, paths: Vec<String>, root: &str) -> FsDeleteBatchResult {
     let mut deleted = Vec::with_capacity(paths.len());
     let mut failed = 0;
     for path in paths {
-        let result = authorize_mutation_entry(&resolve_path(&path, ws.env()), root)
+        let result = authorize_mutation_entry(ws, &path, root)
             .and_then(|()| remove_path(ws, &path).map_err(|error| error.to_string()));
         match result {
             Ok(()) => deleted.push(path),
@@ -369,7 +365,7 @@ mod tests {
         to: &Path,
         expected_conflict: Option<&str>,
     ) -> Result<FsMoveResult, String> {
-        let root = std::fs::canonicalize(root).unwrap();
+        let root = local().canonicalize(&at(root)).unwrap();
         fs_move_impl(
             &*local(),
             &s(from.to_path_buf()),
@@ -529,7 +525,7 @@ mod tests {
         let from = outside.path().join("from.txt");
         let to = allowed.path().join("to.txt");
         std::fs::write(&from, b"keep").unwrap();
-        let root = std::fs::canonicalize(allowed.path()).unwrap();
+        let root = local().canonicalize(&at(allowed.path())).unwrap();
 
         let error =
             fs_move_impl(&*local(), &s(from.clone()), &s(to), &root, None).unwrap_err();
@@ -581,7 +577,7 @@ mod tests {
         let missing = dir.path().join("missing.txt");
         std::fs::write(&first, b"first").unwrap();
         std::fs::write(&second, b"second").unwrap();
-        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let root = local().canonicalize(&at(dir.path())).unwrap();
         let paths = vec![s(first.clone()), s(missing), s(second.clone())];
 
         let result = fs_delete_batch_impl(&*local(), paths.clone(), &root);
