@@ -14,6 +14,7 @@ use std::io;
 use std::path::Path;
 
 use crate::env::WorkspaceEnv;
+use crate::exec::{capture::Captured, ExecSpec};
 use crate::grep::{GlobRequest, GlobResponse, GrepRequest, GrepResponse};
 use crate::index::FileIndex;
 
@@ -135,4 +136,9 @@ pub trait Workspace: Send + Sync {
         max_depth: Option<usize>,
         cancelled: &dyn Fn() -> bool,
     ) -> Option<FileIndex>;
+
+    /// Runs a program in the workspace with bounded output and a deadline.
+    /// A program that cannot be started fails with `NotFound` or
+    /// `PermissionDenied`.
+    fn exec(&self, spec: ExecSpec) -> io::Result<Captured>;
 }

@@ -12,6 +12,7 @@ grep-searcher = "0.1"
 ignore = "0.4"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }
+shared_child = "1"
 tempfile = "3"
 
 # inotify (Linux) and ReadDirectoryChangesW (Windows). macOS drives FSEvents

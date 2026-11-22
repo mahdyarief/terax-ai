@@ -348,6 +348,10 @@ impl Workspace for HostWorkspace {
     ) -> Option<crate::index::FileIndex> {
         crate::index::walk(&self.host(root), show_hidden, max_depth, cancelled)
     }
+
+    fn exec(&self, spec: crate::exec::ExecSpec) -> io::Result<crate::exec::capture::Captured> {
+        crate::exec::run_on_host(&self.env, spec)
+    }
 }
 
 #[cfg(all(test, unix))]

@@ -139,10 +139,11 @@ pub trait Workspace: Send + Sync {
 
 ### Task 9: Generalize the process runner and route git through it
 
-- [ ] Move the spawn/cap/timeout logic of `git/process.rs` (`build_git_command`, `run_git`, `run_git_capped`, `run_git_with`, output decoding) into `exec.rs` as `HostWorkspace::exec`.
-- [ ] `run_git*` keep their signatures and call `backend_for(env).exec(ExecSpec { program: "git", .. })`. The 26 call sites do not change.
-- [ ] `ensure_git_available` and its cache go through `exec` too.
-- [ ] Git output parsers and all higher-level git logic stay in the app.
+- [x] The bounded runner (`proc/capture.rs`) and `hide_console` moved into the core's `exec` module, re-exported under their old app paths (the shell tool keeps using them). `build_git_command` became the generic `exec::build_command(env, program, cwd, args)`: direct for local, `wsl.exe -d … --cd … --exec` for WSL.
+- [x] `Workspace::exec(ExecSpec)` runs a program with bounded output and a deadline; `run_git*` keep their signatures and build an `ExecSpec { program: "git", .. }`. The call sites do not change.
+- [x] Git hardening stays in the app: `core.fsmonitor=` and `--no-ext-diff`/`--no-textconv` injection, the safety environment, stripping inherited repository redirects (`env_remove`, applied before `env`), the WSL environment-override refusal and the unsafe-distro `GitError`.
+- [x] `ensure_git_available` goes through `run_git`, so through `exec` too. Parsers and all higher-level git logic stay in the app.
+- Arguments are `OsString`; the Phase 2 wire format decides how non-UTF-8 arguments cross (expected: refuse them for remote workspaces).
 
 ### Task 10: Route git's direct file access through the primitives
 

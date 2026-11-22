@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::path::Path;
-use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -10,10 +9,10 @@ use crate::modules::git::types::{
     GitOutput, TextSource, DEFAULT_TIMEOUT_SECS, MAX_FILE_BYTES, MAX_OUTPUT_BYTES,
     MAX_TIMEOUT_SECS, MIN_GIT_VERSION,
 };
-use crate::modules::proc::capture::{self, Limits};
 #[cfg(windows)]
 use crate::modules::workspace::validate_wsl_distro_name;
-use crate::modules::workspace::WorkspaceEnv;
+use crate::modules::workspace::{backend_for, WorkspaceEnv};
+use terax_workspace_core::exec::{capture::Limits, ExecSpec};
 
 #[derive(Clone)]
 enum Availability {
@@ -324,43 +323,44 @@ where
         .map(|arg| arg.as_ref().to_os_string())
         .collect();
     harden_inspection(&mut args);
-    let mut cmd = build_git_command(workspace, cwd, &args)?;
-    cmd.env("GIT_TERMINAL_PROMPT", "0")
-        .env("GIT_ASKPASS", "")
-        .env("SSH_ASKPASS", "")
-        .env("GIT_OPTIONAL_LOCKS", "0")
-        .env("GCM_INTERACTIVE", "Never")
-        .env("GCM_PROVIDER", "")
-        .env("LC_ALL", "C")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    // A repository or configuration redirect inherited from the launching shell
-    // must never steer an invocation; callers that want one pass it in
-    // `options.env`.
-    for name in inherited_git_env_to_strip(std::env::vars_os().map(|(key, _)| key)) {
-        cmd.env_remove(name);
+    #[cfg(windows)]
+    if let WorkspaceEnv::Wsl { distro } = workspace {
+        validate_wsl_distro_name(distro)
+            .map_err(|_| GitError::command("unsafe WSL distro name", distro.clone()))?;
     }
-    for (key, value) in &options.env {
-        cmd.env(key, value);
-    }
-    cmd.stdin(if options.stdin.is_some() {
-        Stdio::piped()
-    } else {
-        Stdio::null()
-    });
-    crate::modules::proc::hide_console(&mut cmd);
-
-    let captured = capture::run_with_input(
-        &mut cmd,
-        dur,
-        Limits {
+    let mut env: Vec<(OsString, OsString)> = [
+        ("GIT_TERMINAL_PROMPT", "0"),
+        ("GIT_ASKPASS", ""),
+        ("SSH_ASKPASS", ""),
+        ("GIT_OPTIONAL_LOCKS", "0"),
+        ("GCM_INTERACTIVE", "Never"),
+        ("GCM_PROVIDER", ""),
+        ("LC_ALL", "C"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.into(), value.into()))
+    .collect();
+    // Callers that want a repository or configuration redirect pass it here;
+    // it is applied after the inherited ones are stripped.
+    env.extend(options.env);
+    let spec = ExecSpec {
+        program: "git".into(),
+        args,
+        cwd: cwd.filter(|s| !s.is_empty()).map(str::to_string),
+        env,
+        // A repository or configuration redirect inherited from the launching
+        // shell must never steer an invocation.
+        env_remove: inherited_git_env_to_strip(std::env::vars_os().map(|(key, _)| key)),
+        stdin: options.stdin,
+        timeout: dur,
+        limits: Limits {
             stdout: stdout_cap,
             stderr: MAX_OUTPUT_BYTES,
             stop_on_stdout_cap,
         },
-        options.stdin,
-    )
-    .map_err(|e| match e.kind() {
+    };
+
+    let captured = backend_for(workspace).exec(spec).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied => {
             GitError::Spawn(e.to_string())
         }
@@ -439,33 +439,6 @@ pub(crate) fn inherited_git_env_to_strip(
     out
 }
 
-fn build_git_command(
-    _workspace: &WorkspaceEnv,
-    cwd: Option<&str>,
-    args: &[OsString],
-) -> Result<Command> {
-    #[cfg(windows)]
-    if let WorkspaceEnv::Wsl { distro } = _workspace {
-        validate_wsl_distro_name(distro)
-            .map_err(|_| GitError::command("unsafe WSL distro name", distro.clone()))?;
-        let mut cmd = Command::new("wsl.exe");
-        cmd.arg("-d").arg(distro);
-        if let Some(cwd) = cwd.filter(|s| !s.is_empty()) {
-            cmd.arg("--cd").arg(cwd);
-        }
-        cmd.arg("--exec").arg("git");
-        cmd.args(args);
-        return Ok(cmd);
-    }
-
-    let mut cmd = Command::new("git");
-    cmd.args(args);
-    if let Some(dir) = cwd.filter(|s| !s.is_empty()) {
-        cmd.current_dir(Path::new(dir));
-    }
-    Ok(cmd)
-}
-
 pub fn ensure_success(output: &GitOutput, context: &'static str) -> Result<()> {
     if output.timed_out {
         return Err(GitError::TimedOut(context));
@@ -519,8 +492,6 @@ pub(crate) fn decode_text(bytes: Vec<u8>) -> TextSource {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(windows)]
-    use super::build_git_command;
     use super::{
         classify_auth_error, decode_text, harden_inspection, parse_git_version,
         prune_expired_availability_entries, version_meets_minimum, Availability, AvailabilityCache,
@@ -656,49 +627,21 @@ mod tests {
         assert!(!cache.contains_key("wsl:Ubuntu"));
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn builds_wsl_git_command_with_cd_and_exec() {
-        let cmd = build_git_command(
-            &WorkspaceEnv::Wsl {
-                distro: "Ubuntu".into(),
-            },
-            Some("/home/vinicios/Nova pasta/repo"),
-            &[OsString::from("status"), OsString::from("--short")],
-        )
-        .expect("valid WSL distro");
-        let program = cmd.get_program().to_string_lossy().into_owned();
-        let args: Vec<String> = cmd
-            .get_args()
-            .map(|arg| arg.to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(program, "wsl.exe");
-        assert_eq!(
-            args,
-            vec![
-                "-d",
-                "Ubuntu",
-                "--cd",
-                "/home/vinicios/Nova pasta/repo",
-                "--exec",
-                "git",
-                "status",
-                "--short",
-            ]
-        );
-    }
 
     #[cfg(windows)]
     #[test]
     fn rejects_unsafe_wsl_distro_name_for_git_command() {
-        let err = build_git_command(
+        // Refused before anything is spawned.
+        let err = super::run_git(
             &WorkspaceEnv::Wsl {
                 distro: "../Ubuntu".into(),
             },
             None,
-            &[],
+            ["status"],
+            1,
         )
-        .unwrap_err();
+        .err()
+        .expect("an unsafe distro is refused");
         assert!(err.to_string().contains("unsafe WSL distro name"));
     }
 

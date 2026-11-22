@@ -5080,6 +5080,7 @@ dependencies = [
  "proptest",
  "serde",
  "serde_json",
+ "shared_child",
  "tempfile",
  "windows-sys 0.61.2",
 ]
