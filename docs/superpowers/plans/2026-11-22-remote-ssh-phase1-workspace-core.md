@@ -108,12 +108,12 @@ pub trait Workspace: Send + Sync {
 - [ ] `fs_read_dir`, `list_subdirs`, `fs_create_file`, `fs_create_dir`, `fs_rename`, `fs_move`, `fs_delete`, `fs_delete_batch` go through the primitives.
 - [ ] Watch for Windows-specific behaviour in `mutate.rs` (case-only renames, read-only attribute, trash vs. delete). Whatever is host-only stays in `HostWorkspace` behind the primitive, not in the command.
 
-### Task 6: Migrate `fs/copy.rs`, `fs/project_memory.rs`, `fs/assets.rs`, `fs/ai.rs` reads
+### Task 6: Move the copy engine (`fs_copy`) behind `Workspace::import`
 
-- [ ] `fs_copy` (recursive copy built on `read_dir` + `copy_file` + `create_dir_all`, keeping its current cancellation and collision rules).
-- [ ] `fs_read_project_memory`, `asset_grant` stat/read paths, `ai_read_file`, `ai_read_dir`.
-- [ ] `read_policy.rs` (the secret-path deny-list) stays a pure function over workspace paths and is applied before calling the backend, unchanged.
-- [ ] `clipboard.rs`, `preview.rs` (`fs_publish_html`) and the local-link checks in `local_file.rs` are host-only by nature; leave them, but route their file reads through the backend where they read workspace content.
+- [x] `fs_copy` sources are always paths on this machine (OS clipboard paste, desktop drop) and the destination is a workspace directory, so the copy is an engine, not a composition of primitives: `Workspace::import(source, dest_dir, rename_on_conflict)`. The host backend keeps today's staged, no-replace publish; the remote backend will implement it as an upload.
+- [x] Destination authorization stays host-side until Task 11.
+- **Moved to Task 11:** `fs_read_project_memory`, `asset_grant`/asset serving, `ai_read_file`, `ai_read_dir`. Each opens a file and then checks the *opened handle's* real path (`/proc/self/fd`, `F_GETPATH`, `GetFinalPathNameByHandleW`) against the registry, so they are confinement checks rather than plain reads. Their three `opened_path` copies also differ on purpose (the AI path keeps the lossless verbatim Windows path; the others compare the stripped spelling), so merging them is a security-semantics change that belongs with the registry redesign, where a remote agent must run the same check on the server.
+- `read_policy.rs`, `clipboard.rs`, `preview.rs` and `local_file.rs` stay host-only.
 
 ### Task 7: Move the search engines (`grep`, `glob`, `list_files`, index)
 
@@ -150,6 +150,7 @@ Each step: the module's existing tests (`*_tests.rs`, `hardening_tests.rs`, `edg
 ### Task 11: Route `WorkspaceRegistry` canonicalization through the backend
 
 - [ ] `authorize`, `authorize_derived`, `canonical_or_resolved` and `authorize_spawn_cwd` canonicalize via `backend_for(env).canonicalize`. Registry keys become `(scope key, canonical path)`, so a remote root can never authorize a local path with the same text (or the reverse).
+- [ ] Confined reads: add one backend operation that opens a file, verifies the opened handle lies inside an authorized root, applies the secret-path policy to that real path, and reads with a limit. Port `fs_read_project_memory`, asset serving and `ai_read_file`/`ai_read_dir` to it, keeping each caller's error messages. The agent implements the same check on the server.
 - [ ] Tests: a WSL root does not cover the identical local path; existing derived-root (worktree) tests stay green.
 
 ### Task 12: Lock the invariants

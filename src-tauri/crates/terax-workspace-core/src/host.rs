@@ -319,6 +319,12 @@ impl Workspace for HostWorkspace {
     fn copy_file(&self, from: &str, to: &str) -> io::Result<u64> {
         fs::copy(self.host(from), self.host(to))
     }
+
+    fn import(&self, source: &Path, dest_dir: &str, rename_on_conflict: bool) -> io::Result<String> {
+        let dest = fs::canonicalize(self.host(dest_dir))?;
+        crate::import::import_item(source, &dest, rename_on_conflict)
+            .map(|name| name.to_string_lossy().into_owned())
+    }
 }
 
 #[cfg(all(test, unix))]

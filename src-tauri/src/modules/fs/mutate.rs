@@ -7,8 +7,6 @@ use std::path::Path;
 use tauri::{AppHandle, Manager, State};
 use terax_workspace_core::workspace::{EntryKind, Meta, Workspace};
 
-pub(super) use terax_workspace_core::host::rename_no_replace;
-
 /// Tells the file-list cache that something under `path` changed. The watcher
 /// only covers expanded directories, so our own mutations report themselves.
 pub(super) fn note_changed(index: &FileIndexState, entry: &Path) {

@@ -11,6 +11,7 @@
 //! trait as their engines move into the core.
 
 use std::io;
+use std::path::Path;
 
 use crate::env::WorkspaceEnv;
 
@@ -101,4 +102,14 @@ pub trait Workspace: Send + Sync {
     fn remove_dir_all(&self, path: &str) -> io::Result<()>;
     /// Copies one file's bytes; returns the number of bytes copied.
     fn copy_file(&self, from: &str, to: &str) -> io::Result<u64>;
+
+    // ── engines ─────────────────────────────────────────────────────────
+
+    /// Copies a file or folder from this machine (`source` is a host path)
+    /// into the workspace directory `dest_dir`, named after the source, and
+    /// returns the name it got. The copy appears complete or not at all and
+    /// never replaces an existing entry; `rename_on_conflict` picks
+    /// "name copy", "name copy 2", ... instead of failing.
+    fn import(&self, source: &Path, dest_dir: &str, rename_on_conflict: bool)
+        -> io::Result<String>;
 }

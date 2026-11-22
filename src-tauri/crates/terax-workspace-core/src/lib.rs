@@ -5,6 +5,7 @@
 
 pub mod env;
 pub mod host;
+pub mod import;
 pub mod paths;
 pub mod workspace;
 
