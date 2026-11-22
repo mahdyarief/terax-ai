@@ -3,6 +3,7 @@
 //! `Workspace` trait, its host backend and the search/watch/exec engines.
 //! Shared by the app and, later, by the remote agent.
 
+pub mod confined;
 pub mod env;
 pub mod exec;
 pub mod grep;

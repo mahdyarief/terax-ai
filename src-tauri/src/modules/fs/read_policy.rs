@@ -1,59 +1,23 @@
-use regex::RegexSetBuilder;
-use serde::Deserialize;
 use std::path::Path;
-use std::sync::OnceLock;
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PathPolicy {
-    secret_basenames: Vec<String>,
-    protected_dirs: Vec<String>,
+/// The secret-path policy for a host path: the shared patterns (in the
+/// workspace core, so a remote agent refuses the same names) plus this app's
+/// own credential directory.
+pub(super) fn readable(path: &Path) -> Result<(), String> {
+    deny_runtime(path)?;
+    let path = path.to_str().ok_or("refused non-UTF-8 AI path")?;
+    match terax_workspace_core::confined::refusal(path) {
+        Some(why) => Err(why.into()),
+        None => Ok(()),
+    }
 }
 
-pub(super) fn readable(path: &Path) -> Result<(), String> {
+/// Refuses this app's runtime directory (the control credentials), wherever
+/// the cache directory has been relocated to. A host concern: a remote
+/// agent has its own.
+pub(super) fn deny_runtime(path: &Path) -> Result<(), String> {
     if let Some(cache) = dirs::cache_dir() {
         deny_runtime_directory(path, &cache.join("terax"))?;
-    }
-    static POLICY: OnceLock<(regex::RegexSet, Vec<String>)> = OnceLock::new();
-    let (patterns, directories) = POLICY.get_or_init(|| {
-        let policy: PathPolicy = serde_json::from_str(include_str!(
-            "../../../../src/modules/ai/lib/pathPolicy.json"
-        ))
-        .expect("valid path policy");
-        (
-            RegexSetBuilder::new(policy.secret_basenames)
-                .case_insensitive(true)
-                .build()
-                .expect("valid secret patterns"),
-            policy.protected_dirs,
-        )
-    });
-    let path = path.to_str().ok_or("refused non-UTF-8 AI path")?;
-    if path.is_empty() || path.chars().any(|c| c < ' ') {
-        return Err("refused invalid AI path".into());
-    }
-    let normalized = path.replace('\\', "/");
-    let basename = normalized.rsplit('/').next().unwrap_or("");
-    if patterns.is_match(&basename.replace('\u{feff}', " ")) {
-        return Err("refused sensitive AI file".into());
-    }
-    let comparison = normalized
-        .split('/')
-        .map(|part| {
-            part.split(':')
-                .next()
-                .unwrap_or("")
-                .trim_end_matches(|c: char| c == '.' || c == '\u{feff}' || c.is_whitespace())
-                .to_lowercase()
-        })
-        .collect::<Vec<_>>()
-        .join("/");
-    let comparison = format!("{comparison}/");
-    if directories
-        .iter()
-        .any(|dir| comparison.contains(&format!("{dir}/")))
-    {
-        return Err("refused protected AI directory".into());
     }
     Ok(())
 }

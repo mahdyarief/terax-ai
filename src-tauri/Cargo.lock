@@ -5078,6 +5078,7 @@ dependencies = [
  "log",
  "notify",
  "proptest",
+ "regex",
  "serde",
  "serde_json",
  "shared_child",

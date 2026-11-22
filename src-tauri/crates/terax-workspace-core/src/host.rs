@@ -6,6 +6,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use crate::confined::{ConfinedError, ConfinedOutcome, ConfinedRead};
 use crate::env::{resolve_path, WorkspaceEnv};
 use crate::grep::{GlobRequest, GlobResponse, GrepRequest, GrepResponse};
 use crate::paths::to_canon;
@@ -24,6 +25,92 @@ impl HostWorkspace {
 
     fn host(&self, path: &str) -> PathBuf {
         resolve_path(path, &self.env)
+    }
+}
+
+/// Opens `path` for reading without ever opening a device or blocking on a
+/// FIFO. On Linux the path is pinned with `O_PATH` (which opens nothing) and
+/// the same inode is reopened for reading only once it is a regular file.
+fn open_pinned(path: &Path) -> Result<fs::File, ConfinedError> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        #[cfg(target_os = "linux")]
+        options.custom_flags(libc::O_PATH);
+        #[cfg(not(target_os = "linux"))]
+        options.custom_flags(libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        // Opening a directory fails with a misleading "Access is denied".
+        if fs::metadata(path).is_ok_and(|meta| !meta.is_file()) {
+            return Err(ConfinedError::NotAFile);
+        }
+    }
+    let file = options.open(path)?;
+    #[cfg(target_os = "linux")]
+    {
+        reopen_regular(&file)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(file)
+    }
+}
+
+/// Reopens the inode an `O_PATH` handle pinned, for reading, once it is a
+/// regular file; a path replaced in between is not followed.
+#[cfg(target_os = "linux")]
+fn reopen_regular(pinned: &fs::File) -> Result<fs::File, ConfinedError> {
+    use std::os::fd::AsRawFd;
+    if !pinned.metadata()?.is_file() {
+        return Err(ConfinedError::NotAFile);
+    }
+    Ok(fs::File::open(format!("/proc/self/fd/{}", pinned.as_raw_fd()))?)
+}
+
+/// Where the opened file really is, from the OS (not from the path it was
+/// opened by). On Windows the lossless verbatim path.
+fn opened_path(file: &fs::File) -> io::Result<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::ffi::OsStrExt;
+        let mut buffer = [0u8; libc::PATH_MAX as usize];
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) } == -1 {
+            return Err(io::Error::last_os_error());
+        }
+        let end = buffer
+            .iter()
+            .position(|&b| b == 0)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "invalid file path"))?;
+        Ok(PathBuf::from(std::ffi::OsStr::from_bytes(&buffer[..end])))
+    }
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        use std::os::windows::io::AsRawHandle;
+        use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
+        let mut buffer = vec![0u16; 32768];
+        let len = unsafe {
+            GetFinalPathNameByHandleW(
+                file.as_raw_handle(),
+                buffer.as_mut_ptr(),
+                buffer.len() as u32,
+                0,
+            )
+        } as usize;
+        if len == 0 || len >= buffer.len() {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer[..len])))
     }
 }
 
@@ -292,6 +379,55 @@ impl Workspace for HostWorkspace {
         })
     }
 
+    fn read_confined(
+        &self,
+        path: &str,
+        request: &ConfinedRead,
+    ) -> Result<ConfinedOutcome, ConfinedError> {
+        let file = open_pinned(&self.host(path))?;
+        let meta = file.metadata()?;
+        if !meta.is_file() {
+            return Err(ConfinedError::NotAFile);
+        }
+        let opened = opened_path(&file)?;
+        // Compared as text below, so it must be spelled exactly.
+        if opened.to_str().is_none() {
+            return Err(ConfinedError::Inexact);
+        }
+        let canon = to_canon(&opened);
+        let real_path = match &self.env {
+            WorkspaceEnv::Local => canon,
+            #[cfg(windows)]
+            WorkspaceEnv::Wsl { distro } => crate::paths::canonical_wsl_path(&canon, distro)
+                .map_err(|_| ConfinedError::Outside)?,
+            #[cfg(not(windows))]
+            WorkspaceEnv::Wsl { .. } => canon,
+        };
+        if request.secret_policy {
+            if let Some(why) = crate::confined::refusal(&real_path) {
+                return Err(ConfinedError::Refused(why));
+            }
+        }
+        if !crate::confined::allowed(&real_path, &request.roots) {
+            return Err(ConfinedError::Outside);
+        }
+        let size = meta.len();
+        let mut file = file;
+        let start = request.offset.min(size);
+        if start > 0 {
+            file.seek(SeekFrom::Start(start))?;
+        }
+        let mut bytes = Vec::new();
+        file.take(request.limit.saturating_add(1))
+            .read_to_end(&mut bytes)?;
+        Ok(ConfinedOutcome {
+            real_path,
+            bytes,
+            size,
+            mtime_ms: mtime_millis(&meta),
+        })
+    }
+
     fn write_atomic(&self, path: &str, bytes: &[u8]) -> io::Result<WriteOutcome> {
         let target = self.host(path);
         let original = fs::metadata(&target).ok();
@@ -427,6 +563,91 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
+    fn confined_to(root: &str) -> ConfinedRead {
+        ConfinedRead {
+            roots: vec![crate::confined::Confine {
+                path: root.to_string(),
+                subtree: true,
+            }],
+            secret_policy: true,
+            offset: 0,
+            limit: 1024,
+        }
+    }
+
+    /// The decision follows the opened file, not the path it was opened by:
+    /// a link inside the root to a file outside it, or to a secret, is refused.
+    #[test]
+    fn confined_reads_follow_the_opened_file() {
+        let (dir, ws, _) = setup();
+        let root = ws.canonicalize(&dir.path().to_string_lossy()).unwrap();
+        let inside = format!("{root}/inside");
+        fs::create_dir_all(&inside).unwrap();
+        fs::create_dir_all(format!("{root}/outside")).unwrap();
+        fs::write(format!("{root}/outside/b.txt"), b"nope").unwrap();
+        fs::write(format!("{inside}/.env"), b"SECRET").unwrap();
+        fs::write(format!("{inside}/a.txt"), b"ok").unwrap();
+        std::os::unix::fs::symlink(format!("{root}/outside/b.txt"), format!("{inside}/escape")).unwrap();
+        std::os::unix::fs::symlink(format!("{inside}/.env"), format!("{inside}/innocent.txt")).unwrap();
+        std::os::unix::fs::symlink(format!("{inside}/a.txt"), format!("{inside}/alias.txt")).unwrap();
+
+        let request = confined_to(&inside);
+        assert!(matches!(
+            ws.read_confined(&format!("{inside}/escape"), &request),
+            Err(ConfinedError::Outside)
+        ));
+        assert!(matches!(
+            ws.read_confined(&format!("{inside}/innocent.txt"), &request),
+            Err(ConfinedError::Refused(_))
+        ));
+        let read = ws.read_confined(&format!("{inside}/alias.txt"), &request).unwrap();
+        assert_eq!(read.real_path, format!("{inside}/a.txt"));
+        assert_eq!(read.bytes, b"ok");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn reopening_a_pinned_regular_file_does_not_follow_a_replaced_path() {
+        use std::os::unix::fs::OpenOptionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("file.txt");
+        fs::write(&path, "original").unwrap();
+        let pinned = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_PATH)
+            .open(&path)
+            .unwrap();
+        fs::remove_file(&path).unwrap();
+        let replacement = dir.path().join("replacement.txt");
+        fs::write(&replacement, "replacement").unwrap();
+        std::os::unix::fs::symlink(&replacement, &path).unwrap();
+        let mut actual = String::new();
+        reopen_regular(&pinned)
+            .expect("the pinned inode is a regular file")
+            .read_to_string(&mut actual)
+            .unwrap();
+        assert_eq!(actual, "original");
+    }
+
+    #[test]
+    fn confined_reads_never_open_a_fifo_or_a_device() {
+        let (dir, ws, _) = setup();
+        let root = ws.canonicalize(&dir.path().to_string_lossy()).unwrap();
+        let fifo = format!("{root}/pipe");
+        let c = std::ffi::CString::new(fifo.clone()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+        let mut request = confined_to(&root);
+        assert!(matches!(ws.read_confined(&fifo, &request), Err(ConfinedError::NotAFile)));
+        request.roots.push(crate::confined::Confine {
+            path: "/dev".into(),
+            subtree: true,
+        });
+        assert!(matches!(
+            ws.read_confined("/dev/zero", &request),
+            Err(ConfinedError::NotAFile)
+        ));
+    }
+
     #[test]
     fn a_fifo_is_refused_without_blocking() {
         let (_dir, ws, root) = setup();
@@ -457,5 +678,116 @@ mod tests {
         assert_eq!(std::fs::read(&target).unwrap(), b"payload");
         // The pre-staged symlink target must not have been written through.
         assert_eq!(std::fs::read(&outside).unwrap(), b"untouched");
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+    use crate::confined::Confine;
+    use std::os::windows::process::CommandExt;
+
+    /// `mklink /J` makes a junction without the symlink privilege. Paths are
+    /// quoted for cmd; a fixture path must not need more than quotes.
+    fn junction(link: &Path, target: &Path) {
+        for path in [link, target] {
+            assert!(!path.to_str().unwrap().contains(['%', '"', '\r', '\n']));
+        }
+        let result = std::process::Command::new("cmd.exe")
+            .args(["/D", "/V:OFF", "/C"])
+            .raw_arg(format!(
+                "mklink /J \"{}\" \"{}\"",
+                link.display(),
+                target.display()
+            ))
+            .output()
+            .unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    }
+
+    /// A name with an unpaired surrogate spells as `repo\u{FFFD}`, the same
+    /// text as a real sibling; neither canonicalize nor a confined read may
+    /// hand that spelling out, since callers compare it to authorize.
+    #[test]
+    fn a_path_that_cannot_be_spelled_exactly_is_refused() {
+        use std::os::windows::ffi::OsStringExt;
+        let dir = tempfile::tempdir().unwrap();
+        let ws = HostWorkspace::new(WorkspaceEnv::Local);
+        let granted = dir.path().join("repo\u{FFFD}");
+        let lossy = dir
+            .path()
+            .join(std::ffi::OsString::from_wide(&[0x72, 0x65, 0x70, 0x6f, 0xD800]));
+        fs::create_dir(&granted).unwrap();
+        fs::create_dir(&lossy).unwrap();
+        fs::write(lossy.join("private.txt"), b"SECRET").unwrap();
+        // cmd cannot be handed this name, so not a junction.
+        if let Err(error) = std::os::windows::fs::symlink_dir(&lossy, granted.join("link")) {
+            eprintln!("skipped: no symlink privilege ({error})");
+            return;
+        }
+        let root = ws.canonicalize(&granted.to_string_lossy()).unwrap();
+        let through_link = format!("{root}/link/private.txt");
+
+        let canonical = ws.canonicalize(&through_link);
+        assert_eq!(
+            canonical.map_err(|e| e.kind()),
+            Err(io::ErrorKind::InvalidData),
+            "the lossy spelling would read as inside {root}"
+        );
+        let request = ConfinedRead {
+            roots: vec![Confine {
+                path: root,
+                subtree: true,
+            }],
+            secret_policy: false,
+            offset: 0,
+            limit: 1024,
+        };
+        assert!(matches!(
+            ws.read_confined(&through_link, &request),
+            Err(ConfinedError::Inexact)
+        ));
+    }
+
+    /// A junction inside the root that leads out of it, or into a protected
+    /// directory, is refused by the opened file's real path.
+    #[test]
+    fn confined_reads_follow_the_opened_file_through_a_junction() {
+        let dir = tempfile::tempdir().unwrap();
+        let ws = HostWorkspace::new(WorkspaceEnv::Local);
+        let root = ws.canonicalize(&dir.path().to_string_lossy()).unwrap();
+        let inside = dir.path().join("inside");
+        let outside = dir.path().join("outside");
+        let protected = inside.join("keys").join(".ssh");
+        fs::create_dir_all(&inside).unwrap();
+        fs::create_dir_all(&outside).unwrap();
+        fs::create_dir_all(&protected).unwrap();
+        fs::write(outside.join("b.txt"), b"nope").unwrap();
+        fs::write(protected.join("config"), b"SECRET").unwrap();
+        junction(&inside.join("escape"), &outside);
+        junction(&inside.join("innocent"), &protected);
+
+        let request = ConfinedRead {
+            roots: vec![Confine {
+                path: format!("{root}/inside"),
+                subtree: true,
+            }],
+            secret_policy: true,
+            offset: 0,
+            limit: 1024,
+        };
+        let path = |rel: &str| format!("{root}/inside/{rel}");
+        assert!(matches!(
+            ws.read_confined(&path("escape/b.txt"), &request),
+            Err(ConfinedError::Outside)
+        ));
+        assert!(matches!(
+            ws.read_confined(&path("innocent/config"), &request),
+            Err(ConfinedError::Refused(_))
+        ));
+        fs::write(inside.join("a.txt"), b"ok").unwrap();
+        let read = ws.read_confined(&path("a.txt"), &request).unwrap();
+        assert_eq!(read.real_path, path("a.txt"), "the stripped, forward-slash spelling");
+        assert_eq!(read.bytes, b"ok");
     }
 }

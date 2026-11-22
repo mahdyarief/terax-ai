@@ -6,6 +6,7 @@
 
 use std::io::ErrorKind;
 
+use crate::confined::{Confine, ConfinedError, ConfinedRead};
 use crate::grep::{GlobRequest, GrepPattern, GrepRequest};
 use crate::workspace::{EntryKind, ReadRequest, Workspace};
 
@@ -20,6 +21,7 @@ pub fn run(ws: &dyn Workspace, root: &str) {
     canonical_paths(ws, root);
     search_engines(ws, root);
     file_finder_walk(ws, root);
+    confined_reads(ws, root);
 }
 
 fn join(root: &str, name: &str) -> String {
@@ -303,4 +305,87 @@ fn file_finder_walk(ws: &dyn Workspace, root: &str) {
         "max_depth stops the walk"
     );
     assert!(ws.list_files(&tree, false, None, &|| true).is_none(), "a cancelled walk returns nothing");
+}
+
+fn confined_reads(ws: &dyn Workspace, root: &str) {
+    let base = join(root, "confined");
+    ws.create_dir_all(&join(&base, "inside/sub")).unwrap();
+    ws.create_dir_all(&join(&base, "outside")).unwrap();
+    ws.write_atomic(&join(&base, "inside/sub/a.txt"), b"hello").unwrap();
+    ws.write_atomic(&join(&base, "inside/.env"), b"SECRET").unwrap();
+    ws.write_atomic(&join(&base, "outside/b.txt"), b"nope").unwrap();
+    let inside = ws.canonicalize(&join(&base, "inside")).unwrap();
+    let file = ws.canonicalize(&join(&base, "inside/sub/a.txt")).unwrap();
+    let request = |roots: Vec<Confine>, secret_policy: bool| ConfinedRead {
+        roots,
+        secret_policy,
+        offset: 0,
+        limit: 1024,
+    };
+    let subtree = || {
+        vec![Confine {
+            path: inside.clone(),
+            subtree: true,
+        }]
+    };
+
+    let read = ws
+        .read_confined(&join(&base, "inside/sub/a.txt"), &request(subtree(), true))
+        .expect("a file inside the root");
+    assert_eq!(read.bytes, b"hello");
+    assert_eq!(read.size, 5);
+    assert_eq!(read.real_path, file, "the real path is the canonical workspace path");
+
+    let bounded = ws
+        .read_confined(
+            &join(&base, "inside/sub/a.txt"),
+            &ConfinedRead {
+                roots: subtree(),
+                secret_policy: false,
+                offset: 1,
+                limit: 2,
+            },
+        )
+        .unwrap();
+    assert_eq!(bounded.bytes, b"ell", "offset, then up to limit + 1 bytes");
+
+    assert!(matches!(
+        ws.read_confined(&join(&base, "outside/b.txt"), &request(subtree(), true)),
+        Err(ConfinedError::Outside)
+    ));
+    assert!(matches!(
+        ws.read_confined(&join(&base, "inside/.env"), &request(subtree(), true)),
+        Err(ConfinedError::Refused(_))
+    ));
+    assert!(
+        ws.read_confined(&join(&base, "inside/.env"), &request(subtree(), false))
+            .is_ok(),
+        "the secret policy applies only when asked"
+    );
+    assert!(matches!(
+        ws.read_confined(&join(&base, "inside/sub"), &request(subtree(), true)),
+        Err(ConfinedError::NotAFile)
+    ));
+    assert!(matches!(
+        ws.read_confined(&join(&base, "inside/missing.txt"), &request(subtree(), true)),
+        Err(ConfinedError::Io(e)) if e.kind() == ErrorKind::NotFound
+    ));
+
+    let exact = || {
+        vec![Confine {
+            path: file.clone(),
+            subtree: false,
+        }]
+    };
+    assert!(ws
+        .read_confined(&join(&base, "inside/sub/a.txt"), &request(exact(), false))
+        .is_ok());
+    ws.write_atomic(&join(&base, "inside/sub/a.txt.bak"), b"x").unwrap();
+    assert!(
+        matches!(
+            ws.read_confined(&join(&base, "inside/sub/a.txt.bak"), &request(exact(), false)),
+            Err(ConfinedError::Outside)
+        ),
+        "a file root admits that file only"
+    );
 }

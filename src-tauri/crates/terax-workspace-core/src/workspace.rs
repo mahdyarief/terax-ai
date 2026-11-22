@@ -14,6 +14,7 @@ use std::io;
 use std::path::Path;
 
 use crate::env::WorkspaceEnv;
+use crate::confined::{ConfinedError, ConfinedOutcome, ConfinedRead};
 use crate::exec::{capture::Captured, ExecSpec};
 use crate::grep::{GlobRequest, GlobResponse, GrepRequest, GrepResponse};
 use crate::index::FileIndex;
@@ -91,6 +92,14 @@ pub trait Workspace: Send + Sync {
     /// device, also one swapped in after a check) fails with
     /// `ErrorKind::InvalidInput` and never blocks.
     fn read(&self, path: &str, request: ReadRequest) -> io::Result<ReadOutcome>;
+    /// Opens `path`, finds where the opened file really is, and reads it only
+    /// when that real path is inside `request.roots` (and, if asked, passes
+    /// the secret-path policy). Never opens a device or blocks on a FIFO.
+    fn read_confined(
+        &self,
+        path: &str,
+        request: &ConfinedRead,
+    ) -> Result<ConfinedOutcome, ConfinedError>;
     /// Replaces the file's content atomically: readers see the old content or
     /// the new, never a partial file. An existing file keeps its permissions.
     /// The parent directory must exist.

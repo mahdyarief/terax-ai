@@ -1,20 +1,36 @@
 use std::collections::HashMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 
 use tauri::http::{Request, Response};
 use tauri::{Manager, Runtime, UriSchemeContext, UriSchemeResponder};
 
-use crate::modules::workspace::{resolve_path, WorkspaceEnv};
+use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv};
+use terax_workspace_core::confined::{allowed, Confine, ConfinedError, ConfinedRead};
+use terax_workspace_core::workspace::EntryKind;
 
 #[derive(Clone)]
 struct Grant {
     owner: String,
-    root: PathBuf,
+    /// The granted file or directory, a canonical workspace path.
+    root: String,
     directory: bool,
     workspace: WorkspaceEnv,
+}
+
+impl Grant {
+    fn roots(&self) -> Vec<Confine> {
+        vec![Confine {
+            path: self.root.clone(),
+            subtree: self.directory,
+        }]
+    }
+}
+
+/// The secret-path policy for a canonical workspace path, which covers the
+/// app's own credential directory through the path's host spelling.
+fn readable_in(path: &str, workspace: &WorkspaceEnv) -> Result<(), String> {
+    super::read_policy::readable(Path::new(&resolve_path(path, workspace)))
 }
 
 #[derive(Default)]
@@ -44,13 +60,13 @@ impl AssetGrants {
         workspace: WorkspaceEnv,
         generation: u64,
     ) -> Result<String, String> {
-        let root =
-            std::fs::canonicalize(resolve_path(path, &workspace)).map_err(|e| e.to_string())?;
-        let directory = root.is_dir();
+        let ws = backend_for(&workspace);
+        let root = ws.canonicalize(path).map_err(|e| e.to_string())?;
+        let directory = ws.metadata(&root).map_err(|e| e.to_string())?.kind == EntryKind::Dir;
         if directory {
-            super::read_policy::readable(&root)?;
+            readable_in(&root, &workspace)?;
         }
-        if !directory && asset_type(&root).is_none() {
+        if !directory && asset_type(Path::new(&root)).is_none() {
             return Err("only supported preview files can be granted".into());
         }
         let mut state = self.0.lock().unwrap();
@@ -204,40 +220,17 @@ fn respond(
     )
     .decode_utf8()
     .map_err(|e| e.to_string())?;
-    let path =
-        std::fs::canonicalize(resolve_path(&path, &grant.workspace)).map_err(|e| e.to_string())?;
+    let ws = backend_for(&grant.workspace);
+    // Checked by name first for a clear refusal, then again below by the file
+    // that was actually opened, which is what decides.
+    let path = ws.canonicalize(&path).map_err(|e| e.to_string())?;
     if grant.directory {
-        super::read_policy::readable(&path)?;
+        readable_in(&path, &grant.workspace)?;
     }
-    if !within(&path, &grant) {
+    if !allowed(&path, &grant.roots()) {
         return Err("outside media grant".into());
     }
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NONBLOCK);
-    }
-    let mut file = options.open(&path).map_err(|e| e.to_string())?;
-    let actual = opened_path(&file)?;
-    if grant.directory {
-        super::read_policy::readable(&actual)?;
-    }
-    if !within(&actual, &grant) {
-        return Err("opened asset escaped its grant".into());
-    }
-    let mime = asset_type(&actual).ok_or("unsupported preview asset")?;
-    if grant.directory
-        && mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-    {
-        return Err("DOCX preview requires a direct file grant".into());
-    }
-    let meta = file.metadata().map_err(|e| e.to_string())?;
-    if !meta.is_file() {
-        return Err("asset is not a regular file".into());
-    }
-    let size = meta.len();
+    let size = ws.metadata(&path).map_err(|e| e.to_string())?.len;
     let range = request
         .headers()
         .get("Range")
@@ -252,14 +245,39 @@ fn respond(
         })
         .transpose()?;
     let (start, length) = range.unwrap_or((0, size));
-    let mut body = Vec::new();
-    if request.method() != "HEAD" {
-        file.seek(SeekFrom::Start(start))
-            .map_err(|e| e.to_string())?;
-        file.take(length)
-            .read_to_end(&mut body)
-            .map_err(|e| e.to_string())?;
+    let head = request.method() == "HEAD";
+    let read = ws
+        .read_confined(
+            &path,
+            &ConfinedRead {
+                roots: grant.roots(),
+                secret_policy: grant.directory,
+                offset: start,
+                limit: if head { 0 } else { length },
+            },
+        )
+        .map_err(|error| match error {
+            ConfinedError::NotAFile => "asset is not a regular file".to_string(),
+            ConfinedError::Outside | ConfinedError::Inexact => {
+                "opened asset escaped its grant".to_string()
+            }
+            error => error.to_string(),
+        })?;
+    if grant.directory {
+        readable_in(&read.real_path, &grant.workspace)?;
     }
+    // The range was computed from the size seen before opening.
+    if read.size != size {
+        return Err("asset changed while it was served".into());
+    }
+    let mime = asset_type(Path::new(&read.real_path)).ok_or("unsupported preview asset")?;
+    if grant.directory
+        && mime == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    {
+        return Err("DOCX preview requires a direct file grant".into());
+    }
+    let mut body = read.bytes;
+    body.truncate(if head { 0 } else { length as usize });
     let mut result = response(if range.is_some() { 206 } else { 200 }, mime, body);
     result
         .headers_mut()
@@ -276,22 +294,6 @@ fn respond(
         );
     }
     Ok(result)
-}
-
-fn within(path: &Path, grant: &Grant) -> bool {
-    #[cfg(unix)]
-    {
-        path == grant.root || (grant.directory && path.starts_with(&grant.root))
-    }
-    #[cfg(windows)]
-    {
-        if path.to_str().is_none() || grant.root.to_str().is_none() {
-            return false;
-        }
-        let path = super::to_canon(path);
-        let root = super::to_canon(&grant.root);
-        path == root || (grant.directory && Path::new(&path).starts_with(root))
-    }
 }
 
 fn asset_type(path: &Path) -> Option<&'static str> {
@@ -322,32 +324,6 @@ fn asset_type(path: &Path) -> Option<&'static str> {
             _ => return None,
         },
     )
-}
-
-fn opened_path(file: &File) -> Result<PathBuf, String> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::fd::AsRawFd;
-        use std::os::unix::ffi::OsStrExt;
-        let mut buffer = [0u8; libc::PATH_MAX as usize];
-        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) } == -1 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        let end = buffer
-            .iter()
-            .position(|&byte| byte == 0)
-            .ok_or("invalid path")?;
-        Ok(PathBuf::from(std::ffi::OsStr::from_bytes(&buffer[..end])))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::fd::AsRawFd;
-        std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).map_err(|e| e.to_string())
-    }
-    #[cfg(windows)]
-    {
-        super::local_file::canonicalize(file).map(PathBuf::from)
-    }
 }
 
 #[cfg(test)]
@@ -386,21 +362,46 @@ mod tests {
             .is_ok());
     }
 
-    #[cfg(unix)]
+    /// A directory whose name is not valid Unicode spells like a real
+    /// sibling (`repo\u{FFFD}`); a link from the granted one into it must not
+    /// be served as if it were inside the grant.
     #[test]
-    fn byte_distinct_siblings_are_not_inside_a_media_grant() {
-        use std::os::unix::ffi::OsStrExt;
-        let grant = Grant {
-            owner: "main".into(),
-            root: PathBuf::from("/repo�"),
-            directory: true,
-            workspace: WorkspaceEnv::Local,
+    fn a_link_into_a_lossy_sibling_is_not_inside_a_media_grant() {
+        let dir = tempfile::tempdir().unwrap();
+        let granted = dir.path().join("repo\u{FFFD}");
+        #[cfg(unix)]
+        let lossy = {
+            use std::os::unix::ffi::OsStrExt;
+            dir.path().join(std::ffi::OsStr::from_bytes(b"repo\xff"))
         };
-        assert!(!within(
-            Path::new(std::ffi::OsStr::from_bytes(b"/repo\xff/private.png")),
-            &grant
-        ));
-        assert!(within(Path::new("/repo�/safe.png"), &grant));
+        #[cfg(windows)]
+        let lossy = {
+            use std::os::windows::ffi::OsStringExt;
+            dir.path().join(std::ffi::OsString::from_wide(&[0x72, 0x65, 0x70, 0x6f, 0xD800]))
+        };
+        std::fs::create_dir(&granted).unwrap();
+        std::fs::create_dir(&lossy).unwrap();
+        std::fs::write(lossy.join("private.png"), "SYNTHETIC_PRIVATE_MEDIA").unwrap();
+        std::fs::write(granted.join("safe.png"), "SAFE").unwrap();
+        let link = granted.join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&lossy, &link).unwrap();
+        #[cfg(windows)]
+        if std::os::windows::fs::symlink_dir(&lossy, &link).is_err() {
+            eprintln!("skipped: no symlink privilege");
+            return;
+        }
+        let grants = AssetGrants::default();
+        let token = grants
+            .grant(
+                "main".into(),
+                &super::super::to_canon(&granted),
+                WorkspaceEnv::Local,
+                0,
+            )
+            .unwrap();
+        assert!(respond(&grants, "main", &request(&granted.join("safe.png"), &token)).is_ok());
+        assert!(respond(&grants, "main", &request(&link.join("private.png"), &token)).is_err());
     }
 
     #[test]

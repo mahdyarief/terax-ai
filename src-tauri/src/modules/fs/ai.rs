@@ -1,5 +1,3 @@
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use globset::{Glob, GlobSetBuilder};
@@ -11,7 +9,11 @@ use super::file::ReadResult;
 use super::grep::{GlobHit, GlobResponse, GrepHit, GrepResponse};
 use super::read_policy::readable;
 use super::tree::DirEntry;
-use crate::modules::workspace::{resolve_path, WorkspaceEnv, WorkspaceRegistry};
+use crate::modules::workspace::{
+    backend_for, resolve_path, Location, WorkspaceEnv, WorkspaceRegistry,
+};
+use terax_workspace_core::confined::{Confine, ConfinedError, ConfinedRead};
+use terax_workspace_core::paths::join;
 
 fn path_error(error: std::io::Error) -> String {
     if error.kind() == std::io::ErrorKind::NotFound {
@@ -32,105 +34,82 @@ fn authorized(registry: &WorkspaceRegistry, path: &Path) -> Result<PathBuf, Stri
     Ok(canonical)
 }
 
-fn opened_path(file: &File) -> Result<PathBuf, String> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::fd::AsRawFd;
-        use std::os::unix::ffi::OsStrExt;
-        let mut buffer = [0u8; libc::PATH_MAX as usize];
-        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETPATH, buffer.as_mut_ptr()) } == -1 {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        let end = buffer
-            .iter()
-            .position(|&b| b == 0)
-            .ok_or("invalid file path")?;
-        Ok(PathBuf::from(std::ffi::OsStr::from_bytes(&buffer[..end])))
-    }
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::fd::AsRawFd;
-        std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd())).map_err(|e| e.to_string())
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStringExt;
-        use std::os::windows::io::AsRawHandle;
-        use windows_sys::Win32::Storage::FileSystem::GetFinalPathNameByHandleW;
-        let mut buffer = vec![0u16; 32768];
-        let len = unsafe {
-            GetFinalPathNameByHandleW(
-                file.as_raw_handle(),
-                buffer.as_mut_ptr(),
-                buffer.len() as u32,
-                0,
-            )
-        } as usize;
-        if len == 0 || len >= buffer.len() {
-            return Err(std::io::Error::last_os_error().to_string());
-        }
-        Ok(PathBuf::from(std::ffi::OsString::from_wide(&buffer[..len])))
-    }
+/// The secret-path policy for a workspace path, by its host spelling (which
+/// also covers the app's own credential directory).
+fn readable_in(path: &str, workspace: &WorkspaceEnv) -> Result<(), String> {
+    readable(&resolve_path(path, workspace))
 }
 
-#[cfg(target_os = "linux")]
-fn reopen_regular(file: &File) -> Result<File, String> {
-    use std::os::fd::AsRawFd;
-    if !file.metadata().map_err(path_error)?.is_file() {
-        return Err("AI reads require a regular file".into());
+/// `authorized` for a workspace path: the canonical workspace path, when it
+/// and the name it was asked by both pass the policy and the registry covers it.
+fn authorized_in(
+    registry: &WorkspaceRegistry,
+    workspace: &WorkspaceEnv,
+    path: &str,
+) -> Result<String, String> {
+    readable_in(path, workspace)?;
+    let canonical = backend_for(workspace)
+        .canonicalize(path)
+        .map_err(path_error)?;
+    readable_in(&canonical, workspace)?;
+    if !registry.covers(workspace, &canonical) {
+        return Err("AI path is outside the authorized workspace".into());
     }
-    File::open(format!("/proc/self/fd/{}", file.as_raw_fd())).map_err(path_error)
+    Ok(canonical)
 }
 
-fn open_read_file(path: &Path) -> Result<File, String> {
-    let mut options = std::fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        #[cfg(target_os = "linux")]
-        options.custom_flags(libc::O_PATH);
-        #[cfg(not(target_os = "linux"))]
-        options.custom_flags(libc::O_NONBLOCK);
-    }
-    let file = options.open(path).map_err(path_error)?;
-    #[cfg(target_os = "linux")]
-    {
-        // Pin without opening a device, then reopen that same regular inode for reading.
-        reopen_regular(&file)
-    }
-    #[cfg(not(target_os = "linux"))]
-    {
-        Ok(file)
-    }
-}
-
+/// `read_file_in` for a host path (the search walk's entries).
 pub fn read_file(
     registry: &WorkspaceRegistry,
     path: &Path,
     limit: u64,
 ) -> Result<ReadResult, String> {
-    let path = authorized(registry, path)?;
-    let file = open_read_file(&path)?;
-    let actual = opened_path(&file)?;
-    readable(&actual)?;
-    if !registry.is_authorized(&actual) {
+    let location = Location::of_host(path).ok_or("refused non-UTF-8 AI path")?;
+    read_file_in(registry, &location.env, &location.path, limit)
+}
+
+/// Reads an authorized file, decided by the file actually opened: it must be
+/// the very file that was authorized by name (a link swapped in between is
+/// refused) and pass the secret-path policy by its real path.
+pub fn read_file_in(
+    registry: &WorkspaceRegistry,
+    workspace: &WorkspaceEnv,
+    path: &str,
+    limit: u64,
+) -> Result<ReadResult, String> {
+    let canonical = authorized_in(registry, workspace, path)?;
+    let read = backend_for(workspace)
+        .read_confined(
+            &canonical,
+            &ConfinedRead {
+                roots: vec![Confine {
+                    path: canonical.clone(),
+                    subtree: false,
+                }],
+                secret_policy: true,
+                offset: 0,
+                limit,
+            },
+        )
+        .map_err(|error| match error {
+            ConfinedError::NotAFile => "AI reads require a regular file".to_string(),
+            ConfinedError::Outside | ConfinedError::Inexact => {
+                "opened AI file is outside the authorized workspace".to_string()
+            }
+            ConfinedError::Refused(why) => why.to_string(),
+            ConfinedError::Io(error) => path_error(error),
+        })?;
+    readable_in(&read.real_path, workspace)?;
+    if !registry.covers(workspace, &read.real_path) {
         return Err("opened AI file is outside the authorized workspace".into());
     }
-    let meta = file.metadata().map_err(|e| e.to_string())?;
-    if !meta.is_file() {
-        return Err("AI reads require a regular file".into());
-    }
-    if meta.len() > limit {
+    if read.size > limit {
         return Ok(ReadResult::TooLarge {
-            size: meta.len(),
+            size: read.size,
             limit,
         });
     }
-    let mut bytes = Vec::new();
-    file.take(limit + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| e.to_string())?;
+    let bytes = read.bytes;
     let size = bytes.len() as u64;
     if size > limit {
         return Ok(ReadResult::TooLarge { size, limit });
@@ -155,9 +134,10 @@ pub async fn ai_read_file(
     workspace: Option<WorkspaceEnv>,
 ) -> Result<ReadResult, String> {
     super::blocking(move || {
-        read_file(
+        read_file_in(
             &app.state::<WorkspaceRegistry>(),
-            &resolve_path(&path, &WorkspaceEnv::from_option(workspace)),
+            &WorkspaceEnv::from_option(workspace),
+            &path,
             10 * 1024 * 1024,
         )
     })
@@ -172,19 +152,15 @@ pub async fn ai_read_dir(
 ) -> Result<Vec<DirEntry>, String> {
     super::blocking(move || {
         let registry = app.state::<WorkspaceRegistry>();
-        let path = authorized(
-            &registry,
-            &resolve_path(&path, &WorkspaceEnv::from_option(workspace)),
-        )?;
-        let entries = super::tree::read_dir_entries(
-            super::to_canon(&path),
-            false,
-            None,
-            Some(WorkspaceEnv::Local),
-        )?;
+        let workspace = WorkspaceEnv::from_option(workspace);
+        let path = authorized_in(&registry, &workspace, &path)?;
+        let entries =
+            super::tree::read_dir_entries(path.clone(), false, None, Some(workspace.clone()))?;
         Ok(entries
             .into_iter()
-            .filter(|entry| authorized(&registry, &path.join(&entry.name)).is_ok())
+            .filter(|entry| {
+                authorized_in(&registry, &workspace, &join(&path, &entry.name)).is_ok()
+            })
             .collect())
     })
     .await
@@ -338,6 +314,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn special_files_are_rejected_without_a_data_open() {
+        use std::fs::File;
+        use std::io::Read;
         use std::os::fd::{AsRawFd, FromRawFd};
         use std::os::unix::ffi::OsStrExt;
         use std::os::unix::fs::OpenOptionsExt;
@@ -370,30 +348,6 @@ mod tests {
             events.read(&mut bytes).unwrap_err().kind(),
             std::io::ErrorKind::WouldBlock
         );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn reopening_a_pinned_regular_file_does_not_follow_a_replaced_path() {
-        use std::os::unix::fs::OpenOptionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("file.txt");
-        std::fs::write(&path, "original").unwrap();
-        let pinned = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_PATH)
-            .open(&path)
-            .unwrap();
-        std::fs::remove_file(&path).unwrap();
-        let replacement = dir.path().join("replacement.txt");
-        std::fs::write(&replacement, "replacement").unwrap();
-        std::os::unix::fs::symlink(&replacement, &path).unwrap();
-        let mut actual = String::new();
-        reopen_regular(&pinned)
-            .unwrap()
-            .read_to_string(&mut actual)
-            .unwrap();
-        assert_eq!(actual, "original");
     }
 
     #[test]
