@@ -302,7 +302,11 @@ export function SpaceSwitcher({
             <Kbd className="h-5 bg-muted/70 text-[10px]">{shortcut}</Kbd>
           )}
         </div>
-        <div className="-mx-0.5 max-h-[60vh] overflow-y-auto px-0.5">
+        {/* The gutter is reserved so rows keep their width when the list
+            grows past the cap; the negative right margin lets the bar sit in
+            the popover's padding instead of eating into the rows. */}
+        <div className="terax-visible-scrollbar -ml-0.5 -mr-1.5 max-h-[60vh] overflow-y-auto overflow-x-hidden pl-0.5 [scrollbar-gutter:stable]"
+        >
           {spaces.map((sp) => (
             <SpaceRow
               key={sp.id}

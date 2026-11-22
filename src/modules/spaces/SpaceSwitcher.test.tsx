@@ -85,6 +85,20 @@ it("renders Space actions without hover-only visibility classes", () => {
   expect(html).not.toContain("group-hover:hidden");
 });
 
+it("caps the space list and shows its scrollbar", () => {
+  // Native scrollbars are hidden app-wide (globals.css), so a long list is
+  // only discoverable and draggable-by-thumb when it opts back in.
+  const html = renderSwitcher();
+  const list = [...html.matchAll(/class="([^"]*max-h-\[60vh\][^"]*)"/g)].map(
+    (m) => m[1].split(/\s+/),
+  );
+
+  expect(list).toHaveLength(1);
+  expect(list[0]).toContain("overflow-y-auto");
+  expect(list[0]).toContain("terax-visible-scrollbar");
+  expect(list[0]).toContain("[scrollbar-gutter:stable]");
+});
+
 it("hides window-opening actions in a dedicated space window", () => {
   currentWindowLabel = "space-space-1";
   currentHostWindowLabel = "space-space-1";
