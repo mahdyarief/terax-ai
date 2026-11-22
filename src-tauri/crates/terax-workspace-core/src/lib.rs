@@ -9,6 +9,7 @@ pub mod host;
 pub mod import;
 pub mod index;
 pub mod paths;
+pub mod watch;
 pub mod workspace;
 
 /// Behaviour checks shared by every backend's tests.

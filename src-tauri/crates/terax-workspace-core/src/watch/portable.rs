@@ -9,7 +9,7 @@ use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watche
 
 use super::plan::{self, Batch, ListingChange, WatchSet};
 use super::{Backend, Sink};
-use crate::modules::fs::to_canon;
+use crate::paths::to_canon;
 
 pub struct Notify {
     watcher: RecommendedWatcher,

@@ -129,11 +129,13 @@ pub trait Workspace: Send + Sync {
 - [x] Contract suite gains a walk case (pruned and ignored directories, hidden entries, depth cap, directory flags, cancellation). Mutation-checked.
 - The invalidation prefix is still computed on the canonical host path, because watcher events and mutation notes report host paths (UNC for WSL). Task 8 decides the event path space; the remote backend needs events in workspace paths. The root checks in `search.rs` (`search_root`) also still stat the host path and move with it.
 
-### Task 8: Move the watcher behind `Workspace::watch`
+### Task 8: Move the watcher engine into the core
 
-- [ ] Move `fs/watch/plan.rs` (pure) and `fs/watch/portable.rs` (`notify`) into `watch/`. The macOS FSEvents backend stays in the app and implements the same sink, selected by `HostWorkspace` on macOS.
-- [ ] `fs_watch_add` / `fs_watch_remove` keep emitting `fs:changed` with the same payload; the emission is the only Tauri part.
-- [ ] Existing watch tests move with the planner; add a contract case that a file created under a watched directory produces one debounced event.
+- [x] `plan.rs` (planner), `portable.rs` (`notify`) and the engine (`Watcher`: debounce, listing re-reads, file stamps, `Sink`, `Backend`) moved into the core's `watch/`. The app supplies two small traits: `ChangeNotes` (the file-finder index) and `Reporter` (internal taps and the `fs:changed` emit, which is the only Tauri part).
+- [x] The watcher is a service, not a per-call operation, so it is not a `Workspace` method: a remote workspace will run this same engine in the agent and stream its reports. `FsWatchState`, the commands and path authorization stay in the app.
+- [x] The macOS FSEvents backend stays in the app and plugs into the core's `Backend`/`Sink`, re-exported under their old paths; `macos.rs` changed by one line (its test fixture's `Sink` field). It cannot be compiled on Windows, so it is verified by the macOS CI job only.
+- [x] The 37 engine tests moved with it; an end-to-end test drives the real `notify` backend (create a file, expect one debounced report and the change note).
+- Paths stay canonical host paths. The remote backend will report workspace paths from the agent; how the app tells the two apart is decided with Task 11's per-env registry.
 
 ### Task 9: Generalize the process runner and route git through it
 

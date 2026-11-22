@@ -10,8 +10,14 @@ globset = "0.4"
 grep-regex = "0.1"
 grep-searcher = "0.1"
 ignore = "0.4"
+log = "0.4"
 serde = { version = "1", features = ["derive"] }
 tempfile = "3"
+
+# inotify (Linux) and ReadDirectoryChangesW (Windows). macOS drives FSEvents
+# from the app (src/modules/fs/watch/macos.rs), which keeps notify out of that build.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+notify = "8.2.0"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

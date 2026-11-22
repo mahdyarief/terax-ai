@@ -293,7 +293,7 @@ mod tests {
             let sink = Sink {
                 tx,
                 dirs: Arc::new(RwLock::new(Arc::new(plan::DirSet::new()))),
-                index: FileIndexState::default(),
+                notes: Arc::new(FileIndexState::default()),
             };
             Self {
                 backend: FsEvents::new(sink.clone()).unwrap(),
