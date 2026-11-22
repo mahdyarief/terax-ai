@@ -61,7 +61,7 @@ fn open(
     workspace: &WorkspaceEnv,
 ) -> Result<ResolvedGitDirectory> {
     let repo = open_worktree(registry, root, workspace)?;
-    if workspace.is_wsl() {
+    if !workspace.is_local() {
         return Err(GitError::Unsupported(
             "task worktrees are not supported in WSL workspaces yet",
         ));

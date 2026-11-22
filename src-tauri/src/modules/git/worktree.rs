@@ -168,7 +168,7 @@ pub fn list(
 ) -> Result<Vec<WorktreeEntry>> {
     let repo = open_worktree(registry, repo_root, workspace)?;
     let entries = list_entries(&repo)?;
-    if !workspace.is_wsl() {
+    if workspace.is_local() {
         let common = common_dir(&repo)?;
         for entry in &entries {
             authorize_linked(registry, &repo, &common, entry);
@@ -417,7 +417,7 @@ fn add_inner(
     workspace: &WorkspaceEnv,
     claimed: Option<Target>,
 ) -> Result<WorktreeAdded> {
-    if workspace.is_wsl() {
+    if !workspace.is_local() {
         return Err(GitError::Unsupported(WSL_WORKTREES_UNSUPPORTED));
     }
     let repo = open_worktree(registry, repo_root, workspace)?;
@@ -1143,7 +1143,7 @@ fn remove_inner(
     limits: RemoveLimits,
     inspect: Option<&[String]>,
 ) -> Result<WorktreeRemoveReport> {
-    if workspace.is_wsl() {
+    if !workspace.is_local() {
         return Err(GitError::Unsupported(WSL_WORKTREES_UNSUPPORTED));
     }
     let repo = open_worktree(registry, repo_root, workspace)?;
@@ -1193,7 +1193,7 @@ fn remove_inner(
     }
 
     if entry.exists {
-        if !workspace.is_wsl() {
+        if workspace.is_local() {
             // After a restart nothing has listed this worktree yet.
             authorize_linked(registry, &repo, &common_dir(&repo)?, &entry);
         }

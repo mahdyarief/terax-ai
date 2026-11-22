@@ -23,6 +23,14 @@ impl WorkspaceEnv {
     pub fn is_wsl(&self) -> bool {
         matches!(self, Self::Wsl { .. })
     }
+
+    /// A workspace on this machine's own file system. Features that work on
+    /// host paths only (checkpoints, task worktrees, creating and removing
+    /// worktrees, the git state watcher) require it, so every other kind of
+    /// workspace, today WSL and later a remote host, is refused by default.
+    pub fn is_local(&self) -> bool {
+        matches!(self, Self::Local)
+    }
 }
 
 #[cfg(windows)]
@@ -210,6 +218,16 @@ mod tests {
 #[cfg(test)]
 mod wire_tests {
     use super::WorkspaceEnv;
+
+    #[test]
+    fn only_a_local_workspace_is_local() {
+        assert!(WorkspaceEnv::Local.is_local());
+        let wsl = WorkspaceEnv::Wsl {
+            distro: "Ubuntu".into(),
+        };
+        assert!(!wsl.is_local());
+        assert!(wsl.is_wsl() && !WorkspaceEnv::Local.is_wsl());
+    }
 
     // The frontend sends these exact shapes (src/modules/workspace/env.ts).
     // Changing the serde attributes would break every command silently.

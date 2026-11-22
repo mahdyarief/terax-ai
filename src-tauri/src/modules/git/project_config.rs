@@ -255,7 +255,7 @@ pub fn read(
     workspace: &WorkspaceEnv,
 ) -> Result<ProjectConfig> {
     let repo = open_worktree(registry, root, workspace)?;
-    if workspace.is_wsl() {
+    if !workspace.is_local() {
         return Err(GitError::Unsupported(
             "task configuration is not supported in WSL workspaces yet",
         ));

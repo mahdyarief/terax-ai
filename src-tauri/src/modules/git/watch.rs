@@ -794,7 +794,7 @@ impl GitWatchState {
     ) -> Result<GitWatchInfo> {
         let repo = open_worktree(registry, repo_root, workspace)?;
         let key = repo.git_path.clone();
-        if workspace.is_wsl() {
+        if !workspace.is_local() {
             return Ok(GitWatchInfo {
                 watching: false,
                 repo: key,
