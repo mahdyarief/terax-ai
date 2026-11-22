@@ -72,6 +72,7 @@ type Props = {
   rootPath: string | null;
   activeFilePath?: string | null;
   onOpenFile: (path: string, pin?: boolean) => void;
+  onOpenFolder?: () => void;
   onPathRenamed?: (from: string, to: string) => void;
   onPathsDeleted?: (paths: string[]) => void;
   canReplacePath?: (path: string) => boolean;
@@ -215,6 +216,7 @@ export const FileExplorer = memo(
       rootPath,
       activeFilePath,
       onOpenFile,
+      onOpenFolder,
       onPathRenamed,
       onPathsDeleted,
       canReplacePath,
@@ -677,18 +679,39 @@ export const FileExplorer = memo(
         onKeyDown={handleKeyDown}
       >
         <div className="flex h-8 shrink-0 items-center gap-1 border-b border-border/60 px-2">
-          <span
-            className="flex flex-1 items-center truncate text-xs font-medium text-foreground/80"
-            title={rootPath}
+          <button
+            type="button"
+            className="flex flex-1 items-center truncate text-left text-xs font-medium text-foreground/80 outline-none hover:text-foreground"
+            title={
+              rootPath
+                ? `${rootPath} (click to change folder)`
+                : "Click to open folder"
+            }
+            onClick={onOpenFolder}
           >
             <FolderIcon
-              name={basename(rootPath)}
+              name={rootPath ? basename(rootPath) : ""}
               height={15}
               width={15}
-              className="mx-1.5"
+              className="mx-1.5 shrink-0"
             />
-            {basename(rootPath)}
-          </span>
+            <span className="truncate">
+              {rootPath ? basename(rootPath) : "Open Folder…"}
+            </span>
+          </button>
+
+          {onOpenFolder && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-6 text-muted-foreground hover:text-foreground"
+              onClick={onOpenFolder}
+              title="Open folder"
+              aria-label="Open folder"
+            >
+              <HugeiconsIcon icon={Folder01Icon} size={13} strokeWidth={2} />
+            </Button>
+          )}
 
           <Button
             variant="ghost"
@@ -705,7 +728,8 @@ export const FileExplorer = memo(
             variant="ghost"
             size="icon"
             className="size-6 text-muted-foreground hover:text-foreground"
-            onClick={() => tree.beginCreate(rootPath, "file")}
+            onClick={() => rootPath && tree.beginCreate(rootPath, "file")}
+            disabled={!rootPath}
             title="New file"
           >
             <HugeiconsIcon icon={FileAddIcon} size={13} strokeWidth={2} />
@@ -714,7 +738,8 @@ export const FileExplorer = memo(
             variant="ghost"
             size="icon"
             className="size-6 text-muted-foreground hover:text-foreground"
-            onClick={() => tree.beginCreate(rootPath, "dir")}
+            onClick={() => rootPath && tree.beginCreate(rootPath, "dir")}
+            disabled={!rootPath}
             title="New folder"
           >
             <HugeiconsIcon icon={FolderAddIcon} size={13} strokeWidth={2} />
@@ -723,7 +748,8 @@ export const FileExplorer = memo(
             variant="ghost"
             size="icon"
             className="size-6 text-muted-foreground hover:text-foreground"
-            onClick={() => tree.refresh(rootPath)}
+            onClick={() => rootPath && tree.refresh(rootPath)}
+            disabled={!rootPath}
             title="Refresh"
           >
             <HugeiconsIcon icon={Refresh01Icon} size={12} strokeWidth={2} />
@@ -786,73 +812,92 @@ export const FileExplorer = memo(
                   setMenuNonce((n) => n + 1);
                 }}
               >
-                {pendingAtRoot ? (
-                  <div
-                    className="flex h-6 w-full min-w-0 items-center gap-2 px-1.5 text-[13px]"
-                    style={{ paddingLeft: 6 }}
-                  >
-                    <span className="size-3.5 shrink-0" />
-                    {pendingAtRoot.kind === "dir" ? (
-                      <FolderIcon
-                        name=""
-                        className="size-4 shrink-0 opacity-70"
-                      />
-                    ) : (
-                      <FileIcon
-                        name="untitled"
-                        className="size-4 shrink-0 opacity-70"
-                      />
+                {!rootPath ? (
+                  <div className="flex flex-col items-center justify-center gap-3 p-6 text-center text-xs text-muted-foreground">
+                    <span>No folder open in this workspace</span>
+                    {onOpenFolder && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={onOpenFolder}
+                        className="h-7 gap-1.5 text-xs text-foreground"
+                      >
+                        <HugeiconsIcon icon={Folder01Icon} size={13} strokeWidth={2} />
+                        Open Folder…
+                      </Button>
                     )}
-                    <InlineInput
-                      initial=""
-                      placeholder={
-                        pendingAtRoot.kind === "dir" ? "New folder" : "New file"
-                      }
-                      onCommit={tree.commitCreate}
-                      onCancel={tree.cancelCreate}
-                    />
                   </div>
-                ) : null}
-                {root?.status === "loading" && (
-                  <div className="px-3 py-2 text-[11px] text-muted-foreground">
-                    Loading…
-                  </div>
+                ) : (
+                  <>
+                    {pendingAtRoot ? (
+                      <div
+                        className="flex h-6 w-full min-w-0 items-center gap-2 px-1.5 text-[13px]"
+                        style={{ paddingLeft: 6 }}
+                      >
+                        <span className="size-3.5 shrink-0" />
+                        {pendingAtRoot.kind === "dir" ? (
+                          <FolderIcon
+                            name=""
+                            className="size-4 shrink-0 opacity-70"
+                          />
+                        ) : (
+                          <FileIcon
+                            name="untitled"
+                            className="size-4 shrink-0 opacity-70"
+                          />
+                        )}
+                        <InlineInput
+                          initial=""
+                          placeholder={
+                            pendingAtRoot.kind === "dir" ? "New folder" : "New file"
+                          }
+                          onCommit={tree.commitCreate}
+                          onCancel={tree.cancelCreate}
+                        />
+                      </div>
+                    ) : null}
+                    {root?.status === "loading" && (
+                      <div className="px-3 py-2 text-[11px] text-muted-foreground">
+                        Loading…
+                      </div>
+                    )}
+                    {root?.status === "error" && (
+                      <div className="px-3 py-2 text-[11px] text-destructive">
+                        {root.message}
+                      </div>
+                    )}
+                    {root?.status === "loaded" ? (
+                      <div
+                        style={{
+                          height: virtualizer.getTotalSize(),
+                          position: "relative",
+                          width: "100%",
+                        }}
+                      >
+                        {virtualizer.getVirtualItems().map((virtualRow) => {
+                          const row = rows[virtualRow.index];
+                          if (!row) return null;
+                          return (
+                            <div
+                              key={virtualRow.key}
+                              data-virtual-row-index={virtualRow.index}
+                              style={{
+                                position: "absolute",
+                                top: 0,
+                                left: 0,
+                                width: "100%",
+                                height: virtualRow.size,
+                                transform: `translateY(${virtualRow.start}px)`,
+                              }}
+                            >
+                              {renderRow(row)}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </>
                 )}
-                {root?.status === "error" && (
-                  <div className="px-3 py-2 text-[11px] text-destructive">
-                    {root.message}
-                  </div>
-                )}
-                {root?.status === "loaded" ? (
-                  <div
-                    style={{
-                      height: virtualizer.getTotalSize(),
-                      position: "relative",
-                      width: "100%",
-                    }}
-                  >
-                    {virtualizer.getVirtualItems().map((virtualRow) => {
-                      const row = rows[virtualRow.index];
-                      if (!row) return null;
-                      return (
-                        <div
-                          key={virtualRow.key}
-                          data-virtual-row-index={virtualRow.index}
-                          style={{
-                            position: "absolute",
-                            top: 0,
-                            left: 0,
-                            width: "100%",
-                            height: virtualRow.size,
-                            transform: `translateY(${virtualRow.start}px)`,
-                          }}
-                        >
-                          {renderRow(row)}
-                        </div>
-                      );
-                    })}
-                  </div>
-                ) : null}
               </div>
             </ContextMenuTrigger>
             <ContextMenuContent
@@ -1005,7 +1050,15 @@ export const FileExplorer = memo(
                 </>
               ) : (
                 <>
-                  {onRevealInTerminal && (
+                  {onOpenFolder && (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={onOpenFolder}
+                    >
+                      Open Folder…
+                    </ContextMenuItem>
+                  )}
+                  {rootPath && onRevealInTerminal && (
                     <ContextMenuItem
                       className={COMPACT_ITEM}
                       onSelect={() => onRevealInTerminal(rootPath)}
@@ -1013,7 +1066,7 @@ export const FileExplorer = memo(
                       Open in Terminal
                     </ContextMenuItem>
                   )}
-                  {onOpenInSourceControl && (
+                  {rootPath && onOpenInSourceControl && (
                     <ContextMenuItem
                       className={COMPACT_ITEM}
                       onSelect={() => onOpenInSourceControl(rootPath)}
@@ -1021,7 +1074,7 @@ export const FileExplorer = memo(
                       Open in Source Control
                     </ContextMenuItem>
                   )}
-                  {onOpenGitHistory && (
+                  {rootPath && onOpenGitHistory && (
                     <ContextMenuItem
                       className={COMPACT_ITEM}
                       onSelect={() => onOpenGitHistory(rootPath)}
@@ -1029,45 +1082,51 @@ export const FileExplorer = memo(
                       Open Git History
                     </ContextMenuItem>
                   )}
-                  <ContextMenuItem
-                    className={COMPACT_ITEM}
-                    onSelect={() => void revealInFinder(rootPath)}
-                  >
-                    Reveal in Finder
-                  </ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem
-                    className={COMPACT_ITEM}
-                    onSelect={() => tree.beginCreate(rootPath, "file")}
-                  >
-                    New File
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    className={COMPACT_ITEM}
-                    onSelect={() => tree.beginCreate(rootPath, "dir")}
-                  >
-                    New Folder
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    className={COMPACT_ITEM}
-                    onSelect={() => void pasteInto(rootPath)}
-                  >
-                    Paste
-                    <ContextMenuShortcut>{PASTE_HINT}</ContextMenuShortcut>
-                  </ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem
-                    className={COMPACT_ITEM}
-                    onSelect={() => void copyToClipboard(rootPath)}
-                  >
-                    Copy Path
-                  </ContextMenuItem>
-                  <ContextMenuItem
-                    className={COMPACT_ITEM}
-                    onSelect={() => tree.refresh(rootPath)}
-                  >
-                    Refresh
-                  </ContextMenuItem>
+                  {rootPath && (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => void revealInFinder(rootPath)}
+                    >
+                      Reveal in Finder
+                    </ContextMenuItem>
+                  )}
+                  {rootPath && <ContextMenuSeparator />}
+                  {rootPath && (
+                    <>
+                      <ContextMenuItem
+                        className={COMPACT_ITEM}
+                        onSelect={() => tree.beginCreate(rootPath, "file")}
+                      >
+                        New File
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        className={COMPACT_ITEM}
+                        onSelect={() => tree.beginCreate(rootPath, "dir")}
+                      >
+                        New Folder
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        className={COMPACT_ITEM}
+                        onSelect={() => void pasteInto(rootPath)}
+                      >
+                        Paste
+                        <ContextMenuShortcut>{PASTE_HINT}</ContextMenuShortcut>
+                      </ContextMenuItem>
+                      <ContextMenuSeparator />
+                      <ContextMenuItem
+                        className={COMPACT_ITEM}
+                        onSelect={() => void copyToClipboard(rootPath)}
+                      >
+                        Copy Path
+                      </ContextMenuItem>
+                      <ContextMenuItem
+                        className={COMPACT_ITEM}
+                        onSelect={() => tree.refresh(rootPath)}
+                      >
+                        Refresh
+                      </ContextMenuItem>
+                    </>
+                  )}
                 </>
               )}
             </ContextMenuContent>

@@ -487,6 +487,7 @@ pub fn run() {
             workspace::ipc::wsl_home,
             workspace::workspace_authorize,
             workspace::workspace_current_dir,
+            workspace::workspace_pick_folder,
             control::control_frontend_ready,
             control::control_respond,
             modules::agent_events::agent_decisions_ready,

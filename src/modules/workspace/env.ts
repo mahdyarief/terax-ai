@@ -66,3 +66,11 @@ export function currentWorkspaceScopeKey(): string {
 export async function getWslHome(distro: string): Promise<string> {
   return invoke<string>("wsl_home", { distro });
 }
+
+export async function pickWorkspaceFolder(
+  defaultPath?: string | null,
+): Promise<string | null> {
+  return invoke<string | null>("workspace_pick_folder", {
+    defaultPath: defaultPath ?? null,
+  });
+}

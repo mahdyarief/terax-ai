@@ -19,13 +19,15 @@ export function activeSpaceEnv(
   return findActiveSpace(spaces, activeId)?.env ?? { kind: "local" };
 }
 
-// A WSL space falls back to null, not the local cwd, so its first tab opens at
-// the WSL home instead of a Windows path.
+// A space with a designated root directory always opens its fresh tabs there;
+// otherwise WSL falls back to null (home) and local to launch cwd then home.
 export function freshTabCwd(
   env: WorkspaceEnv,
   restoredHome: string | null,
   launchCwd: string | null,
   home: string | null,
+  spaceRoot?: string | null,
 ): string | null {
+  if (spaceRoot) return spaceRoot;
   return restoredHome ?? (env.kind === "local" ? (launchCwd ?? home) : null);
 }
