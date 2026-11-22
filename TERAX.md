@@ -366,6 +366,10 @@ establish production readiness, platform parity, or multi-day resource stability
 - `open_settings_window`: separate webview window for Settings (optional `tab` arg deep-links a section).
 - `vibrancy::window_*`: native window backdrop (`window_backdrop_kind`, `window_set_backdrop`). macOS gets `NSVisualEffectMaterial::UnderWindowBackground`, Windows 11 gets Mica (gated on build >= 22000 via `RtlGetVersion`, since `apply_mica` fails on Windows 10), Linux reports `none` because blur there belongs to the compositor. The `window-vibrancy` crate is a macOS/Windows-only dependency so Linux builds never pull it.
 
+### Workspace backend
+
+A workspace (local, WSL, and a remote host in Phase 2) is reached through `terax_workspace_core::workspace::Workspace` (`src-tauri/crates/terax-workspace-core`), obtained with `backend_for(&workspace)`. Commands take workspace paths: canonical, `/`-separated, in the workspace's own namespace (`/home/me/repo` in WSL, never the `\\wsl.localhost` host path). Authorization compares those spellings exactly (`WorkspaceRegistry::covers`), so a path that cannot be spelled losslessly is refused, never approximated. Reads that must not follow a swapped link (project memory, assets, AI reads) use `Workspace::read_confined`, which decides by the opened file's real path; the secret-path patterns live in the core (`confined::refusal`) so a remote agent refuses the same names. Never call `std::fs`, `File::open` or `Command::new` on a workspace path in a command: `src/modules/workspace_guard_tests.rs` fails on any new one in `fs/` or `git/` outside its counted host-only list (local-only git features, the host watcher and file index, this machine's own state), and `crates/terax-workspace-core/tests/dependencies.rs` keeps the core free of Tauri, Tokio and the app, since it also builds the remote agent.
+
 ### PTY shell integration
 
 PTY shells are bootstrapped via injected init scripts in `src-tauri/src/modules/pty/scripts/`:

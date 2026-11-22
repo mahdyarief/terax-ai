@@ -182,9 +182,11 @@ Each step: the module's existing tests (`*_tests.rs`, `hardening_tests.rs`, `edg
 
 ### Task 12: Lock the invariants
 
-- [ ] Guard test (Rust, reads source files): no `std::fs::`, `File::open`, `File::create` or `Command::new` in `src-tauri/src/modules/fs/*.rs` and `src-tauri/src/modules/git/*.rs` outside an explicit allowlist (host-only files such as `clipboard.rs`, `local_file.rs`, and test modules), with a reason string per allowlisted file. Same idea as `compositingBudget.test.ts`.
-- [ ] Guard test: `terax-workspace-core`'s `Cargo.toml` has no `tauri`, `tokio` or app dependency.
-- [ ] Update `TERAX.md` (architecture section) with one paragraph: workspace operations go through `Workspace`; never call `std::fs` on a workspace path in a command.
+- [x] Guard test (Rust, reads source files): no `std::fs::`, `File::open`, `File::create` or `Command::new` in `src-tauri/src/modules/fs/*.rs` and `src-tauri/src/modules/git/*.rs` outside an explicit allowlist (host-only files such as `clipboard.rs`, `local_file.rs`, and test modules), with a reason string per allowlisted file. Same idea as `compositingBudget.test.ts`.
+- [x] Guard test: `terax-workspace-core`'s `Cargo.toml` has no `tauri`, `tokio` or app dependency.
+- [x] Update `TERAX.md` (architecture section) with one paragraph: workspace operations go through `Workspace`; never call `std::fs` on a workspace path in a command.
+  - Done as `src/modules/workspace_guard_tests.rs` (tokens `std::fs`, `File::open`, `File::create`, `Command::new`, `OpenOptions`, matched as whole words; inline `#[cfg(test)] mod` blocks, `*_tests.rs` and `testutil.rs` are skipped, a `#[cfg(test)]` item is not). The allowlist holds an **exact count** per file with its reason, so a new call in an allowed file fails too, and a file with none left must be removed from it. Probed: one added call fails it in an unlisted file (`fs/copy.rs`) and in a listed one (`git/worktree.rs`). `fs/clipboard.rs` needed no entry. Beyond the plan's list: `fs/ai.rs` (the glob/grep host walk), `fs/index.rs` and `fs/mutate.rs` (the host file-list index), `fs/read_policy.rs` (the app's own credential directory), `fs/watch.rs` (the host watcher).
+  - The dependency guard is `crates/terax-workspace-core/tests/dependencies.rs`; it parses every `[...dependencies]` table, including target-specific and `[dependencies.name]` ones.
 
 ### Task 13: Full verification and handoff
 

@@ -21,3 +21,5 @@ pub mod shell;
 pub mod vibrancy;
 pub mod window_presentation;
 pub mod workspace;
+#[cfg(test)]
+mod workspace_guard_tests;
