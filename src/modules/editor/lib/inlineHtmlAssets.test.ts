@@ -1,5 +1,7 @@
+import { checkReadable } from "@/modules/ai/lib/security";
+import { previewBoundary } from "@/modules/markdown/lib/assetPath";
 import { describe, expect, it, vi } from "vitest";
-import { inlineRelativeAssets } from "./inlineHtmlAssets";
+import { inlineRelativeAssets, maybeInlineHtmlAssets } from "./inlineHtmlAssets";
 
 const enc = (s: string) =>
   typeof btoa === "function"
@@ -137,5 +139,35 @@ describe("inlineRelativeAssets", () => {
     });
     expect(out).toContain('href="x.css"');
     expect(out).not.toContain("body{color:red}");
+  });
+});
+
+describe("a page in a folder on a server", () => {
+  // Server paths are POSIX whatever this machine is; the files are read
+  // through the workspace's backend, so only the scope decides here.
+  const root = "/home/dev/app";
+  const page = `${root}/site/index.html`;
+  const scope = {
+    boundary: previewBoundary(page, root),
+    isReadable: (abs: string) => checkReadable(abs).ok,
+  };
+
+  it("inlines a relative stylesheet and nothing outside the folder or secret", async () => {
+    const fs = makeFs({
+      [`${root}/site/css/site.css`]: "body{color:teal}",
+      [`${root}/.ssh/keys.css`]: "LEAKED_KEY",
+      "/home/dev/other.css": "LEAKED_SIBLING",
+    });
+    const html = [
+      '<link rel="stylesheet" href="css/site.css">',
+      '<link rel="stylesheet" href="../../other.css">',
+      '<link rel="stylesheet" href="../.ssh/keys.css">',
+    ].join("");
+    const out = await maybeInlineHtmlAssets(html, page, fs, scope);
+    expect(out).toContain("body{color:teal}");
+    expect(out).not.toContain("LEAKED");
+    expect(fs.readText).toHaveBeenCalledWith(`${root}/site/css/site.css`);
+    expect(fs.readText).not.toHaveBeenCalledWith("/home/dev/other.css");
+    expect(fs.readText).not.toHaveBeenCalledWith(`${root}/.ssh/keys.css`);
   });
 });

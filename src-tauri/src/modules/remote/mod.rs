@@ -31,3 +31,6 @@ mod search_tests;
 
 #[cfg(test)]
 mod watch_tests;
+
+#[cfg(test)]
+mod assets_tests;

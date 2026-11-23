@@ -104,8 +104,10 @@ Done, with one change to the design: instead of `Watch` / `Unwatch`, a single `C
 
 ### Task 7: Previews
 
-- [ ] Asset grants for `Ssh` paths read through the backend (ranged); the HTML preview's in-memory publish with relative assets fetched through the backend, confined.
-- [ ] Tests: an image and a PDF grant on the in-process host; an HTML page with a relative stylesheet; `../` outside the page's tree and a secret path refused.
+- [x] Asset grants for `Ssh` paths read through the backend (ranged); the HTML preview's in-memory publish with relative assets fetched through the backend, confined.
+- [x] Tests: an image and a PDF grant on the in-process host; an HTML page with a relative stylesheet; `../` outside the page's tree and a secret path refused.
+
+Done: no code change was needed. Grants, `respond` and the preview's reads (`fs_read_file`/`fs_read_binary`) already went through `backend_for`, and the inlining scope (`previewBoundary`, `checkReadable`) is lexical, so it holds for server spellings. `remote/assets_tests.rs` proves it on the in-process host (image, ranged PDF, folder grant refusing `..`, a sibling, `.git` and an HTML file; a direct grant of a protected file is still shown, as locally); `inlineHtmlAssets.test.ts` covers a server page.
 
 ### Task 8: End to end, guards and docs
 

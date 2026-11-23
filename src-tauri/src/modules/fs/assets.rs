@@ -45,11 +45,11 @@ impl AssetGrants {
         state.grants.retain(|_, grant| grant.owner != owner);
     }
 
-    fn generation(&self, owner: &str) -> u64 {
+    pub(crate) fn generation(&self, owner: &str) -> u64 {
         *self.0.lock().unwrap().generations.get(owner).unwrap_or(&0)
     }
 
-    fn grant(
+    pub(crate) fn grant(
         &self,
         owner: String,
         path: &str,
@@ -185,7 +185,7 @@ fn response(status: u16, mime: &str, body: Vec<u8>) -> Response<Vec<u8>> {
         .expect("static asset response")
 }
 
-fn respond(
+pub(crate) fn respond(
     grants: &AssetGrants,
     owner: &str,
     request: &Request<Vec<u8>>,
