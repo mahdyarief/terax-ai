@@ -8,8 +8,8 @@ edition = "2021"
 default-run = "terax"
 
 [workspace]
-members = ["crates/terax-cli", "crates/terax-control-protocol", "crates/terax-workspace-core"]
-default-members = [".", "crates/terax-cli", "crates/terax-control-protocol", "crates/terax-workspace-core"]
+members = ["crates/terax-cli", "crates/terax-control-protocol", "crates/terax-remote-protocol", "crates/terax-workspace-core"]
+default-members = [".", "crates/terax-cli", "crates/terax-control-protocol", "crates/terax-remote-protocol", "crates/terax-workspace-core"]
 resolver = "2"
 
 [workspace.package]

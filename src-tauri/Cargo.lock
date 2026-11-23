@@ -5067,6 +5067,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "terax-remote-protocol"
+version = "0.9.3"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "terax-workspace-core"
 version = "0.9.3"
 dependencies = [

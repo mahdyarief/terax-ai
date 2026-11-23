@@ -31,8 +31,9 @@ Each task: tests first, `cargo clippy --workspace --all-targets -- -D warnings`,
 
 ### Task 1: Framing
 
-- [ ] `terax-remote-protocol` crate in the workspace; `frame::encode` and an incremental `FrameReader` that accepts bytes in any split and yields whole frames.
-- [ ] Tests: partial frames, several frames in one read, a zero-length frame, an oversize length refused before any allocation, a truncated stream at EOF reported as such; a proptest that any split of a stream of frames decodes to the same frames.
+- [x] `terax-remote-protocol` crate in the workspace; `frame::encode` and an incremental `FrameReader` that accepts bytes in any split and yields whole frames.
+- [x] Tests: partial frames, several frames in one read, a zero-length frame, an oversize length refused before any allocation, a truncated stream at EOF reported as such; a proptest that any split of a stream of frames decodes to the same frames.
+  - Also a blocking `read_frame`/`write_frame` pair (the agent and client read a pipe directly); the body grows with what arrives instead of trusting the prefix. Mutation-checked: dropping either size check, the truncation check, the buffer compaction or the header offset each fails a test.
 
 ### Task 2: Messages and wire types
 

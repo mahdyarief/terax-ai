@@ -1,0 +1,12 @@
+[package]
+name = "terax-remote-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Wire protocol between Terax and terax-agent: framing, messages and the client"
+
+[dependencies]
+
+[dev-dependencies]
+proptest = "1"
