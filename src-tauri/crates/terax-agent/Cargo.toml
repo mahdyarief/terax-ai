@@ -1,0 +1,18 @@
+[package]
+name = "terax-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "Serves a Terax workspace over stdio, next to the files (on a remote server)"
+
+[[bin]]
+name = "terax-agent"
+path = "src/main.rs"
+
+[dependencies]
+terax-remote-protocol = { path = "../terax-remote-protocol" }
+terax-workspace-core = { path = "../terax-workspace-core" }
+
+[dev-dependencies]
+tempfile = "3"

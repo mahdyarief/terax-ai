@@ -53,9 +53,14 @@ Each task: tests first, `cargo clippy --workspace --all-targets -- -D warnings`,
 
 ### Task 4: Agent
 
-- [ ] `terax-agent` crate: `serve(reader, writer)` and `main` (`--stdio`; `--version`). Handshake, `SetRoots`, dispatch to `HostWorkspace::new(WorkspaceEnv::Local)`, worker pool, `Cancel`, `Ping`, exit on EOF.
-- [ ] Root checks for every path argument (including both ends of rename, replace and copy, `read_confined`'s roots, and `exec`'s cwd).
-- [ ] Unit tests drive `serve` over in-memory pipes: a request before the handshake is refused, a path outside the roots is refused even when it exists, a link inside a root to outside it is refused, a cancelled grep stops early, EOF ends the loop.
+- [x] `terax-agent` crate: `serve(reader, writer)` and `main` (`--stdio`; `--version`). Handshake, `SetRoots`, dispatch to `HostWorkspace::new(WorkspaceEnv::Local)`, worker pool, `Cancel`, `Ping`, exit on EOF.
+- [x] Root checks for every path argument (including both ends of rename, replace and copy, `read_confined`'s roots, and `exec`'s cwd).
+- [x] Unit tests drive `serve` over in-memory pipes: a request before the handshake is refused, a path outside the roots is refused even when it exists, a link inside a root to outside it is refused, a cancelled grep stops early, EOF ends the loop.
+  - Serving is the default with no arguments (no `--stdio` flag); `--version` prints `terax-agent <version>`, anything else exits 2. The version is the crate's (`[workspace.package]`, today 0.9.3); Phase 3 must decide which version the app compares.
+  - Two checks per path (`roots.rs`): `follow` (where it leads: reads, listings, search roots, exec cwd, `create_dir_all`) and `entry` (where the entry sits: remove, rename, replace, `symlink_metadata`, `read_link`). Writes (`write_atomic`, `create_file`, the destination of a copy) need both, so a file link pointing out cannot be written through. Paths must be absolute with no `.`, `..` or empty components; a path that does not exist yet is judged by its nearest existing ancestor. The walks do not follow links, so a search only checks its root.
+  - `exec` runs with the SSH user's rights, as a shell would; only its starting directory is confined, and it defaults to the first root.
+  - A request id already in flight is refused; a reply over the frame limit becomes an error reply; a message that cannot be decoded, or a second `Hello`, ends the session.
+  - Tests: 9 unit (roots, cancel, the read loop) and 14 over pipes. Mutation-checked: 14 mutants (each path check, the write-through check, exec's cwd, cancel, the handshake, duplicate ids, the parser) all fail a test.
 
 ### Task 5: Client
 

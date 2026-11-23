@@ -5076,6 +5076,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "terax-agent"
+version = "0.9.3"
+dependencies = [
+ "tempfile",
+ "terax-remote-protocol",
+ "terax-workspace-core",
+]
+
+[[package]]
 name = "terax-cli"
 version = "0.9.3"
 dependencies = [
