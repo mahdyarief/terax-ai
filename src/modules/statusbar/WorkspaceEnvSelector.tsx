@@ -9,6 +9,7 @@ import { IS_WINDOWS } from "@/lib/platform";
 import {
   LOCAL_WORKSPACE,
   useWorkspaceEnvStore,
+  workspaceEnvLabel,
   type WorkspaceEnv,
 } from "@/modules/workspace";
 import { Refresh01Icon, ServerStack03Icon } from "@hugeicons/core-free-icons";
@@ -37,7 +38,7 @@ function WorkspaceEnvSelectorWindows({ onSelect }: Props) {
     }
   };
 
-  const label = env.kind === "wsl" ? `WSL: ${env.distro}` : "Windows";
+  const label = workspaceEnvLabel(env, "Windows");
 
   return (
     <DropdownMenu onOpenChange={handleOpenChange}>

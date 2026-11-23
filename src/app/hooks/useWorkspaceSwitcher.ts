@@ -11,13 +11,21 @@ import type { Tab } from "@/modules/tabs";
 import {
   getWslHome,
   LOCAL_WORKSPACE,
+  sameWorkspaceEnv,
   type WorkspaceEnv,
 } from "@/modules/workspace";
 
 async function resolveEnvHome(env: WorkspaceEnv): Promise<string> {
-  return env.kind === "wsl"
-    ? getWslHome(env.distro)
-    : (await homeDir()).replace(/\\/g, "/");
+  switch (env.kind) {
+    case "wsl":
+      return getWslHome(env.distro);
+    case "ssh":
+      // The server's home comes from its connection (a later phase); this
+      // machine's would be the wrong directory.
+      throw new Error(`no home directory for ${env.host} yet`);
+    case "local":
+      return (await homeDir()).replace(/\\/g, "/");
+  }
 }
 
 type Params = {
@@ -79,11 +87,7 @@ export function useWorkspaceSwitcher({
 
   const switchWorkspace = useCallback(
     async (env: WorkspaceEnv): Promise<boolean> => {
-      if (
-        env.kind === workspaceEnv.kind &&
-        (env.kind === "local" ||
-          (workspaceEnv.kind === "wsl" && env.distro === workspaceEnv.distro))
-      ) {
+      if (sameWorkspaceEnv(env, workspaceEnv)) {
         return false;
       }
       const dirty = tabsRef.current.some((t) => t.kind === "editor" && t.dirty);

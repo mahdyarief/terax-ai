@@ -1,5 +1,5 @@
-//! Where a workspace lives (this machine, or a WSL distribution) and how its
-//! paths map to paths this process can open.
+//! Where a workspace lives (this machine, a WSL distribution, or a server
+//! reached over SSH) and how its paths map to paths this process can open.
 
 use std::path::PathBuf;
 
@@ -13,6 +13,58 @@ pub enum WorkspaceEnv {
     Wsl {
         distro: String,
     },
+    /// A server reached over SSH. Its paths are the server's: they never map
+    /// to anything on this machine, and only `backend_for` reaches them.
+    Ssh {
+        host: SshHost,
+    },
+}
+
+/// A host as `ssh` takes it: an alias from `~/.ssh/config` or
+/// `user@host[:port]`. Checked when it is made (and when it is deserialized),
+/// so it can never be read as an option or split into several arguments.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
+#[serde(try_from = "String")]
+pub struct SshHost(String);
+
+impl SshHost {
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl TryFrom<String> for SshHost {
+    type Error = String;
+
+    fn try_from(host: String) -> Result<Self, String> {
+        if host.is_empty() || host.len() > 255 {
+            return Err("an SSH host must be 1 to 255 bytes".into());
+        }
+        if host.starts_with('-') {
+            return Err(format!("an SSH host cannot start with `-`: {host}"));
+        }
+        if host
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || matches!(c, '\'' | '"' | '`' | '$' | ';' | '|' | '&'))
+        {
+            return Err(format!("an SSH host cannot contain spaces, quotes or shell characters: {host:?}"));
+        }
+        Ok(Self(host))
+    }
+}
+
+impl TryFrom<&str> for SshHost {
+    type Error = String;
+
+    fn try_from(host: &str) -> Result<Self, String> {
+        Self::try_from(host.to_string())
+    }
+}
+
+impl std::fmt::Display for SshHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 impl WorkspaceEnv {
@@ -24,6 +76,10 @@ impl WorkspaceEnv {
         matches!(self, Self::Wsl { .. })
     }
 
+    pub fn is_ssh(&self) -> bool {
+        matches!(self, Self::Ssh { .. })
+    }
+
     /// A workspace on this machine's own file system. Features that work on
     /// host paths only (checkpoints, task worktrees, creating and removing
     /// worktrees, the git state watcher) require it, so every other kind of
@@ -33,18 +89,38 @@ impl WorkspaceEnv {
     }
 }
 
+/// The host path for a workspace path. A path on an SSH server has none: it
+/// maps to `UNREACHABLE`, which every file-system call and `current_dir`
+/// refuses (`InvalidInput`), so a caller that forgets to check the env can
+/// never open the same path on this machine.
 #[cfg(windows)]
 pub fn resolve_path(path: &str, workspace: &WorkspaceEnv) -> PathBuf {
     match workspace {
         WorkspaceEnv::Local => PathBuf::from(path),
         WorkspaceEnv::Wsl { distro } => wsl_path_to_host(distro, path),
+        WorkspaceEnv::Ssh { .. } => PathBuf::from(UNREACHABLE),
     }
 }
 
 #[cfg(not(windows))]
-pub fn resolve_path(path: &str, _workspace: &WorkspaceEnv) -> PathBuf {
-    PathBuf::from(path)
+pub fn resolve_path(path: &str, workspace: &WorkspaceEnv) -> PathBuf {
+    match workspace {
+        WorkspaceEnv::Ssh { .. } => PathBuf::from(UNREACHABLE),
+        _ => PathBuf::from(path),
+    }
 }
+
+/// The error for asking this machine to reach a remote workspace's path or
+/// run a process in it.
+pub fn not_on_this_machine() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "this operation is not available for a workspace on an SSH host",
+    )
+}
+
+/// Not a path any operating system accepts: it holds a NUL byte.
+pub const UNREACHABLE: &str = "\0terax: a remote path has no path on this machine";
 
 /// True for WSL distro names safe to splice into a UNC path. Real WSL distros
 /// are alphanumeric with `.`, `_`, `-` separators (e.g. `Ubuntu-22.04`). Reject

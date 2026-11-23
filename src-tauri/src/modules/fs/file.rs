@@ -348,6 +348,9 @@ pub async fn fs_canonicalize(
             return match &workspace {
                 WorkspaceEnv::Wsl { distro } => canonical_wsl_path(&canon, distro),
                 WorkspaceEnv::Local => Ok(canon),
+                WorkspaceEnv::Ssh { .. } => {
+                    Err(terax_workspace_core::env::not_on_this_machine().to_string())
+                }
             };
         }
         backend_for(&workspace)

@@ -57,6 +57,11 @@ pub fn build_command(
     shell: Option<String>,
     control: Option<ShellControlEnv>,
 ) -> Result<CommandBuilder, String> {
+    // A terminal for a server is the agent's (a later phase); a local shell
+    // here would look like one and run on the wrong machine.
+    if workspace.is_ssh() {
+        return Err(terax_workspace_core::env::not_on_this_machine().to_string());
+    }
     let shell = sanitize_shell_override(shell);
     #[cfg(unix)]
     {

@@ -17,6 +17,9 @@ use windows_sys::Win32::System::IO::IO_STATUS_BLOCK;
 pub(super) fn open(path: &str, workspace: &WorkspaceEnv) -> Result<File, String> {
     let (path, wsl) = match workspace {
         WorkspaceEnv::Local => (path.replace('/', "\\"), false),
+        WorkspaceEnv::Ssh { .. } => {
+            return Err(terax_workspace_core::env::not_on_this_machine().to_string())
+        }
         WorkspaceEnv::Wsl { distro } => {
             validate_wsl_distro_name(distro)?;
             if let Some(host) = wsl_drvfs_to_windows(path) {

@@ -11,6 +11,7 @@ pub mod host;
 pub mod import;
 pub mod index;
 pub mod paths;
+pub mod unavailable;
 pub mod watch;
 pub mod workspace;
 

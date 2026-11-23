@@ -63,7 +63,7 @@ fn open(
     let repo = open_worktree(registry, root, workspace)?;
     if !workspace.is_local() {
         return Err(GitError::Unsupported(
-            "task worktrees are not supported in WSL workspaces yet",
+            "task worktrees are only supported in local workspaces",
         ));
     }
     Ok(repo)

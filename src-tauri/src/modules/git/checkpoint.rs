@@ -296,7 +296,7 @@ pub struct Snapshot {
 fn ensure_supported(repo: &ResolvedGitDirectory) -> Result<()> {
     if !repo.workspace.is_local() {
         return Err(GitError::Unsupported(
-            "checkpoints are not supported in WSL workspaces yet",
+            "checkpoints are only supported in local workspaces",
         ));
     }
     Ok(())

@@ -23,3 +23,5 @@ pub mod window_presentation;
 pub mod workspace;
 #[cfg(test)]
 mod workspace_guard_tests;
+#[cfg(test)]
+mod ssh_env_tests;

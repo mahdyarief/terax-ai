@@ -290,9 +290,12 @@ pub fn shell_bg_list(state: tauri::State<ShellState>) -> Result<Vec<BackgroundPr
 
 pub(crate) fn build_oneshot_command(
     command: &str,
-    #[cfg_attr(not(windows), allow(unused_variables))] workspace: &WorkspaceEnv,
+    workspace: &WorkspaceEnv,
     #[cfg_attr(not(windows), allow(unused_variables))] cwd: Option<&str>,
 ) -> Result<Command, String> {
+    if workspace.is_ssh() {
+        return Err(terax_workspace_core::env::not_on_this_machine().to_string());
+    }
     #[cfg(windows)]
     if let WorkspaceEnv::Wsl { distro } = workspace {
         validate_wsl_distro_name(distro)?;

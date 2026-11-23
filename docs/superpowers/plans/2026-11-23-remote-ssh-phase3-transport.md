@@ -26,9 +26,16 @@ From the app, connect to a host named in `~/.ssh/config` (or `user@host`), insta
 
 ### Task 1: `WorkspaceEnv::Ssh` and refusal everywhere else
 
-- [ ] Add the variant and host validation (pure, in the core): `ssh_host(&str) -> Result<SshHost, ...>`. Serde `{ kind: "ssh", host }`; the frontend type gains it.
-- [ ] Audit every match on `WorkspaceEnv` and every host-path or host-process entry point; each refuses `Ssh` with `Unsupported` naming the operation. `backend_for(Ssh)` asks the remote registry (Task 6; until then `NotConnected`).
-- [ ] Tests: deserialization and validation (leading `-`, spaces, control bytes, empty, too long); each refused entry point; a guard that `HostWorkspace::new` refuses an `Ssh` env.
+- [x] Add the variant and host validation (pure, in the core): `ssh_host(&str) -> Result<SshHost, ...>`. Serde `{ kind: "ssh", host }`; the frontend type gains it.
+- [x] Audit every match on `WorkspaceEnv` and every host-path or host-process entry point; each refuses `Ssh` with `Unsupported` naming the operation. `backend_for(Ssh)` asks the remote registry (Task 6; until then `NotConnected`).
+- [x] Tests: deserialization and validation (leading `-`, spaces, control bytes, empty, too long); each refused entry point; a guard that `HostWorkspace::new` refuses an `Ssh` env.
+  - `SshHost` (core `env.rs`) is a checked newtype, validated on deserialization too, so an invalid host cannot exist: 1 to 255 bytes, no leading `-`, no whitespace, control bytes, quotes, backticks or `$ ; | &`.
+  - `resolve_path` was not changed to return a `Result` (about 37 callers, which Phase 4 moves to the trait anyway). Instead an `Ssh` path maps to `env::UNREACHABLE`, a string holding a NUL byte, which every std file-system call and `current_dir` refuses with `InvalidInput` on Windows and Unix; a test proves it for metadata, `read_dir`, `create_dir_all`, write, canonicalize and starting a process, joined or not. Explicit refusals (`env::not_on_this_machine()`, `Unsupported`) sit where code would otherwise reach this machine without a path: `build_command`, the PTY's `build_command`, the shell's `build_oneshot_command`, `authorize_spawn_cwd` and `authorize_user_spawn_cwd` (refused even with no cwd: they returned `Ok(None)`, and the caller then spawned with no cwd at all, on this machine), LSP, and the two `HostWorkspace` matches.
+  - Found on the way: `build_command` ran any non-WSL env as a local process with the raw cwd; the PTY on Unix ignored the env entirely; a shell session with no cwd started in this machine's home. All now refuse `Ssh`.
+  - `HostWorkspace::new` does not refuse (it returns `Self`); instead a test checks every operation of a `HostWorkspace` built for `Ssh` fails and leaves a real local directory of the same name untouched. `backend_for(Ssh)` returns `unavailable::Unavailable` (every operation `NotConnected`, naming the host) until Task 6.
+  - Messages that said "not supported in WSL workspaces yet" for local-only git features now say "only supported in local workspaces". Git path display treats SSH paths as Linux paths.
+  - Frontend: `{ kind: "ssh", host }`, scope key `ssh:<host>` (it fell through to `local`, which would have mixed a server's settings and recents with this machine's), `sameWorkspaceEnv`, `workspaceEnvLabel` ("SSH: host"), and no local home directory for a server (switcher, terminal links).
+  - Mutation-checked: 8 mutants (the unreachable path, `build_command`, two host checks, the spawn gate, the PTY, the shell, `backend_for`) all fail a test.
 
 ### Task 2: Bootstrap and install planning (pure)
 

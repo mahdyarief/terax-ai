@@ -114,7 +114,8 @@ pub fn canonical_dir(
     let ws_path = registry
         .canonicalize_in(&*backend_for(workspace), path)
         .map_err(GitError::Io)?;
-    let git_path = if workspace.is_wsl() {
+    // A WSL or SSH path is a Linux path, whatever this machine is.
+    let git_path = if !workspace.is_local() {
         normalize_git_path(path)
     } else {
         display_path(&local_path)

@@ -195,6 +195,7 @@ function defaultDeps(context: LinkActivationContext): LinkActivationDeps {
       }).catch(() => null),
     home: async () => {
       try {
+        if (workspace.kind === "ssh") return null;
         return workspace.kind === "wsl"
           ? await getWslHome(workspace.distro)
           : await homeDir();

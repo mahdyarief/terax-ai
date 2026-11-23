@@ -257,7 +257,7 @@ pub fn read(
     let repo = open_worktree(registry, root, workspace)?;
     if !workspace.is_local() {
         return Err(GitError::Unsupported(
-            "task configuration is not supported in WSL workspaces yet",
+            "task configuration is only supported in local workspaces",
         ));
     }
     let mut config =

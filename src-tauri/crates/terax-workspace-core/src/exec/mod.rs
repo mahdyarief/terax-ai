@@ -49,6 +49,11 @@ pub fn build_command(
     cwd: Option<&str>,
     args: &[OsString],
 ) -> io::Result<Command> {
+    // Running it here, in a directory named like the server's, would be
+    // running it on the wrong machine.
+    if _workspace.is_ssh() {
+        return Err(crate::env::not_on_this_machine());
+    }
     #[cfg(windows)]
     if let WorkspaceEnv::Wsl { distro } = _workspace {
         crate::env::validate_wsl_distro_name(distro)

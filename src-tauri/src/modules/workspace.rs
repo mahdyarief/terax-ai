@@ -364,6 +364,10 @@ pub fn authorize_spawn_cwd(
     cwd: Option<&str>,
     workspace: &WorkspaceEnv,
 ) -> Result<Option<PathBuf>, String> {
+    // Even with no cwd: the caller would start its process on this machine.
+    if workspace.is_ssh() {
+        return Err(terax_workspace_core::env::not_on_this_machine().to_string());
+    }
     let Some(cwd) = cwd.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
@@ -389,6 +393,9 @@ pub fn authorize_user_spawn_cwd(
     cwd: Option<&str>,
     workspace: &WorkspaceEnv,
 ) -> Result<Option<PathBuf>, String> {
+    if workspace.is_ssh() {
+        return Err(terax_workspace_core::env::not_on_this_machine().to_string());
+    }
     let Some(cwd) = cwd.map(str::trim).filter(|s| !s.is_empty()) else {
         return Ok(None);
     };
@@ -634,8 +641,18 @@ pub use terax_workspace_core::env::{
 
 /// The backend that serves a workspace. Every workspace is opened directly
 /// today; remote SSH workspaces will return their live connection here.
+/// The `Workspace` that reaches `env`. A server's is its live connection;
+/// without one, every operation fails with `NotConnected`.
 pub fn backend_for(env: &WorkspaceEnv) -> std::sync::Arc<dyn terax_workspace_core::workspace::Workspace> {
-    std::sync::Arc::new(terax_workspace_core::host::HostWorkspace::new(env.clone()))
+    match env {
+        WorkspaceEnv::Ssh { host } => std::sync::Arc::new(
+            terax_workspace_core::unavailable::Unavailable::new(
+                env.clone(),
+                format!("not connected to {host}"),
+            ),
+        ),
+        _ => std::sync::Arc::new(terax_workspace_core::host::HostWorkspace::new(env.clone())),
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]

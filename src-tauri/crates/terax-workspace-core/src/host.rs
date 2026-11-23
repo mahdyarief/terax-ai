@@ -331,6 +331,7 @@ impl Workspace for HostWorkspace {
             }
             #[cfg(not(windows))]
             WorkspaceEnv::Wsl { .. } => Ok(canon),
+            WorkspaceEnv::Ssh { .. } => Err(crate::env::not_on_this_machine()),
         }
     }
 
@@ -405,6 +406,9 @@ impl Workspace for HostWorkspace {
                 .map_err(|_| ConfinedError::Outside)?,
             #[cfg(not(windows))]
             WorkspaceEnv::Wsl { .. } => canon,
+            WorkspaceEnv::Ssh { .. } => {
+                return Err(ConfinedError::Io(crate::env::not_on_this_machine()))
+            }
         };
         if request.secret_policy {
             if let Some(why) = crate::confined::refusal(&real_path) {

@@ -4,7 +4,10 @@ import { setLastWslDistro } from "@/modules/settings/store";
 
 export type WorkspaceEnv =
   | { kind: "local" }
-  | { kind: "wsl"; distro: string };
+  | { kind: "wsl"; distro: string }
+  // A server over SSH. Its paths are the server's; nothing on this machine
+  // (home directory, reveal in Explorer, local shell) applies to it.
+  | { kind: "ssh"; host: string };
 
 export type WslDistro = {
   name: string;
@@ -50,13 +53,36 @@ export function currentWorkspaceEnv(): WorkspaceEnv {
 }
 
 export function workspaceScopeKey(env: WorkspaceEnv): string {
-  return env.kind === "wsl" ? `wsl:${env.distro}` : "local";
+  switch (env.kind) {
+    case "wsl":
+      return `wsl:${env.distro}`;
+    case "ssh":
+      return `ssh:${env.host}`;
+    case "local":
+      return "local";
+  }
 }
 
 export function parseWorkspaceScopeKey(key: string): WorkspaceEnv {
-  return key.startsWith("wsl:")
-    ? { kind: "wsl", distro: key.slice("wsl:".length) }
-    : LOCAL_WORKSPACE;
+  if (key.startsWith("wsl:")) return { kind: "wsl", distro: key.slice("wsl:".length) };
+  if (key.startsWith("ssh:")) return { kind: "ssh", host: key.slice("ssh:".length) };
+  return LOCAL_WORKSPACE;
+}
+
+export function sameWorkspaceEnv(a: WorkspaceEnv, b: WorkspaceEnv): boolean {
+  return workspaceScopeKey(a) === workspaceScopeKey(b);
+}
+
+/** A short name for the status bar and titles. */
+export function workspaceEnvLabel(env: WorkspaceEnv, localName: string): string {
+  switch (env.kind) {
+    case "wsl":
+      return `WSL: ${env.distro}`;
+    case "ssh":
+      return `SSH: ${env.host}`;
+    case "local":
+      return localName;
+  }
 }
 
 export function currentWorkspaceScopeKey(): string {
