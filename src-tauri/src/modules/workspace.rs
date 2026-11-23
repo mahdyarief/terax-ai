@@ -645,12 +645,17 @@ pub use terax_workspace_core::env::{
 /// without one, every operation fails with `NotConnected`.
 pub fn backend_for(env: &WorkspaceEnv) -> std::sync::Arc<dyn terax_workspace_core::workspace::Workspace> {
     match env {
-        WorkspaceEnv::Ssh { host } => std::sync::Arc::new(
-            terax_workspace_core::unavailable::Unavailable::new(
+        // The host's live connection; anything else is `NotConnected`,
+        // never this machine.
+        WorkspaceEnv::Ssh { host } => match crate::modules::remote::registry::global()
+            .and_then(|registry| registry.workspace(host))
+        {
+            Some(workspace) => workspace,
+            None => std::sync::Arc::new(terax_workspace_core::unavailable::Unavailable::new(
                 env.clone(),
                 format!("not connected to {host}"),
-            ),
-        ),
+            )),
+        },
         _ => std::sync::Arc::new(terax_workspace_core::host::HostWorkspace::new(env.clone())),
     }
 }

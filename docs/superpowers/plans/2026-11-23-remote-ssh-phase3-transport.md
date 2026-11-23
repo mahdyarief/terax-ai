@@ -83,12 +83,20 @@ From the app, connect to a host named in `~/.ssh/config` (or `user@host`), insta
   - `forward_to_frontend`'s wait became `await_frontend(state, request, timeout, emit)`, so routing and timeouts are tested without Tauri; askpass waits `ASKPASS_WAIT` (300 s).
   - Frontend: `modules/remote` (a queue store, `AskpassDialog`: OpenSSH's text verbatim in monospace, a masked field, Escape cancels; the body is keyed by question so nothing typed outlives it). Notices become a toast.
   - Tests: protocol 6, CLI 6, server 7, frontend 3. Mutation: 9 mutants killed; the token check first survived because the test tried wrong tokens before any grant existed.
-  - Real OpenSSH (`crates/terax-cli/tests/askpass_over_ssh.rs`, ignored): Windows' OpenSSH 9.5 ran `terax-cli` as askpass with no console, and dypod's new host key reached the endpoint verbatim, classified `yes_no { host_key: true }`; "yes" was accepted. The passphrase half is not yet confirmed: dypod takes keys only, and a throwaway key's passphrase is asked only once the server accepts the key. Runs that answered wrong got this machine banned by dypod's fail2ban; the test now authorizes the throwaway key for its run (restricted to `true`, removed on drop) and answers the right passphrase, so the server sees no failed login. To run once the ban lifts.
+  - Real OpenSSH (`crates/terax-cli/tests/askpass_over_ssh.rs`, ignored): Windows' OpenSSH 9.5 ran `terax-cli` as askpass with no console, and dypod's new host key reached the endpoint verbatim, classified `yes_no { host_key: true }`; "yes" was accepted. Then the passphrase of a throwaway key arrived as `secret` ("Enter passphrase for key '...\throwaway': ") and the login succeeded. A throwaway key's passphrase is asked only once the server accepts the key, so the test authorizes it for its run (restricted to `true`, removed on drop; checked gone afterwards). Earlier runs that answered wrong got this machine banned by dypod's fail2ban for a while; the test now never fails a login.
 
 ### Task 6: Connections and state
 
-- [ ] The pure state machine with backoff and heartbeat; the registry (`connect`, `disconnect`, `get`, `state`, `log`); `RemoteWorkspace::set_roots`; Tauri commands `remote_connect`, `remote_disconnect`, `remote_state`, `remote_log`; a `remote://state` event.
-- [ ] Tests: every transition, including a drop during `Installing` and a disconnect during `Reconnecting`; backoff timing with a fake clock; a heartbeat miss drops the connection; `backend_for` after a disconnect returns `NotConnected`.
+- [x] The pure state machine with backoff and heartbeat; the registry (`connect`, `disconnect`, `get`, `state`, `log`); `RemoteWorkspace::set_roots`; Tauri commands `remote_connect`, `remote_disconnect`, `remote_state`, `remote_log`; a `remote://state` event.
+- [x] Tests: every transition, including a drop during `Installing` and a disconnect during `Reconnecting`; backoff timing with a fake clock; a heartbeat miss drops the connection; `backend_for` after a disconnect returns `NotConnected`.
+
+Done. `modules/remote/`: `machine.rs` (pure; time comes in with events), `registry.rs` (a driver thread per host owns the machine, the live link, the heartbeat), `connector.rs` (`SshConnector`), `commands.rs` (the four commands, `remote://state`, installed in `setup`). Decisions:
+- A first connect that fails stays `failed` with the reason; only a drop after `ready` reconnects on its own (1, 2, 5, 10, 30 s, then every 30 s).
+- Automatic reconnects never prompt: no askpass grant, `BatchMode=yes`. Only an attempt the user starts gets a grant, dropped as soon as the attempt ends, which ends any open dialog.
+- A refused login, a host key failure, an unsupported server or a missing ssh is permanent: retrying stops. Retried every 30 s, a refused login would get the client banned (dypod's fail2ban did).
+- A drop is seen as the stream ending (`RemoteWorkspace::is_closed`, polled every second) or three missed 15 s heartbeats.
+- The roots are kept per host and put back on every connection before it is announced `ready`; `set_roots` while down keeps them for the next one.
+- Tests: 11 machine tests on a fake clock, 2 on the failure classes, 5 with the real agent in-process and a switch that cuts the stream (`backend_for` is `NotConnected` after a disconnect).
 
 ### Task 7: Connect UI
 

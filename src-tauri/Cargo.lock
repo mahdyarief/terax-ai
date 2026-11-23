@@ -5065,6 +5065,7 @@ dependencies = [
  "tauri-plugin-updater",
  "tauri-plugin-window-state",
  "tempfile",
+ "terax-agent",
  "terax-cli",
  "terax-control-protocol",
  "terax-remote-protocol",

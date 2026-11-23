@@ -156,6 +156,24 @@ impl RemoteWorkspace {
         &self.session
     }
 
+    /// Replaces the roots the agent confines this session to (an empty list
+    /// refuses every path).
+    pub fn set_roots(&self, roots: Vec<String>) -> io::Result<()> {
+        let deadline = self.options.connect_timeout;
+        match self
+            .call(Call::SetRoots { roots }, deadline, None)
+            .map_err(io::Error::from)?
+        {
+            Reply::Unit => Ok(()),
+            other => Err(unexpected(&other)),
+        }
+    }
+
+    /// Whether the stream has ended; every call fails from then on.
+    pub fn is_closed(&self) -> bool {
+        self.shared.closed.lock().unwrap().is_some()
+    }
+
     /// Round-trip time to the agent, or an error if it does not answer
     /// within `timeout`.
     pub fn ping(&self, timeout: Duration) -> io::Result<Duration> {

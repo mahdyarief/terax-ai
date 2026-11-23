@@ -319,6 +319,7 @@ pub fn run() {
             if let Err(error) = control::start(_app.handle().clone(), control_for_setup.clone()) {
                 log::warn!("could not start Terax control server: {error}");
             }
+            modules::remote::commands::install(_app.handle(), control_for_setup.clone());
             if let Some(main) = _app.get_webview_window("main") {
                 let handle = _app.handle().clone();
                 main.on_window_event(move |event| {
@@ -482,6 +483,10 @@ pub fn run() {
             shell::shell_bg_logs,
             shell::shell_bg_kill,
             shell::shell_bg_list,
+            modules::remote::commands::remote_connect,
+            modules::remote::commands::remote_disconnect,
+            modules::remote::commands::remote_state,
+            modules::remote::commands::remote_log,
             workspace::wsl_list_distros,
             workspace::wsl_default_distro,
             workspace::ipc::wsl_home,
