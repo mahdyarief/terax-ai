@@ -123,6 +123,33 @@ pub fn within(env: &WorkspaceEnv, path: &str, root: &str) -> bool {
     Location::in_workspace(env, root).contains(&Location::in_workspace(env, path))
 }
 
+/// Whether two workspace paths are spelled as the same entry. On this
+/// machine (local, WSL) by their host spelling, as before; on a server, where
+/// there is no host spelling (every remote path resolves to the same
+/// unreachable one), by the path itself.
+pub fn same_spelling(env: &WorkspaceEnv, a: &str, b: &str) -> bool {
+    if env.is_ssh() {
+        a.trim_end_matches('/') == b.trim_end_matches('/')
+    } else {
+        resolve_path(a, env) == resolve_path(b, env)
+    }
+}
+
+/// Whether `path` is absolute in its workspace: on a server it starts at
+/// `/`, or at a drive (`C:/`) when the server runs Windows.
+pub fn is_absolute_in(env: &WorkspaceEnv, path: &str) -> bool {
+    if env.is_ssh() {
+        let bytes = path.as_bytes();
+        path.starts_with('/')
+            || (bytes.len() >= 3
+                && bytes[0].is_ascii_alphabetic()
+                && bytes[1] == b':'
+                && matches!(bytes[2], b'/' | b'\\'))
+    } else {
+        resolve_path(path, env).is_absolute()
+    }
+}
+
 /// WSL distro names are case-insensitive to `wsl.exe` and the UNC provider.
 fn same_env(a: &WorkspaceEnv, b: &WorkspaceEnv) -> bool {
     match (a, b) {

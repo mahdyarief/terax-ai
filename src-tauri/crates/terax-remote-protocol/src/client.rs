@@ -31,6 +31,11 @@ use crate::message::{
     decode, encode, Browse, Call, CallId, Envelope, Reply, WireError, WireExecSpec,
 };
 
+/// The largest file an upload sends: one `WriteAtomic` frame, with room
+/// for the envelope under `MAX_FRAME` (32 MiB).
+pub const MAX_UPLOAD_FILE: u64 = 30 * 1024 * 1024;
+const _: () = assert!((MAX_UPLOAD_FILE as usize) < MAX_FRAME);
+
 #[derive(Clone, Debug)]
 pub struct Options {
     pub program: String,
@@ -535,17 +540,22 @@ impl Workspace for RemoteWorkspace {
         expect!(reply, Copied)
     }
 
-    /// Uploading from this machine is a later phase's work.
+    /// An upload: staged on the server and published with a no-replace
+    /// rename (`upload_item`). Each file crosses in one frame, so files are
+    /// capped below the frame limit.
     fn import(
         &self,
-        _source: &Path,
-        _dest_dir: &str,
-        _rename_on_conflict: bool,
+        source: &Path,
+        dest_dir: &str,
+        rename_on_conflict: bool,
     ) -> io::Result<String> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "importing into a remote workspace is not supported yet",
-        ))
+        terax_workspace_core::import::upload_item(
+            self,
+            source,
+            dest_dir,
+            rename_on_conflict,
+            MAX_UPLOAD_FILE,
+        )
     }
 
     fn grep(

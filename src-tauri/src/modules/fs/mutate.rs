@@ -1,6 +1,8 @@
 use super::blocking;
 use super::index::FileIndexState;
-use crate::modules::workspace::{backend_for, resolve_path, within, WorkspaceEnv, WorkspaceRegistry};
+use crate::modules::workspace::{
+    backend_for, resolve_path, same_spelling, within, WorkspaceEnv, WorkspaceRegistry,
+};
 use serde::Serialize;
 use std::io;
 use std::path::Path;
@@ -95,7 +97,7 @@ fn move_conflict(metadata: &Meta, replaceable: bool) -> FsMoveResult {
     }
 }
 
-fn remove_path(ws: &dyn Workspace, path: &str) -> io::Result<()> {
+pub(crate) fn remove_path(ws: &dyn Workspace, path: &str) -> io::Result<()> {
     // The entry itself, never a symlink's target: deleting a link to a
     // directory removes the link only.
     if ws.symlink_metadata(path)?.kind == EntryKind::Dir {
@@ -122,7 +124,7 @@ pub async fn fs_create_file(
     .await
 }
 
-fn create_file(ws: &dyn Workspace, path: &str) -> Result<(), String> {
+pub(crate) fn create_file(ws: &dyn Workspace, path: &str) -> Result<(), String> {
     if exists(ws, path) {
         return Err(format!("already exists: {path}"));
     }
@@ -151,7 +153,7 @@ pub async fn fs_create_dir(
     .await
 }
 
-fn create_dir(ws: &dyn Workspace, path: &str) -> Result<(), String> {
+pub(crate) fn create_dir(ws: &dyn Workspace, path: &str) -> Result<(), String> {
     if exists(ws, path) {
         return Err(format!("already exists: {path}"));
     }
@@ -180,7 +182,7 @@ pub async fn fs_rename(
     .await
 }
 
-fn rename(ws: &dyn Workspace, from: &str, to: &str) -> Result<(), String> {
+pub(crate) fn rename(ws: &dyn Workspace, from: &str, to: &str) -> Result<(), String> {
     if !exists(ws, from) {
         return Err(format!("not found: {from}"));
     }
@@ -220,18 +222,16 @@ pub async fn fs_move(
     .await
 }
 
-fn fs_move_impl(
+pub(crate) fn fs_move_impl(
     ws: &dyn Workspace,
     from: &str,
     to: &str,
     root: &str,
     expected_conflict: Option<&str>,
 ) -> Result<FsMoveResult, String> {
-    let from_p = resolve_path(from, ws.env());
-    let to_p = resolve_path(to, ws.env());
     authorize_mutation_entry(ws, from, root)?;
     authorize_mutation_entry(ws, to, root)?;
-    if from_p == to_p {
+    if same_spelling(ws.env(), from, to) {
         return Ok(FsMoveResult::Moved);
     }
     let from_meta = metadata_if_exists(ws, from)

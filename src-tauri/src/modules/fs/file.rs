@@ -222,7 +222,7 @@ pub async fn fs_read_file(
 
 const NOT_EDITABLE: &str = "only regular files can be opened in the editor";
 
-fn read_file_sync(ws: &dyn Workspace, path: &str, force: bool) -> Result<ReadResult, String> {
+pub(crate) fn read_file_sync(ws: &dyn Workspace, path: &str, force: bool) -> Result<ReadResult, String> {
     let before = ws.metadata(path).map_err(|e| {
         log::debug!("fs_read_file stat({path}) failed: {e}");
         e.to_string()

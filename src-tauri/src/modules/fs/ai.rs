@@ -34,11 +34,7 @@ fn authorized(registry: &WorkspaceRegistry, path: &Path) -> Result<PathBuf, Stri
     Ok(canonical)
 }
 
-/// The secret-path policy for a workspace path, by its host spelling (which
-/// also covers the app's own credential directory).
-fn readable_in(path: &str, workspace: &WorkspaceEnv) -> Result<(), String> {
-    readable(&resolve_path(path, workspace))
-}
+use super::read_policy::readable_in;
 
 /// `authorized` for a workspace path: the canonical workspace path, when it
 /// and the name it was asked by both pass the policy and the registry covers it.

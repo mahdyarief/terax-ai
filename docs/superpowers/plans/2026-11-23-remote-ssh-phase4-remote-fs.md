@@ -65,8 +65,17 @@ Done (frontend only).
 
 ### Task 4: Files, editor and file operations on a remote space
 
-- [ ] Audit every command the explorer and the editor call for an `Ssh` env and fix what still takes a host path: the read policy (env-aware), the explorer's gitignore decorations (skipped), copy and drag-in from this machine (`import` through the backend), project memory, save conflicts (stamps from the agent).
-- [ ] Tests: the app's own command functions (`read_dir_entries`, `subdirs`, read, write, create, rename, delete, copy, import) against the in-process host, including a secret path refused and a path outside the root refused by both ends.
+- [x] Audit every command the explorer and the editor call for an `Ssh` env and fix what still takes a host path: the read policy (env-aware), the explorer's gitignore decorations (skipped), copy and drag-in from this machine (`import` through the backend), project memory, save conflicts (stamps from the agent).
+- [x] Tests: the app's own command functions (`read_dir_entries`, `subdirs`, read, write, create, rename, delete, copy, import) against the in-process host, including a secret path refused and a path outside the root refused by both ends.
+
+Done. What the audit found and fixed:
+- `fs_move` compared host spellings to spot a move onto itself; every server path has the same one (`UNREACHABLE`), so every remote move was a silent no-op. Now `same_spelling` compares a server's paths as spelled.
+- `fs_copy` checked `resolve_path(..).is_absolute()`, false for every server path, so every paste or drop was refused. Now `is_absolute_in` (`/...`, or `C:/...` on a Windows server).
+- Copy and drag-in from this machine: the client's `import` is now an upload (`import::upload_item`, generic over `Workspace`): staged in `.terax-copy-*` in the destination, published with the no-replace `rename`, "name copy" on conflict, the staging removed whatever happens; files over `MAX_UPLOAD_FILE` (30 MiB, one frame) and symbolic links are refused.
+- The secret-path policy checked a server path's host spelling, a placeholder no pattern matches; `read_policy::readable_in` now checks the server's spelling (AI tools and asset grants use it); `deny_runtime_in` skips this app's directory on a server (project memory).
+- Gitignore decorations are skipped for `ssh` explicitly.
+- Save conflicts need nothing: the agent's stamps are the file's mtime, and an edit made on the server moves them (tested).
+- Tests: 4 in `remote/fs_tests.rs` (listing, subdirs, read, save, a change on the server, create, rename, move, conflict and replace, delete, upload with a copy name and no staging left, and refusals outside the folder), 3 for `upload_item` against a local workspace, 1 for the policy on a server path.
 
 ### Task 5: Search, grep and glob
 

@@ -7,6 +7,7 @@ use std::io;
 use std::path::Path;
 
 use crate::host::rename_no_replace;
+use crate::workspace::Workspace;
 
 const MAX_COPY_SUFFIX: usize = 10_000;
 const MAX_COPY_DEPTH: usize = 128;
@@ -162,6 +163,153 @@ pub(crate) fn copy_name(name: &OsStr, n: usize, is_dir: bool) -> OsString {
     out
 }
 
+/// Uploads `src` (a path on this machine) into `dest_dir` on `ws`, the same
+/// contract as `import_item` built from workspace calls, for a workspace
+/// whose files are elsewhere (a server). The item is assembled in a staging
+/// directory inside `dest_dir` and published with `rename`, which never
+/// replaces, so a partial upload is never visible and is removed on
+/// failure. Files over `max_file` bytes and symbolic links are refused:
+/// a file crosses in one write.
+pub fn upload_item(
+    ws: &dyn Workspace,
+    src: &Path,
+    dest_dir: &str,
+    rename_on_conflict: bool,
+    max_file: u64,
+) -> io::Result<String> {
+    if !src.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "copy source must be absolute",
+        ));
+    }
+    let name = utf8_name(src.file_name().ok_or_else(|| {
+        io::Error::new(io::ErrorKind::InvalidInput, "copy source has no filename")
+    })?)?;
+    let metadata = std::fs::symlink_metadata(src)?;
+    let join = |name: &str| {
+        if dest_dir.ends_with('/') {
+            format!("{dest_dir}{name}")
+        } else {
+            format!("{dest_dir}/{name}")
+        }
+    };
+    if !rename_on_conflict && ws.symlink_metadata(&join(name)).is_ok() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "destination already exists",
+        ));
+    }
+    let staging = join(&format!(".terax-copy-{}", unique_suffix()));
+    ws.create_dir_all(&staging)?;
+    let staged = format!("{staging}/item");
+    let outcome = upload_recursive(ws, src, &staged, 0, max_file).and_then(|()| {
+        for n in 0..=MAX_COPY_SUFFIX {
+            let candidate = if n == 0 {
+                name.to_string()
+            } else {
+                utf8_name(&copy_name(OsStr::new(name), n, metadata.is_dir()))?.to_string()
+            };
+            match ws.rename(&staged, &join(&candidate)) {
+                Ok(()) => return Ok(candidate),
+                Err(error) => {
+                    if ws.symlink_metadata(&join(&candidate)).is_err() {
+                        return Err(error);
+                    }
+                    if !rename_on_conflict {
+                        return Err(io::Error::new(
+                            io::ErrorKind::AlreadyExists,
+                            format!("already exists: {}", join(&candidate)),
+                        ));
+                    }
+                }
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "no free copy name",
+        ))
+    });
+    // Whatever happened, the staging directory goes (empty after a publish).
+    let _ = ws.remove_dir_all(&staging);
+    outcome
+}
+
+fn utf8_name(name: &OsStr) -> io::Result<&str> {
+    name.to_str().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "a file name that is not valid Unicode cannot be copied to a server",
+        )
+    })
+}
+
+fn unique_suffix() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    format!(
+        "{}-{nanos:x}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+fn upload_recursive(
+    ws: &dyn Workspace,
+    src: &Path,
+    dst: &str,
+    depth: usize,
+    max_file: u64,
+) -> io::Result<()> {
+    if depth > MAX_COPY_DEPTH {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "folder nesting exceeds the copy limit",
+        ));
+    }
+    let metadata = std::fs::symlink_metadata(src)?;
+    let kind = metadata.file_type();
+    if kind.is_symlink() {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "symbolic links cannot be copied to a server yet: {}",
+                src.display()
+            ),
+        ))
+    } else if kind.is_dir() {
+        ws.create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            let name = entry.file_name();
+            let child = format!("{dst}/{}", utf8_name(&name)?);
+            upload_recursive(ws, &entry.path(), &child, depth + 1, max_file)?;
+        }
+        Ok(())
+    } else if kind.is_file() {
+        if metadata.len() > max_file {
+            return Err(io::Error::new(
+                io::ErrorKind::FileTooLarge,
+                format!(
+                    "{} is over the {} MiB a file can be copied to a server",
+                    src.display(),
+                    max_file / (1024 * 1024)
+                ),
+            ));
+        }
+        let bytes = std::fs::read(src)?;
+        ws.write_atomic(dst, &bytes).map(|_| ())
+    } else {
+        Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "only files, folders and symbolic links can be copied",
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,5 +324,103 @@ mod tests {
             "Makefile copy 3"
         );
         assert_eq!(copy_name(OsStr::new("v1.2"), 1, true), "v1.2 copy");
+    }
+}
+
+#[cfg(test)]
+mod upload_tests {
+    use super::*;
+    use crate::env::WorkspaceEnv;
+    use crate::host::HostWorkspace;
+
+    struct Fixture {
+        _dir: tempfile::TempDir,
+        src: std::path::PathBuf,
+        dest: String,
+        ws: HostWorkspace,
+    }
+
+    fn fixture() -> Fixture {
+        let dir = tempfile::tempdir().unwrap();
+        let src = dir.path().join("src");
+        std::fs::create_dir_all(src.join("pkg/inner")).unwrap();
+        std::fs::write(src.join("notes.txt"), "hello").unwrap();
+        std::fs::write(src.join("pkg/a.rs"), "fn a() {}").unwrap();
+        std::fs::write(src.join("pkg/inner/b.rs"), "fn b() {}").unwrap();
+        std::fs::create_dir_all(dir.path().join("dest")).unwrap();
+        let ws = HostWorkspace::new(WorkspaceEnv::Local);
+        let dest = ws
+            .canonicalize(&dir.path().join("dest").to_string_lossy())
+            .unwrap();
+        Fixture {
+            _dir: dir,
+            src,
+            dest,
+            ws,
+        }
+    }
+
+    fn names(ws: &HostWorkspace, dir: &str) -> Vec<String> {
+        let mut names: Vec<_> = ws
+            .read_dir(dir)
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn uploads_a_file_and_a_tree_and_leaves_no_staging() {
+        let f = fixture();
+        let got = upload_item(&f.ws, &f.src.join("notes.txt"), &f.dest, false, 1 << 20).unwrap();
+        assert_eq!(got, "notes.txt");
+        let got = upload_item(&f.ws, &f.src.join("pkg"), &f.dest, false, 1 << 20).unwrap();
+        assert_eq!(got, "pkg");
+        assert_eq!(names(&f.ws, &f.dest), ["notes.txt", "pkg"]);
+        assert_eq!(names(&f.ws, &format!("{}/pkg/inner", f.dest)), ["b.rs"]);
+        let read =
+            f.ws.read(
+                &format!("{}/pkg/inner/b.rs", f.dest),
+                crate::workspace::ReadRequest {
+                    offset: 0,
+                    limit: 100,
+                },
+            )
+            .unwrap();
+        assert_eq!(read.bytes, b"fn b() {}");
+    }
+
+    #[test]
+    fn a_conflict_fails_or_gets_a_copy_name() {
+        let f = fixture();
+        let notes = f.src.join("notes.txt");
+        upload_item(&f.ws, &notes, &f.dest, false, 1 << 20).unwrap();
+        let error = upload_item(&f.ws, &notes, &f.dest, false, 1 << 20).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            upload_item(&f.ws, &notes, &f.dest, true, 1 << 20).unwrap(),
+            "notes copy.txt"
+        );
+        assert_eq!(
+            upload_item(&f.ws, &notes, &f.dest, true, 1 << 20).unwrap(),
+            "notes copy 2.txt"
+        );
+        assert_eq!(
+            names(&f.ws, &f.dest),
+            ["notes copy 2.txt", "notes copy.txt", "notes.txt"]
+        );
+    }
+
+    #[test]
+    fn a_failed_upload_leaves_nothing_behind() {
+        let f = fixture();
+        // Each file is 9 bytes, over this limit: the first one fails the tree.
+        let error = upload_item(&f.ws, &f.src.join("pkg"), &f.dest, false, 8).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::FileTooLarge);
+        assert!(names(&f.ws, &f.dest).is_empty(), "no item, no staging");
+        let relative = upload_item(&f.ws, Path::new("notes.txt"), &f.dest, false, 8).unwrap_err();
+        assert_eq!(relative.kind(), io::ErrorKind::InvalidInput);
     }
 }

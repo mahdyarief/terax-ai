@@ -1,7 +1,7 @@
 use std::path::Path;
 use tauri::Manager;
 
-use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv, WorkspaceRegistry};
+use crate::modules::workspace::{backend_for, WorkspaceEnv, WorkspaceRegistry};
 use terax_workspace_core::confined::{Confine, ConfinedError, ConfinedRead};
 use terax_workspace_core::paths::join;
 use terax_workspace_core::workspace::Workspace;
@@ -65,7 +65,7 @@ fn read_memory_in(
             ConfinedError::Refused(why) => why.to_string(),
             ConfinedError::Io(error) => error.to_string(),
         })?;
-    super::read_policy::deny_runtime(&resolve_path(&read.real_path, ws.env()))?;
+    super::read_policy::deny_runtime_in(&read.real_path, ws.env())?;
     // The frontend's spelling, normalized the way real paths are.
     if read.real_path != comparison_path(Path::new(checked_path)) {
         return Err(ESCAPED.into());

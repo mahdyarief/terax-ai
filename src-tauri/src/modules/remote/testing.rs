@@ -38,7 +38,12 @@ impl InProcess {
 
     /// Cuts the live stream: the client sees it end.
     pub fn cut(&self, host: &SshHost) {
-        let gate = self.gates.lock().unwrap().remove(host.as_str()).expect("a live link");
+        let gate = self
+            .gates
+            .lock()
+            .unwrap()
+            .remove(host.as_str())
+            .expect("a live link");
         gate.lock().unwrap().take();
     }
 
@@ -102,7 +107,10 @@ impl Connector for InProcess {
             Options::default(),
         )
         .map_err(|error| (error.to_string(), Failure::Transient))?;
-        self.gates.lock().unwrap().insert(host.as_str().to_string(), gate);
+        self.gates
+            .lock()
+            .unwrap()
+            .insert(host.as_str().to_string(), gate);
         Ok(Link {
             workspace,
             process: None,

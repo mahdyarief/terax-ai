@@ -1,5 +1,7 @@
 use super::{index::FileIndexState, mutate::note_dir_changed, to_canon};
-use crate::modules::workspace::{backend_for, resolve_path, within, WorkspaceEnv, WorkspaceRegistry};
+use crate::modules::workspace::{
+    backend_for, is_absolute_in, resolve_path, within, WorkspaceEnv, WorkspaceRegistry,
+};
 use terax_workspace_core::workspace::EntryKind;
 use serde::Serialize;
 use std::path::Path;
@@ -51,8 +53,7 @@ fn copy_destination(
     workspace: &WorkspaceEnv,
     registry: &WorkspaceRegistry,
 ) -> Result<String, String> {
-    if !resolve_path(root, workspace).is_absolute() || !resolve_path(dest_dir, workspace).is_absolute()
-    {
+    if !is_absolute_in(workspace, root) || !is_absolute_in(workspace, dest_dir) {
         return Err("copy destination and workspace root must be absolute".into());
     }
     let ws = backend_for(workspace);
@@ -67,7 +68,7 @@ fn copy_destination(
     Ok(dest)
 }
 
-fn copy_batch(
+pub(crate) fn copy_batch(
     sources: Vec<String>,
     dest_dir: &str,
     root: &str,

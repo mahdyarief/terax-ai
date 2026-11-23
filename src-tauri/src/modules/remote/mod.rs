@@ -20,3 +20,6 @@ pub(crate) mod testing;
 
 #[cfg(test)]
 mod authorize_tests;
+
+#[cfg(test)]
+mod fs_tests;

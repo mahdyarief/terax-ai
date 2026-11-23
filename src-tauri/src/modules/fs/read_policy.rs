@@ -1,5 +1,29 @@
 use std::path::Path;
 
+use terax_workspace_core::env::{resolve_path, WorkspaceEnv};
+
+/// The secret-path policy for a workspace path. On this machine (local,
+/// WSL) by its host spelling, which also covers the app's own credential
+/// directory. On a server by the server's spelling: its host spelling is a
+/// placeholder no pattern matches, and this app's directory is not there.
+pub(super) fn readable_in(path: &str, workspace: &WorkspaceEnv) -> Result<(), String> {
+    if workspace.is_ssh() {
+        return match terax_workspace_core::confined::refusal(path) {
+            Some(why) => Err(why.into()),
+            None => Ok(()),
+        };
+    }
+    readable(&resolve_path(path, workspace))
+}
+
+/// `deny_runtime` for a workspace path; nothing to deny on a server.
+pub(super) fn deny_runtime_in(path: &str, workspace: &WorkspaceEnv) -> Result<(), String> {
+    if workspace.is_ssh() {
+        return Ok(());
+    }
+    deny_runtime(&resolve_path(path, workspace))
+}
+
 /// The secret-path policy for a host path: the shared patterns (in the
 /// workspace core, so a remote agent refuses the same names) plus this app's
 /// own credential directory.
@@ -144,5 +168,16 @@ mod tests {
             assert!(readable(Path::new(path)).is_err(), "{path}");
         }
         assert!(readable(Path::new("/repo/environment.ts")).is_ok());
+    }
+
+    #[test]
+    fn a_server_path_is_checked_as_the_server_spells_it() {
+        let ssh = WorkspaceEnv::Ssh {
+            host: terax_workspace_core::env::SshHost::try_from("box".to_string()).unwrap(),
+        };
+        assert!(readable_in("/home/me/.ssh/id_ed25519", &ssh).is_err());
+        assert!(readable_in("/srv/app/.env", &ssh).is_err());
+        assert!(readable_in("/srv/app/src/main.rs", &ssh).is_ok());
+        assert!(deny_runtime_in("/home/me/.cache/terax/control.json", &ssh).is_ok());
     }
 }

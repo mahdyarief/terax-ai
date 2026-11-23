@@ -155,12 +155,13 @@ pub fn read_dir_entries(
         e.to_string()
     })?;
 
-    // Gitignore decorations walk host paths with the `ignore` crate; they move
-    // behind the backend with the search engines (phase 1, task 7).
+    // Gitignore decorations walk host paths with the `ignore` crate, so a
+    // server's folder has none (its files are all shown as not ignored).
     let root = resolve_path(&path, &workspace);
     // Gate on a real repo: outside one the walk is pointless and would probe
     // each child for a nested `.git`, which trips macOS folder-access prompts.
-    let git_decorations = git_decorations.unwrap_or(false) && in_git_repo(&root);
+    let git_decorations =
+        git_decorations.unwrap_or(false) && !workspace.is_ssh() && in_git_repo(&root);
     let git_visible = if git_decorations {
         git_non_ignored_names(&root, show_hidden)
     } else {

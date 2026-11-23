@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use tauri::http::{Request, Response};
 use tauri::{Manager, Runtime, UriSchemeContext, UriSchemeResponder};
 
-use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv};
+use crate::modules::workspace::{backend_for, WorkspaceEnv};
 use terax_workspace_core::confined::{allowed, Confine, ConfinedError, ConfinedRead};
 use terax_workspace_core::workspace::EntryKind;
 
@@ -27,11 +27,7 @@ impl Grant {
     }
 }
 
-/// The secret-path policy for a canonical workspace path, which covers the
-/// app's own credential directory through the path's host spelling.
-fn readable_in(path: &str, workspace: &WorkspaceEnv) -> Result<(), String> {
-    super::read_policy::readable(Path::new(&resolve_path(path, workspace)))
-}
+use super::read_policy::readable_in;
 
 #[derive(Default)]
 pub struct AssetGrants(Mutex<GrantState>);
