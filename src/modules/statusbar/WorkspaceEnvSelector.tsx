@@ -38,6 +38,10 @@ function WorkspaceEnvSelectorWindows({ onSelect }: Props) {
     }
   };
 
+  // A server's space keeps its host: it is opened from Connect to Host, and
+  // switching it to this machine would leave its folder on the server.
+  if (env.kind === "ssh") return null;
+
   const label = workspaceEnvLabel(env, "Windows");
 
   return (

@@ -42,7 +42,7 @@ fn read_memory(root: &Path, checked_path: &Path) -> Result<Option<String>, Strin
 /// `root/TERAX.md`, read only if the file actually opened is inside `root`
 /// (a canonical workspace path), passes the secret-path policy, and is the
 /// very file the frontend checked (`checked_path`).
-fn read_memory_in(
+pub(crate) fn read_memory_in(
     ws: &dyn Workspace,
     root: &str,
     checked_path: &str,
@@ -66,8 +66,14 @@ fn read_memory_in(
             ConfinedError::Io(error) => error.to_string(),
         })?;
     super::read_policy::deny_runtime_in(&read.real_path, ws.env())?;
-    // The frontend's spelling, normalized the way real paths are.
-    if read.real_path != comparison_path(Path::new(checked_path)) {
+    // The frontend's spelling, normalized the way real paths are; a
+    // server's path is compared as the server spells it.
+    let checked = if ws.env().is_ssh() {
+        checked_path.to_string()
+    } else {
+        comparison_path(Path::new(checked_path))
+    };
+    if read.real_path != checked {
         return Err(ESCAPED.into());
     }
     let mut bytes = read.bytes;

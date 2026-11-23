@@ -111,9 +111,13 @@ Done: no code change was needed. Grants, `respond` and the preview's reads (`fs_
 
 ### Task 8: End to end, guards and docs
 
-- [ ] On dypod (the owner's server; every login must succeed, see the fail2ban learning): open a folder, edit and save, a conflict when the file changed on the server, create, rename and delete, file search and grep, a change made over a separate `ssh` showing up through the watch, an image preview, and a drop and reconnect with the explorer recovering. Driven through the app's command functions in an ignored test, plus a GUI walkthrough by the owner (a dev build shares the installed Terax's control descriptor).
-- [ ] Guards: the host-call guard covers every fs module for `Ssh`; a test that every Tauri command taking a `WorkspaceEnv` either works on `Ssh` or refuses with a message (no host path built from a remote one).
-- [ ] TERAX.md (remote spaces: authorization, browsing, search, watch, previews), a learning for anything non-obvious, and this plan marked complete.
+- [x] On dypod (the owner's server; every login must succeed, see the fail2ban learning): open a folder, edit and save, a conflict when the file changed on the server, create, rename and delete, file search and grep, a change made over a separate `ssh` showing up through the watch, an image preview, and a drop and reconnect with the explorer recovering. Driven through the app's command functions in an ignored test, plus a GUI walkthrough by the owner (a dev build shares the installed Terax's control descriptor).
+- [x] Guards: the host-call guard covers every fs module for `Ssh`; a test that every Tauri command taking a `WorkspaceEnv` either works on `Ssh` or refuses with a message (no host path built from a remote one).
+- [x] TERAX.md (remote spaces: authorization, browsing, search, watch, previews), a learning for anything non-obvious, and this plan marked complete.
+
+Done: `remote::e2e_tests::a_folder_on_a_real_server_through_the_app_commands` passed on dypod (watch about 0.7 s, reconnect about 1.8 s; every login succeeded, the server left clean). `ssh_commands_guard_tests.rs` lists all 79 commands taking a `WorkspaceEnv` (the scan found three a manual grep missed: `fs_search`, `lsp_spawn`, `pty_open`); `fs_tests` gained the binary, head, canonical, project-memory and interactive-grep reads, which found the project memory check comparing a server path in this machine's spelling. The status bar's env selector is hidden in a server's space (it would have switched the space to this machine with its folder still on the server). The owner's GUI walkthrough is still to do.
+
+**Phase 4 complete.**
 
 ## Risks
 

@@ -248,3 +248,80 @@ fn files_from_this_machine_are_uploaded_into_the_folder() {
     );
     assert!(refused.is_err());
 }
+
+#[test]
+fn previews_canonical_paths_and_project_memory_come_from_the_server() {
+    use base64::Engine;
+
+    use crate::modules::fs::file::{
+        fs_canonicalize, fs_read_binary, fs_read_head, ReadResultWithBytes,
+    };
+    use crate::modules::fs::grep::run_grep_interactive;
+    use crate::modules::fs::project_memory::read_memory_in;
+
+    let r = remote("fs-reads");
+    let readme = r.at("README.md");
+    let ReadResultWithBytes::Binary { content, size } =
+        tauri::async_runtime::block_on(fs_read_binary(readme.clone(), Some(r.env.clone())))
+            .unwrap()
+    else {
+        panic!("bytes");
+    };
+    assert_eq!(size, 5);
+    assert_eq!(
+        base64::engine::general_purpose::STANDARD
+            .decode(content)
+            .unwrap(),
+        b"# hi\n"
+    );
+    let head = tauri::async_runtime::block_on(fs_read_head(
+        r.at("src/main.rs"),
+        Some(r.env.clone()),
+        Some(3),
+        Some(true),
+        None,
+    ))
+    .unwrap();
+    assert_eq!(head.content, "fn ");
+    // Resolved on the server, in its spelling.
+    assert_eq!(
+        tauri::async_runtime::block_on(fs_canonicalize(
+            r.at("src/../README.md"),
+            Some(r.env.clone()),
+            None
+        ))
+        .unwrap(),
+        readme
+    );
+    // A link the user clicked must be a file on this machine.
+    assert!(tauri::async_runtime::block_on(fs_canonicalize(
+        readme.clone(),
+        Some(r.env.clone()),
+        Some(true)
+    ))
+    .is_err());
+
+    // The project's TERAX.md, inside the authorized folder.
+    let ws = r.ws();
+    assert!(r.registry.covers(&r.env, &r.root));
+    assert!(!r.registry.covers(&r.env, &r.outside));
+    // None yet: the frontend only asks for one it found.
+    assert!(read_memory_in(&*ws, &r.root, &r.at("TERAX.md")).is_err());
+    ws.write_atomic(&r.at("TERAX.md"), b"be kind").unwrap();
+    assert_eq!(
+        read_memory_in(&*ws, &r.root, &r.at("TERAX.md")).unwrap(),
+        Some("be kind".to_string())
+    );
+    // Not another file than the one the frontend checked.
+    assert!(read_memory_in(&*ws, &r.root, &r.at("README.md")).is_err());
+
+    let hits = run_grep_interactive(
+        "main".into(),
+        r.root.clone(),
+        None,
+        Some(r.env.clone()),
+        &|| false,
+    )
+    .unwrap();
+    assert_eq!(hits.hits.len(), 1);
+}

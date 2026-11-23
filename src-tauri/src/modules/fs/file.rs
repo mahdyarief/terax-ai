@@ -125,7 +125,7 @@ pub async fn fs_read_bytes(
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HeadResult {
-    content: String,
+    pub(crate) content: String,
     /// The file continues past `content`.
     truncated: bool,
     size: u64,
