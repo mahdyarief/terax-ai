@@ -1,5 +1,6 @@
 import type { SearchTarget } from "@/modules/header";
 import { MAX_PANES_PER_TAB, type Tab } from "@/modules/tabs";
+import { openSshPicker } from "@/modules/remote";
 import { leafIds } from "@/modules/terminal";
 import {
   Cancel01Icon,
@@ -15,6 +16,7 @@ import {
   LayoutTwoRowIcon,
   PaintBoardIcon,
   Search01Icon,
+  ServerStack03Icon,
   Settings01Icon,
   SidebarLeftIcon,
   SourceCodeIcon,
@@ -124,6 +126,14 @@ export function createCommandItems(
       keywords: ["spaces", "sessions", "overview", "organize", "manage", "move"],
       icon: DashboardSquare01Icon,
       run: ctx.openSpacesOverview,
+    },
+    {
+      id: "remote.connect",
+      title: "Connect to SSH Host...",
+      group: "General",
+      keywords: ["ssh", "remote", "server", "host", "connect"],
+      icon: ServerStack03Icon,
+      run: openSshPicker,
     },
     {
       id: "workspace.openFolder",

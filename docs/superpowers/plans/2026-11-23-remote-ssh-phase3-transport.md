@@ -100,8 +100,14 @@ Done. `modules/remote/`: `machine.rs` (pure; time comes in with events), `regist
 
 ### Task 7: Connect UI
 
-- [ ] `~/.ssh/config` host parsing (pure: `Host` lines, wildcards and negations skipped, `Include` followed one level); the palette entry and its host list with recents; the status bar item and its menu; Show log.
-- [ ] Tests: the config parser; the components' states (connecting, installing, ready, failed with the reason).
+- [x] `~/.ssh/config` host parsing (pure: `Host` lines, wildcards and negations skipped, `Include` followed one level); the palette entry and its host list with recents; the status bar item and its menu; Show log.
+- [x] Tests: the config parser; the components' states (connecting, installing, ready, failed with the reason).
+
+Done.
+- Rust `modules/remote/ssh_config.rs`: literal `Host` names only (patterns and `!` skipped, names the transport would refuse left out), `Include` followed one level (`~/`, relative to `~/.ssh`, `*`/`?` in the file name, sorted). Command `remote_ssh_hosts`.
+- Frontend `modules/remote`: `connections.ts` (the `remote://state` parser, a store per host, recents in `localStorage`, newest first, 8 at most; the picker's rows: recents, then the config's, then a typed `user@host` checked by the same rule as the app), `ConnectSshDialog` (palette entry "Connect to SSH Host..."), `RemoteStatusItems` (one item per host that is not idle: a dot, the host, the state; menu Reconnect or Connect now, Disconnect, Show log), `RemoteLogDialog`, and `RemoteConnections` (listens, loads the states a new window missed, hosts both dialogs; mounted in `App`).
+- Tests: Rust 6 for the parser; frontend 9 (events, the host rule, the picker's order, recents, each state's face including the failure reason, the log).
+- Not yet seen in a running app: that is Task 8.
 
 ### Task 8: End to end, guards and docs
 

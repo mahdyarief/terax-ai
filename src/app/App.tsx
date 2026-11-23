@@ -173,7 +173,7 @@ import {
   WindowVibrancyBridge,
 } from "@/modules/theme";
 import { UpdaterDialog } from "@/modules/updater";
-import { AskpassDialog } from "@/modules/remote";
+import { AskpassDialog, RemoteConnections } from "@/modules/remote";
 import {
   useWorkspaceEnvStore,
   type WorkspaceEnv,
@@ -2736,6 +2736,7 @@ export default function App() {
           <UpdaterDialog />
 
           <AskpassDialog />
+          <RemoteConnections />
 
           <CloseDialogs
             tabs={tabs}

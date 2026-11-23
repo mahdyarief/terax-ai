@@ -60,3 +60,11 @@ pub fn remote_state() -> Result<Vec<Snapshot>, String> {
 pub fn remote_log(host: String) -> Result<Vec<String>, String> {
     Ok(registry()?.log(&parse(host)?))
 }
+
+/// Host names from the user's `~/.ssh/config`, for the picker.
+#[tauri::command]
+pub fn remote_ssh_hosts() -> Vec<String> {
+    dirs::home_dir()
+        .map(|home| super::ssh_config::hosts(&home))
+        .unwrap_or_default()
+}
