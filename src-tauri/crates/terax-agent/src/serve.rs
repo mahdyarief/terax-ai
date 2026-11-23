@@ -17,10 +17,12 @@ use std::thread;
 
 use terax_remote_protocol::frame::{read_frame, write_frame, FrameError, MAX_FRAME};
 use terax_remote_protocol::handshake::{negotiate, Hello, CAP_WORKSPACE};
-use terax_remote_protocol::message::{decode, encode, Call, CallId, Envelope, Reply, WireError};
+use terax_remote_protocol::message::{
+    decode, encode, Browse, Call, CallId, Envelope, Reply, WireError,
+};
 use terax_workspace_core::confined::ConfinedRead;
 use terax_workspace_core::exec::ExecSpec;
-use terax_workspace_core::workspace::Workspace;
+use terax_workspace_core::workspace::{EntryKind, Workspace};
 
 use crate::roots::{Refusal, Roots};
 
@@ -30,6 +32,8 @@ pub struct Options {
     pub version: String,
     /// Requests that may run at once.
     pub workers: usize,
+    /// The user's home directory, for `Home` (`$HOME` by default).
+    pub home: Option<String>,
 }
 
 impl Default for Options {
@@ -38,6 +42,7 @@ impl Default for Options {
         Self {
             version: env!("CARGO_PKG_VERSION").to_string(),
             workers: cores.clamp(2, 8),
+            home: std::env::var("HOME").ok().filter(|h| !h.is_empty()),
         }
     }
 }
@@ -70,18 +75,20 @@ pub fn serve(
         None => return Ok(()),
     }
 
+    let home = Arc::new(options.home);
     let roots = Arc::new(RwLock::new(Roots::default()));
     let in_flight: InFlight = Arc::default();
     let (jobs, queue) = mpsc::channel::<Job>();
     let queue = Arc::new(Mutex::new(queue));
     let workers: Vec<_> = (0..options.workers.max(1))
         .map(|_| {
-            let (queue, output, ws, roots, in_flight) = (
+            let (queue, output, ws, roots, in_flight, home) = (
                 queue.clone(),
                 output.clone(),
                 ws.clone(),
                 roots.clone(),
                 in_flight.clone(),
+                home.clone(),
             );
             thread::spawn(move || loop {
                 let job = match queue.lock().unwrap().recv() {
@@ -89,7 +96,7 @@ pub fn serve(
                     Err(_) => return,
                 };
                 let roots = roots.read().unwrap().clone();
-                let result = handle(ws.as_ref(), &roots, job.call, &job.cancel);
+                let result = handle(ws.as_ref(), &roots, home.as_deref(), job.call, &job.cancel);
                 in_flight.lock().unwrap().remove(&job.id);
                 // The client may be gone; the loop notices when input ends.
                 let _ = respond(&output, job.id, result);
@@ -168,6 +175,7 @@ fn read_loop(
 fn handle(
     ws: &dyn Workspace,
     roots: &Roots,
+    home: Option<&str>,
     call: Call,
     cancel: &AtomicBool,
 ) -> Result<Reply, WireError> {
@@ -180,6 +188,14 @@ fn handle(
 
     match call {
         Call::SetRoots { .. } => Err(WireError::Protocol("SetRoots runs in order".into())),
+        Call::Home => match home {
+            Some(home) => ws.canonicalize(home).map(Reply::Path).map_err(io),
+            None => Err(io(io::Error::new(
+                io::ErrorKind::NotFound,
+                "the server has no home directory ($HOME is not set)",
+            ))),
+        },
+        Call::BrowseDirs { path } => browse(ws, &path).map(Reply::Browse).map_err(io),
         Call::Metadata { path } => {
             follow(&path)?;
             ws.metadata(&path).map(Reply::Meta).map_err(io)
@@ -295,6 +311,39 @@ fn handle(
     }
 }
 
+/// `path`'s canonical spelling and its subdirectories (links to directories
+/// included), sorted. Names only: nothing about files.
+fn browse(ws: &dyn Workspace, path: &str) -> io::Result<Browse> {
+    let path = ws.canonicalize(path)?;
+    if ws.metadata(&path)?.kind != EntryKind::Dir {
+        return Err(io::Error::new(
+            io::ErrorKind::NotADirectory,
+            format!("{path} is not a directory"),
+        ));
+    }
+    let child = |name: &str| {
+        if path.ends_with('/') {
+            format!("{path}{name}")
+        } else {
+            format!("{path}/{name}")
+        }
+    };
+    let mut dirs: Vec<String> = ws
+        .read_dir(&path)?
+        .into_iter()
+        .filter(|entry| match entry.kind {
+            EntryKind::Dir => true,
+            EntryKind::Symlink => ws
+                .metadata(&child(&entry.name))
+                .is_ok_and(|meta| meta.kind == EntryKind::Dir),
+            _ => false,
+        })
+        .map(|entry| entry.name)
+        .collect();
+    dirs.sort();
+    Ok(Browse { path, dirs })
+}
+
 fn read_confined(
     ws: &dyn Workspace,
     path: &str,
@@ -369,7 +418,7 @@ mod tests {
             show_hidden: false,
             max_depth: None,
         };
-        let run = |cancelled: bool| handle(&ws, &roots, call(), &AtomicBool::new(cancelled));
+        let run = |cancelled: bool| handle(&ws, &roots, None, call(), &AtomicBool::new(cancelled));
         assert!(matches!(run(false), Ok(Reply::Files(Some(_)))));
         assert_eq!(run(true), Ok(Reply::Files(None)));
     }

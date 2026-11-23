@@ -27,7 +27,9 @@ use terax_workspace_core::workspace::{
 
 use crate::frame::{read_frame, write_frame, FrameError, MAX_FRAME};
 use crate::handshake::{negotiate, Hello, Session, CAP_WORKSPACE};
-use crate::message::{decode, encode, Call, CallId, Envelope, Reply, WireError, WireExecSpec};
+use crate::message::{
+    decode, encode, Browse, Call, CallId, Envelope, Reply, WireError, WireExecSpec,
+};
 
 #[derive(Clone, Debug)]
 pub struct Options {
@@ -165,6 +167,23 @@ impl RemoteWorkspace {
             .map_err(io::Error::from)?
         {
             Reply::Unit => Ok(()),
+            other => Err(unexpected(&other)),
+        }
+    }
+
+    /// The agent user's home directory, canonical.
+    pub fn home(&self) -> io::Result<String> {
+        match self.op(Call::Home)? {
+            Reply::Path(home) => Ok(home),
+            other => Err(unexpected(&other)),
+        }
+    }
+
+    /// A directory's canonical path and its subdirectories' names, outside
+    /// the roots (what a folder picker shows).
+    pub fn browse_dirs(&self, path: &str) -> io::Result<Browse> {
+        match self.op(Call::BrowseDirs { path: path.into() })? {
+            Reply::Browse(browse) => Ok(browse),
             other => Err(unexpected(&other)),
         }
     }

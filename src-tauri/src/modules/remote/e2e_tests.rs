@@ -184,6 +184,17 @@ fn connect_install_reconnect_and_upgrade_on_a_real_server() {
     assert_eq!(installs(&a, &host), 1);
     let workspace = a.workspace(&host).unwrap();
     assert!(workspace.metadata("/tmp").is_err(), "no roots yet");
+    // The folder picker's calls work before any root.
+    let home = workspace.home().unwrap();
+    assert!(home.starts_with('/'), "{home}");
+    let browse = workspace.browse_dirs(&home).unwrap();
+    assert_eq!(browse.path, home);
+    assert!(
+        browse.dirs.iter().any(|d| d == ".terax-server"),
+        "{:?}",
+        browse.dirs
+    );
+    println!("home {home}: {} directories", browse.dirs.len());
     a.set_roots(&host, vec!["/tmp".into()]).unwrap();
     assert_eq!(workspace.metadata("/tmp").unwrap().kind, EntryKind::Dir);
 

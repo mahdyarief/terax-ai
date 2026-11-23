@@ -26,6 +26,10 @@ struct Agent {
 
 impl Agent {
     fn start() -> Self {
+        Self::start_with(None)
+    }
+
+    fn start_with(home: Option<String>) -> Self {
         let (agent_in, to_agent) = io::pipe().unwrap();
         let (from_agent, agent_out) = io::pipe().unwrap();
         let done = thread::spawn(move || {
@@ -37,6 +41,7 @@ impl Agent {
                 Options {
                     version: "9.9.9-test".into(),
                     workers: 4,
+                    home,
                 },
             )
         });
@@ -49,7 +54,11 @@ impl Agent {
 
     /// Started and past the handshake.
     fn ready() -> Self {
-        let mut agent = Self::start();
+        Self::ready_with(None)
+    }
+
+    fn ready_with(home: Option<String>) -> Self {
+        let mut agent = Self::start_with(home);
         let Envelope::Hello(hello) = agent.recv().unwrap() else {
             panic!("the agent speaks first");
         };
@@ -488,5 +497,71 @@ fn an_entry_named_dot_dot_cannot_reach_the_roots_parent() {
     }
     assert!(std::path::Path::new(&format!("{}/outside/secret.txt", tree.base)).exists());
     assert!(std::path::Path::new(&tree.root()).exists());
+    agent.finish().unwrap();
+}
+
+#[test]
+fn home_is_the_users_canonical_home_or_a_clear_error() {
+    let tree = tree();
+    let mut agent = Agent::ready_with(Some(format!("{}/root/src/..", tree.base)));
+    assert_eq!(agent.call(1, Call::Home), Ok(Reply::Path(tree.root())));
+    agent.finish().unwrap();
+
+    let mut agent = Agent::ready();
+    match agent.call(1, Call::Home) {
+        Err(WireError::Io { message, .. }) => assert!(message.contains("HOME"), "{message}"),
+        other => panic!("{other:?}"),
+    }
+    agent.finish().unwrap();
+}
+
+#[test]
+fn browsing_lists_only_directories_and_works_outside_the_roots() {
+    let tree = tree();
+    std::fs::write(format!("{}/top.txt", tree.base), "x").unwrap();
+    let mut agent = Agent::ready();
+    // No roots at all: every file call is refused...
+    assert!(matches!(
+        agent.call(
+            1,
+            Call::ReadDir {
+                path: tree.base.clone()
+            }
+        ),
+        Err(WireError::Protocol(_))
+    ));
+    // ...but a folder picker can browse, and sees directories only.
+    let Ok(Reply::Browse(browse)) = agent.call(
+        2,
+        Call::BrowseDirs {
+            path: format!("{}/root/..", tree.base),
+        },
+    ) else {
+        panic!("a listing");
+    };
+    assert_eq!(browse.path, tree.base, "canonical");
+    assert_eq!(browse.dirs, ["outside", "root"], "no top.txt");
+    let Ok(Reply::Browse(src)) = agent.call(
+        3,
+        Call::BrowseDirs {
+            path: format!("{}/src", tree.root()),
+        },
+    ) else {
+        panic!("a listing");
+    };
+    assert!(src.dirs.is_empty(), "main.rs is not a directory");
+    // A file is not browsable, so nothing about it comes back.
+    match agent.call(
+        4,
+        Call::BrowseDirs {
+            path: format!("{}/outside/secret.txt", tree.base),
+        },
+    ) {
+        Err(WireError::Io { message, .. }) => assert!(!message.contains(
+            "secret
+"
+        )),
+        other => panic!("{other:?}"),
+    }
     agent.finish().unwrap();
 }

@@ -89,6 +89,7 @@ impl Connector for InProcess {
                 terax_agent::serve::Options {
                     version: "test".into(),
                     workers: 2,
+                    home: None,
                 },
             );
         });
@@ -312,4 +313,26 @@ fn a_drop_is_explained_only_by_what_ssh_said_since_connecting() {
         "Connection reset by 203.0.113.7 port 22"
     );
     assert_eq!(drop_reason(&[]), "the connection ended");
+}
+
+#[test]
+fn a_folder_can_be_browsed_before_any_root_is_set() {
+    let f = fixture("in-process-browse", InProcess::script(vec![]));
+    let (_dir, path) = dir();
+    std::fs::create_dir(format!("{path}/repo")).unwrap();
+    std::fs::write(format!("{path}/notes.txt"), "x").unwrap();
+    f.registry.connect(&f.host);
+    f.ready();
+    let workspace = f.registry.workspace(&f.host).unwrap();
+    assert!(
+        workspace.read_dir(&path).is_err(),
+        "no roots: files refused"
+    );
+    let browse = workspace.browse_dirs(&path).unwrap();
+    assert_eq!(browse.dirs, ["repo"]);
+    // The in-process agent has no home configured: a clear error, not a guess.
+    assert_eq!(
+        workspace.home().unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
 }

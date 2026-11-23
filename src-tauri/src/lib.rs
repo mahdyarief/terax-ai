@@ -488,6 +488,8 @@ pub fn run() {
             modules::remote::commands::remote_state,
             modules::remote::commands::remote_log,
             modules::remote::commands::remote_ssh_hosts,
+            modules::remote::commands::remote_home,
+            modules::remote::commands::remote_browse_dirs,
             workspace::wsl_list_distros,
             workspace::wsl_default_distro,
             workspace::ipc::wsl_home,

@@ -9,7 +9,7 @@
 use serde::{Deserialize, Serialize};
 
 /// Raised whenever a message changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// The `Workspace` operations as `Call` carries them in this protocol.
 pub const CAP_WORKSPACE: &str = "workspace.v1";

@@ -69,3 +69,28 @@ pub fn remote_ssh_hosts() -> Vec<String> {
         .map(|home| super::ssh_config::hosts(&home))
         .unwrap_or_default()
 }
+
+fn live(host: &SshHost) -> Result<Arc<terax_remote_protocol::client::RemoteWorkspace>, String> {
+    registry()?
+        .workspace(host)
+        .ok_or_else(|| registry::not_connected(host).to_string())
+}
+
+/// The server user's home directory, where the folder picker starts.
+#[tauri::command]
+pub async fn remote_home(host: String) -> Result<String, String> {
+    let host = parse(host)?;
+    crate::modules::fs::blocking(move || live(&host)?.home().map_err(|e| e.to_string())).await
+}
+
+/// A server directory's canonical path and its subdirectories, for the
+/// folder picker (names only; allowed before the folder is authorized).
+#[tauri::command]
+pub async fn remote_browse_dirs(
+    host: String,
+    path: String,
+) -> Result<terax_remote_protocol::message::Browse, String> {
+    let host = parse(host)?;
+    crate::modules::fs::blocking(move || live(&host)?.browse_dirs(&path).map_err(|e| e.to_string()))
+        .await
+}

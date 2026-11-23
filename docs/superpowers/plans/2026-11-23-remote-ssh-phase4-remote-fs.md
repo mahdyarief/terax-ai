@@ -25,7 +25,7 @@ After connecting to a host, the user picks a folder on the server and gets a spa
 
 - **Authorization is per env, with the agent's roots following it.** For an `Ssh` env, `WorkspaceRegistry::authorize` canonicalizes through `backend_for(env).canonicalize` (on the server) and stores `Location { env: Ssh, path }`; covering works as for WSL (`covers` already compares env and path). Every change to a host's authorized roots (authorize, derived, revoke) recomputes that host's list and hands it to `remote::registry::set_roots`, which keeps it for reconnects (Phase 3). The client check stays first; the agent's check is defence in depth.
 - **Browsing before authorizing.** The picker must list directories before any root is granted, but the agent refuses every path outside its roots. A new protocol call `BrowseDirs { path }` returns the canonical path and its subdirectory names only (no file names, no contents, no metadata beyond "is a directory"), outside the roots, like a folder dialog on this machine. `Home` returns the agent user's canonical `$HOME`. Both are new `Call`s; `PROTOCOL_VERSION` rises (agent and app ship together and the agent is hash-checked, so there is no mixed-version case).
-- **A remote space opens after the user picks a folder.** Connect, then the picker (served by `BrowseDirs`, starting at `Home`, with a typed path), then a space with env `ssh:<host>` and that root. The space's home is the server's `$HOME`. Restoring a remote space at startup connects as a user-started attempt (it may prompt; the user opened it before); while disconnected the explorer shows the state and a Connect button instead of errors.
+- **A remote space opens after the user picks a folder.** Connect, then the picker (served by `BrowseDirs`, starting at `Home`, with a typed path), then a space with env `ssh:<host>` and that root. The space's home is the server's `$HOME`. Restoring a remote space at startup connects right away, as a user-started attempt (it may prompt; the user opened it before; owner's decision, 2026-11-23). If that attempt fails, or the connection is down for any other reason, the explorer shows the state, the reason and a Connect button as the fallback, instead of errors.
 - **The file index runs on the agent.** `fs_search` / `fs_list_files` / `fs_warm_index` for `Ssh` use `Workspace::list_files` (the agent walks with the same `ignore` rules and returns the list); fuzzy ranking stays in the app, unchanged. The index cache is keyed by env, so a reconnect (a new session) rebuilds it.
 - **Watching is a push stream.** New calls `Watch { id, paths }` and `Unwatch { id }`; the agent runs the core's watch engine (`terax_workspace_core::watch`, inotify) on its side, debounced as locally, and sends `Envelope::Changed { id, paths }`. The client routes it to the app's existing `fs:changed` event, so the frontend needs no change. Watches are kept per host in the registry and re-registered after a reconnect, followed by one `fs:changed` for every watched directory (anything may have changed while down).
 - **Policies on remote paths.** The secret-path refusals (`confined::refusal`, already in the core and enforced by the agent for confined reads) apply to remote paths by their workspace spelling; `read_policy::readable` gains an env-aware entry point instead of resolving a host path. The explorer's gitignore decorations are skipped for `Ssh` until Phase 5 brings git.
@@ -33,6 +33,8 @@ After connecting to a host, the user picks a folder on the server and gets a spa
 - **Refusals stay explicit.** Git, terminals, LSP, checkpoints, worktrees and AI tools refuse an `Ssh` space with a message naming the phase, never a host fallback; the guards from Phases 1 and 3 keep watching for host calls.
 
 ## Tasks
+
+Task 2 runs before Task 1: authorizing a remote folder canonicalizes it on the server, and the agent refuses `Canonicalize` outside its roots, so authorization takes the canonical path from `BrowseDirs` (a remote root is always a directory).
 
 ### Task 1: Remote authorization and roots
 
@@ -42,9 +44,11 @@ After connecting to a host, the user picks a folder on the server and gets a spa
 
 ### Task 2: `Home` and `BrowseDirs`
 
-- [ ] Protocol calls and replies, the agent's handlers (`BrowseDirs` outside the roots, directory names only), the client methods, `PROTOCOL_VERSION` raised.
-- [ ] Tauri commands `remote_home(host)` and `remote_browse_dirs(host, path)`.
-- [ ] Tests: round trips over pipes; `BrowseDirs` never returns file names or anything for a file path; the agent's contract suite still passes; the over-SSH test runs both on dypod.
+- [x] Protocol calls and replies, the agent's handlers (`BrowseDirs` outside the roots, directory names only), the client methods, `PROTOCOL_VERSION` raised.
+- [x] Tauri commands `remote_home(host)` and `remote_browse_dirs(host, path)`.
+- [x] Tests: round trips over pipes; `BrowseDirs` never returns file names or anything for a file path; the agent's contract suite still passes; the over-SSH test runs both on dypod.
+
+Done. `Call::Home` (the agent's `Options::home`, `$HOME` by default, canonicalized; a clear `NotFound` when unset) and `Call::BrowseDirs` (`Reply::Browse { path, dirs }`: canonical path, sorted subdirectory names, links to directories included, a file refused with `NotADirectory`), both outside the roots; `PROTOCOL_VERSION` 2. Client `RemoteWorkspace::home` / `browse_dirs`; commands `remote_home`, `remote_browse_dirs` (off the main thread). Tests: round trips, two agent tests (`tests/serve.rs`), one through the registry (browse before any root, files still refused). On dypod through the e2e test: home `/home/ubuntu`, its directories listed. The bundled agents were rebuilt (`pnpm build:agent`) for protocol 2.
 
 ### Task 3: Open a remote folder
 

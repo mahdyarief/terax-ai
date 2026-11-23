@@ -68,6 +68,21 @@ pub enum Call {
         max_depth: Option<u64>,
     },
     Exec { spec: WireExecSpec },
+    /// The agent user's home directory, canonical. Outside the roots: it is
+    /// where a folder picker starts.
+    Home,
+    /// A directory's canonical path and the names of its subdirectories,
+    /// outside the roots, as a folder dialog shows them: no file names, no
+    /// contents. What a remote folder is picked (and authorized) with.
+    BrowseDirs { path: String },
+}
+
+/// What `BrowseDirs` returns.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Browse {
+    pub path: String,
+    /// Sorted; links to directories included, hidden ones too.
+    pub dirs: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -85,6 +100,7 @@ pub enum Reply {
     /// `None` when the walk was cancelled.
     Files(Option<FileIndex>),
     Exec(Captured),
+    Browse(Browse),
 }
 
 /// An error from the agent, rebuilt on the client as the same kind of error
@@ -441,6 +457,8 @@ mod tests {
                 max_depth: Some(12),
             },
             Call::Exec { spec: exec_spec() },
+            Call::Home,
+            Call::BrowseDirs { path: path() },
         ];
         for call in &calls {
             match call {
@@ -463,7 +481,9 @@ mod tests {
                 | Call::Grep { .. }
                 | Call::Glob { .. }
                 | Call::ListFiles { .. }
-                | Call::Exec { .. } => {}
+                | Call::Exec { .. }
+                | Call::Home
+                | Call::BrowseDirs { .. } => {}
             }
         }
         calls
@@ -472,7 +492,7 @@ mod tests {
     #[test]
     fn every_call_round_trips() {
         let calls = every_call();
-        assert_eq!(calls.len(), 20);
+        assert_eq!(calls.len(), 22);
         for (id, call) in calls.into_iter().enumerate() {
             round_trip(Envelope::Request {
                 id: id as u64,
@@ -536,6 +556,10 @@ mod tests {
                 stderr_truncated: true,
                 exit_code: Some(0),
                 timed_out: false,
+            }),
+            Reply::Browse(Browse {
+                path: "/home/me".into(),
+                dirs: vec![".config".into(), "repo".into()],
             }),
         ];
         for (id, reply) in replies.into_iter().enumerate() {
