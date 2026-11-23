@@ -47,8 +47,9 @@ Each task: tests first, `cargo clippy --workspace --all-targets -- -D warnings`,
 
 ### Task 3: Handshake
 
-- [ ] `Hello` and the pure `negotiate(local, remote) -> Result<Session, Mismatch>`.
-- [ ] Tests: same version passes; a different protocol version, or a missing required capability, fails with a reason.
+- [x] `Hello` and the pure `negotiate(local, remote) -> Result<Session, Mismatch>`.
+- [x] Tests: same version passes; a different protocol version, or a missing required capability, fails with a reason.
+  - `PROTOCOL_VERSION = 1` and the capability `workspace.v1`. The session keeps the peer's `Hello` and the capabilities both sides offer; a different agent version is left to Phase 3 (reinstall), not refused here. Mutation-checked: the protocol check, the required-capability check and the intersection each fail a test.
 
 ### Task 4: Agent
 

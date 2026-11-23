@@ -9,6 +9,8 @@ use std::io;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+
+use crate::handshake::Hello;
 use terax_workspace_core::confined::{ConfinedError, ConfinedOutcome, ConfinedRead};
 use terax_workspace_core::exec::capture::{Captured, Limits};
 use terax_workspace_core::exec::ExecSpec;
@@ -21,6 +23,8 @@ pub type CallId = u64;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Envelope {
+    /// Each side's first message; see `handshake`.
+    Hello(Hello),
     Request { id: CallId, call: Call },
     Response {
         id: CallId,
