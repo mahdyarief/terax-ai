@@ -405,7 +405,7 @@ impl Workspace for HostWorkspace {
         };
         if request.secret_policy {
             if let Some(why) = crate::confined::refusal(&real_path) {
-                return Err(ConfinedError::Refused(why));
+                return Err(ConfinedError::Refused(why.to_string()));
             }
         }
         if !crate::confined::allowed(&real_path, &request.roots) {

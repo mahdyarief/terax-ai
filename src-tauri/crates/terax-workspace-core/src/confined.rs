@@ -8,17 +8,17 @@ use std::io;
 use std::sync::OnceLock;
 
 use regex::{RegexSet, RegexSetBuilder};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A place a confined read may see: exactly `path`, or (`subtree`) anything
 /// beneath it as well. A canonical workspace path.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Confine {
     pub path: String,
     pub subtree: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfinedRead {
     /// The opened file must be inside one of these.
     pub roots: Vec<Confine>,
@@ -30,10 +30,11 @@ pub struct ConfinedRead {
     pub limit: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConfinedOutcome {
     /// The opened file's canonical workspace path.
     pub real_path: String,
+    #[serde(with = "serde_bytes")]
     pub bytes: Vec<u8>,
     /// The file's length when it was opened.
     pub size: u64,
@@ -49,8 +50,8 @@ pub enum ConfinedError {
     Inexact,
     /// The opened file is outside every root.
     Outside,
-    /// The secret-path policy refused the real path.
-    Refused(&'static str),
+    /// The secret-path policy refused the real path; why, for the user.
+    Refused(String),
 }
 
 impl From<io::Error> for ConfinedError {

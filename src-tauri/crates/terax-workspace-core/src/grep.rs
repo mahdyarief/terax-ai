@@ -25,7 +25,7 @@ pub const HARD_MAX_RESULTS: usize = 2000;
 /// keystrokes spawned a dozen threads per query.
 const WALK_THREADS: usize = 4;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrepHit {
     pub path: String,
     pub rel: String,
@@ -33,7 +33,7 @@ pub struct GrepHit {
     pub text: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrepResponse {
     pub hits: Vec<GrepHit>,
     pub truncated: bool,
@@ -174,7 +174,7 @@ fn search_tree(
 }
 
 /// What a content search matches.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase")]
 pub enum GrepPattern {
     /// A regular expression, case-sensitive unless asked otherwise.
@@ -186,7 +186,7 @@ pub enum GrepPattern {
     Literal { text: String },
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GrepRequest {
     /// Workspace path of the directory to search.
     pub root: String,
@@ -196,7 +196,7 @@ pub struct GrepRequest {
     pub max_results: Option<usize>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GlobRequest {
     pub root: String,
     pub pattern: String,
@@ -259,13 +259,13 @@ fn not_a_dir(root_path: &Path, root: &str) -> Result<(), String> {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GlobHit {
     pub path: String,
     pub rel: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GlobResponse {
     pub hits: Vec<GlobHit>,
     pub truncated: bool,

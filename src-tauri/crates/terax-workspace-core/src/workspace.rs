@@ -13,13 +13,15 @@
 use std::io;
 use std::path::Path;
 
+use serde::{Deserialize, Serialize};
+
 use crate::env::WorkspaceEnv;
 use crate::confined::{ConfinedError, ConfinedOutcome, ConfinedRead};
 use crate::exec::{capture::Captured, ExecSpec};
 use crate::grep::{GlobRequest, GlobResponse, GrepRequest, GrepResponse};
 use crate::index::FileIndex;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum EntryKind {
     File,
     Dir,
@@ -30,7 +32,7 @@ pub enum EntryKind {
 
 /// The part of a file's metadata the app uses, in a form that can cross a
 /// process boundary (unlike `std::fs::Metadata`).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Meta {
     pub kind: EntryKind,
     pub len: u64,
@@ -42,7 +44,7 @@ pub struct Meta {
     pub token: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DirEntry {
     pub name: String,
     /// The entry itself, not what a symlink points to.
@@ -50,7 +52,7 @@ pub struct DirEntry {
 }
 
 /// A window into a regular file.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadRequest {
     /// Byte offset to start at; clamped to the file's length.
     pub offset: u64,
@@ -59,15 +61,16 @@ pub struct ReadRequest {
     pub limit: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadOutcome {
+    #[serde(with = "serde_bytes")]
     pub bytes: Vec<u8>,
     /// The file's length when it was opened.
     pub size: u64,
     pub mtime_ms: u64,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WriteOutcome {
     /// The file did not exist before the write.
     pub created: bool,

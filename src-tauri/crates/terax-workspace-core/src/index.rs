@@ -34,10 +34,41 @@ const DIR_BIT: u32 = 1 << 31;
 
 /// Paths of one walk in a single string plus end offsets: about 12 bytes of
 /// overhead per entry instead of a heap allocation each.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "PackedParts")]
 pub struct Packed {
     buf: String,
     ends: Vec<u32>,
+}
+
+/// `Packed` as it arrives from elsewhere (a remote agent), before the checks
+/// that keep `get` from slicing out of bounds or inside a character.
+#[derive(Deserialize)]
+struct PackedParts {
+    buf: String,
+    ends: Vec<u32>,
+}
+
+impl TryFrom<PackedParts> for Packed {
+    type Error = String;
+
+    fn try_from(parts: PackedParts) -> Result<Self, String> {
+        if parts.buf.len() > MAX_PACKED_BYTES || parts.ends.len() > MAX_SCANNED {
+            return Err("file index exceeds its budget".into());
+        }
+        let mut start = 0;
+        for raw in &parts.ends {
+            let end = (raw & !DIR_BIT) as usize;
+            if end < start || end > parts.buf.len() || !parts.buf.is_char_boundary(end) {
+                return Err("file index offsets are inconsistent".into());
+            }
+            start = end;
+        }
+        Ok(Self {
+            buf: parts.buf,
+            ends: parts.ends,
+        })
+    }
 }
 
 impl Packed {
@@ -84,7 +115,7 @@ impl Packed {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileIndex {
     pub entries: Packed,
     /// The walk stopped at a budget; results are a prefix of the tree.

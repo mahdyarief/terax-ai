@@ -10,6 +10,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use serde::{Deserialize, Serialize};
 use shared_child::SharedChild;
 
 const READER_STACK: usize = 128 * 1024;
@@ -20,7 +21,7 @@ const READ_CHUNK: usize = 16 * 1024;
 const EXITED_DRAIN_GRACE: Duration = Duration::from_millis(750);
 const KILLED_DRAIN_GRACE: Duration = Duration::from_millis(500);
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
     pub stdout: usize,
     pub stderr: usize,
@@ -29,9 +30,11 @@ pub struct Limits {
     pub stop_on_stdout_cap: bool,
 }
 
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Captured {
+    #[serde(with = "serde_bytes")]
     pub stdout: Vec<u8>,
+    #[serde(with = "serde_bytes")]
     pub stderr: Vec<u8>,
     pub stdout_truncated: bool,
     pub stderr_truncated: bool,

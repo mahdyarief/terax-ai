@@ -3,3 +3,4 @@
 //! Tauri, no async runtime, so the agent can link it.
 
 pub mod frame;
+pub mod message;

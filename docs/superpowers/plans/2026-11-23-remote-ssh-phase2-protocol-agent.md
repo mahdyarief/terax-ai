@@ -37,8 +37,13 @@ Each task: tests first, `cargo clippy --workspace --all-targets -- -D warnings`,
 
 ### Task 2: Messages and wire types
 
-- [ ] `Envelope`, `Call`, `Reply`, `WireError`; serde derives on the core types listed above; the `ExecSpec` wire type and its UTF-8 check.
-- [ ] Tests: every `Call` and `Reply` variant round-trips; every `io::ErrorKind` the core returns and every `ConfinedError` variant survives the trip; a non-UTF-8 exec argument is refused; an unknown message decodes to an error, not a panic.
+- [x] `Envelope`, `Call`, `Reply`, `WireError`; serde derives on the core types listed above; the `ExecSpec` wire type and its UTF-8 check.
+- [x] Tests: every `Call` and `Reply` variant round-trips; every `io::ErrorKind` the core returns and every `ConfinedError` variant survives the trip; a non-UTF-8 exec argument is refused; an unknown message decodes to an error, not a panic.
+  - Byte fields (`ReadOutcome`, `ConfinedOutcome`, `Captured`, a write's body, exec stdin) use `serde_bytes`, so they travel as MessagePack binary; a test checks a 1 MiB read encodes to about 1 MiB.
+  - `ConfinedError::Refused` now holds a `String` (it held a `&'static str`, which cannot be rebuilt from the wire).
+  - A file index from the wire is validated as it is decoded (`Packed` deserializes through `PackedParts`): offsets must be in order, in bounds and on character boundaries, or `get` could panic in the app.
+  - `io::ErrorKind` crosses by name (31 kinds, a superset of the ten the app checks); an unknown name decodes as `Other` and keeps its text.
+  - Mutation-checked: bytes as arrays, the character-boundary check, one error kind and the `Refused` mapping each fail a test.
 
 ### Task 3: Handshake
 

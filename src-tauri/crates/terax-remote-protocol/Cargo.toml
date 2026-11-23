@@ -7,6 +7,10 @@ publish = false
 description = "Wire protocol between Terax and terax-agent: framing, messages and the client"
 
 [dependencies]
+rmp-serde = "1"
+serde = { version = "1", features = ["derive"] }
+serde_bytes = "0.11"
+terax-workspace-core = { path = "../terax-workspace-core" }
 
 [dev-dependencies]
 proptest = "1"
