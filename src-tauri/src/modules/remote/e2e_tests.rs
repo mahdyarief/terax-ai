@@ -91,21 +91,15 @@ fn server(host: &str, script: &str) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-/// Removes this run's agent directories from the server.
+/// Removes this run's directories from the server (`~` expanded there).
 struct Cleanup {
     host: String,
-    prefix: String,
+    paths: Vec<String>,
 }
 
 impl Drop for Cleanup {
     fn drop(&mut self) {
-        server(
-            &self.host,
-            &format!(
-                "rm -rf ~/.terax-server/{}-a ~/.terax-server/{}-b",
-                self.prefix, self.prefix
-            ),
-        );
+        server(&self.host, &format!("rm -rf {}", self.paths.join(" ")));
     }
 }
 
@@ -155,7 +149,10 @@ fn connect_install_reconnect_and_upgrade_on_a_real_server() {
     let prefix = format!("0.0.0-e2e-{}", std::process::id());
     let _cleanup = Cleanup {
         host: name.clone(),
-        prefix: prefix.clone(),
+        paths: vec![
+            format!("~/.terax-server/{prefix}-a"),
+            format!("~/.terax-server/{prefix}-b"),
+        ],
     };
     let (address, asked) = endpoint();
     let control = ControlState::for_askpass_tests(&address, cli());
@@ -260,4 +257,203 @@ fn connect_install_reconnect_and_upgrade_on_a_real_server() {
     wait(&a, &host, "a idle", |s| s == &State::Idle);
     wait(&b, &host, "b idle", |s| s == &State::Idle);
     println!("log of a:\n{}", a.log(&host).join("\n"));
+}
+
+/// What the renderer asks the asset scheme for.
+fn asset_request(path: &str, token: &str) -> tauri::http::Request<Vec<u8>> {
+    let encoded =
+        percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC).to_string();
+    tauri::http::Request::builder()
+        .uri(format!("https://asset.localhost/{encoded}?token={token}"))
+        .body(Vec::new())
+        .unwrap()
+}
+
+/// A folder on the server through the app's own command functions, on the
+/// app-wide registry (what `backend_for` asks). Run it alone: the registry
+/// is installed once per process.
+#[test]
+#[ignore = "needs TERAX_AGENT_SSH_HOST"]
+fn a_folder_on_a_real_server_through_the_app_commands() {
+    use std::sync::mpsc;
+
+    use terax_workspace_core::env::WorkspaceEnv;
+
+    use super::watch::{push, resume, Deliver, RemoteWatches, WatchSet};
+    use crate::modules::fs::assets::{respond, AssetGrants};
+    use crate::modules::fs::file::{read_file_sync, ReadResult};
+    use crate::modules::fs::grep::run_grep;
+    use crate::modules::fs::index::FileIndexState;
+    use crate::modules::fs::mutate::{create_dir, create_file, remove_path, rename};
+    use crate::modules::fs::search::{run_search, SearchOptions};
+    use crate::modules::fs::tree::read_dir_entries;
+    use crate::modules::workspace::{backend_for, WorkspaceRegistry};
+
+    let name = std::env::var("TERAX_AGENT_SSH_HOST").expect("set TERAX_AGENT_SSH_HOST");
+    let host = SshHost::try_from(name.as_str()).unwrap();
+    let pid = std::process::id();
+    let prefix = format!("0.0.0-e2e-{pid}");
+    let folder = format!("/tmp/terax-e2e-{pid}");
+    let _cleanup = Cleanup {
+        host: name.clone(),
+        paths: vec![format!("~/.terax-server/{prefix}-c"), folder.clone()],
+    };
+    server(
+        &name,
+        &format!(
+            "mkdir -p {folder}/src {folder}/img && printf 'fn main() {{}}\\n' > {folder}/src/main.rs \
+             && printf '# hi\\n' > {folder}/README.md && printf 'PNG_BYTES' > {folder}/img/logo.png"
+        ),
+    );
+    let (address, _asked) = endpoint();
+    let control = ControlState::for_askpass_tests(&address, cli());
+    let dir = tempfile::tempdir().unwrap();
+    assert!(
+        super::registry::global().is_none(),
+        "run this test alone: the app-wide registry is already installed"
+    );
+    super::registry::install(registry(
+        &format!("{prefix}-c"),
+        &control,
+        &dir.path().join("known_hosts"),
+    ));
+    let reg = super::registry::global().unwrap();
+    reg.connect(&host);
+    wait(reg, &host, "ready", |s| s == &State::Ready);
+
+    // Open the folder: authorized, then listed by the explorer.
+    let env = WorkspaceEnv::Ssh { host: host.clone() };
+    let root = WorkspaceRegistry::default()
+        .authorize_in(&env, &folder)
+        .unwrap();
+    let names = |dir: &str| -> Vec<String> {
+        let mut names: Vec<_> = read_dir_entries(dir.into(), false, Some(true), Some(env.clone()))
+            .unwrap()
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(names(&root), ["README.md", "img", "src"]);
+
+    // Edit and save; a change made on the server moves the stamp the
+    // editor's conflict check compares.
+    let ws = backend_for(&env);
+    let main = format!("{root}/src/main.rs");
+    let ReadResult::Text { content, .. } = read_file_sync(&*ws, &main, false).unwrap() else {
+        panic!("text");
+    };
+    assert_eq!(content, "fn main() {}\n");
+    let saved = ws.write_atomic(&main, b"fn main() { run() }\n").unwrap();
+    assert_eq!(
+        ws.metadata(&main).unwrap().mtime_ms,
+        saved.mtime_ms,
+        "the save's stamp"
+    );
+    thread::sleep(Duration::from_millis(1100));
+    server(&name, &format!("printf 'changed elsewhere\\n' > {main}"));
+    assert_ne!(ws.metadata(&main).unwrap().mtime_ms, saved.mtime_ms);
+
+    // Create, rename and delete.
+    create_dir(&*ws, &format!("{root}/docs")).unwrap();
+    create_file(&*ws, &format!("{root}/docs/new.txt")).unwrap();
+    rename(
+        &*ws,
+        &format!("{root}/docs/new.txt"),
+        &format!("{root}/docs/renamed.txt"),
+    )
+    .unwrap();
+    assert_eq!(names(&format!("{root}/docs")), ["renamed.txt"]);
+    remove_path(&*ws, &format!("{root}/docs")).unwrap();
+    assert_eq!(names(&root), ["README.md", "img", "src"]);
+
+    // Find a file, and text in files.
+    let index = FileIndexState::default();
+    let found = run_search(
+        &index,
+        root.clone(),
+        "main".into(),
+        None,
+        Some(env.clone()),
+        None,
+        SearchOptions {
+            files_only: true,
+            with_indices: false,
+        },
+        &|| false,
+    )
+    .unwrap();
+    assert_eq!(
+        found
+            .hits
+            .iter()
+            .map(|h| h.path.clone())
+            .collect::<Vec<_>>(),
+        std::slice::from_ref(&main)
+    );
+    let grep = run_grep(
+        "elsewhere".into(),
+        root.clone(),
+        None,
+        None,
+        None,
+        Some(env.clone()),
+    )
+    .unwrap();
+    assert_eq!(
+        grep.hits.iter().map(|h| h.rel.clone()).collect::<Vec<_>>(),
+        ["src/main.rs"]
+    );
+
+    // A change made over a separate ssh shows up through the watch.
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    let deliver: Deliver = Arc::new(move |_: &SshHost, paths: Vec<String>| {
+        let _ = tx.lock().unwrap().send(paths);
+    });
+    let remote = reg.workspace(&host).unwrap();
+    resume(&remote, &host, WatchSet::default(), deliver.clone()).unwrap();
+    let watches = RemoteWatches::default();
+    let src = format!("{root}/src");
+    let set = watches.add(&host, std::slice::from_ref(&src), &[]).unwrap();
+    push(Some(remote), set).unwrap();
+    let started = Instant::now();
+    server(&name, &format!("touch {src}/added.rs"));
+    let changed = rx.recv_timeout(Duration::from_secs(20)).expect("a change");
+    println!("watch delivered after {:?}", started.elapsed());
+    assert_eq!(changed, std::slice::from_ref(&src));
+
+    // An image preview.
+    let grants = AssetGrants::default();
+    let logo = format!("{root}/img/logo.png");
+    let token = grants.grant("main".into(), &logo, env.clone(), 0).unwrap();
+    let served = respond(&grants, "main", &asset_request(&logo, &token)).unwrap();
+    assert_eq!(served.body(), b"PNG_BYTES");
+
+    // The connection drops: it comes back on its own, the explorer lists
+    // again, and the watch is resumed with one catch-up.
+    server(
+        &name,
+        &format!("pkill -f '[.]terax-server/{prefix}-c/terax-agent'"),
+    );
+    wait(reg, &host, "reconnecting", |s| {
+        matches!(s, State::Reconnecting { .. })
+    });
+    let started = Instant::now();
+    wait(reg, &host, "ready after the drop", |s| s == &State::Ready);
+    println!("reconnect after a drop: {:?}", started.elapsed());
+    assert_eq!(names(&src), ["added.rs", "main.rs"]);
+    index.forget_host(&host);
+    let remote = reg.workspace(&host).unwrap();
+    resume(&remote, &host, watches.set(&host), deliver).unwrap();
+    assert_eq!(
+        rx.recv_timeout(Duration::from_secs(5)).unwrap(),
+        std::slice::from_ref(&src),
+        "one catch-up"
+    );
+
+    reg.disconnect(&host);
+    wait(reg, &host, "idle", |s| s == &State::Idle);
+    println!("log:\n{}", reg.log(&host).join("\n"));
 }
