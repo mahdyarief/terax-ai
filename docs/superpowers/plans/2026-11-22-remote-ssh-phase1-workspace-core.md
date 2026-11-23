@@ -6,6 +6,11 @@
 
 **Architecture:** A new crate, `crates/terax-workspace-core`, owns `WorkspaceEnv`, path mapping, a sync `Workspace` trait in two layers (primitives and engines), the `HostWorkspace` backend, and the engines (search/grep/glob/index, the watch planner and portable backend, the bounded file readers). Tauri commands keep their names and payloads and become thin shells: authorize, pick the backend for the env, call it. Git logic stays in the app; only its process spawning and its direct file access route through the trait.
 
+**Status (2026-11-23): complete.** Every task is done and committed on `dydev` (`49f80ca` to `c593044`). Closed by the owner with these left open, none of them a known defect:
+
+- Linux and macOS have not run the suite: CI runs only for pull requests to and pushes on `main`, and no pull request for `dydev` has been opened. The app's Unix-only tests have never been compiled; the core passes clippy for Linux and macOS targets.
+- The manual smoke test was not run. WSL paths are covered by unit tests only (no WSL distribution on this machine).
+
 **Tech Stack:** Rust 2021 / Tauri v2, `ignore`, `grep-regex`, `grep-searcher`, `globset`, `notify` 8, cargo workspace (`crates/*`).
 
 ## Global Constraints
@@ -80,33 +85,36 @@ pub trait Workspace: Send + Sync {
 
 ### Task 1: Scaffold the crate and move `WorkspaceEnv`
 
-- [ ] Add `crates/terax-workspace-core` to `[workspace] members` and `default-members` in `src-tauri/Cargo.toml`; depend on it from the app crate.
-- [ ] Move `WorkspaceEnv`, `from_option`, `is_wsl`, `resolve_path`, `wsl_path_to_unc`, `wsl_path_to_host`, `wsl_drvfs_to_windows`, `validate_wsl_distro_name`, `is_safe_distro_name` and their tests into `env.rs`. Keep `serde` attributes byte-identical (the IPC shape must not change).
-- [ ] Re-export from `modules/workspace.rs` (`pub use terax_workspace_core::env::*;`) so no caller changes in this task.
-- [ ] Add a serde round-trip test pinning the JSON for `Local` and `Wsl { distro }`, which is what the frontend sends.
-- [ ] Verify: clippy, nextest, `pnpm tauri dev` starts.
+- [x] Add `crates/terax-workspace-core` to `[workspace] members` and `default-members` in `src-tauri/Cargo.toml`; depend on it from the app crate.
+- [x] Move `WorkspaceEnv`, `from_option`, `is_wsl`, `resolve_path`, `wsl_path_to_unc`, `wsl_path_to_host`, `wsl_drvfs_to_windows`, `validate_wsl_distro_name`, `is_safe_distro_name` and their tests into `env.rs`. Keep `serde` attributes byte-identical (the IPC shape must not change).
+- [x] Re-export from `modules/workspace.rs` (`pub use terax_workspace_core::env::*;`) so no caller changes in this task.
+- [x] Add a serde round-trip test pinning the JSON for `Local` and `Wsl { distro }`, which is what the frontend sends.
+- [x] Verify: clippy, nextest, `pnpm tauri dev` starts.
+
+(Task 1 to 3: `49f80ca`.)
 
 ### Task 2: Define the trait and the contract suite (red)
 
-- [ ] Write `workspace.rs` with the trait and data types above.
-- [ ] Write `tests/contract.rs` as a generic `fn run_contract(make: impl Fn(&Path) -> Box<dyn Workspace>)` covering, for every primitive: success on a temp tree, the error kind for a missing path, refusal to overwrite in `create_file`, atomic replacement in `write_atomic` (no partial file visible), `read` limits (exact limit, one byte over, head never splitting UTF-8), devices/FIFOs refused where today's code refuses them (Unix only), symlink vs. target metadata.
-- [ ] The suite fails to compile/run until Task 3 provides a backend.
+- [x] Write `workspace.rs` with the trait and data types above.
+- [x] Write `tests/contract.rs` as a generic `fn run_contract(make: impl Fn(&Path) -> Box<dyn Workspace>)` covering, for every primitive: success on a temp tree, the error kind for a missing path, refusal to overwrite in `create_file`, atomic replacement in `write_atomic` (no partial file visible), `read` limits (exact limit, one byte over, head never splitting UTF-8), devices/FIFOs refused where today's code refuses them (Unix only), symlink vs. target metadata.
+- [x] The suite fails to compile/run until Task 3 provides a backend.
 
 ### Task 3: `HostWorkspace` primitives (green)
 
-- [ ] Implement the primitives on `std::fs` through `resolve_path`, porting the exact semantics of today's helpers: `read_file_sync`, `read_bounded`, `head_of`, `write_atomic`, `stat_path`, `canonical_wsl_path` (move these into `read.rs` / `host.rs`).
-- [ ] Run the contract suite against `HostWorkspace` on Windows and Linux CI.
-- [ ] Add `backend_for` in `src-tauri/src/modules/workspace.rs`.
+- [x] Implement the primitives on `std::fs` through `resolve_path`, porting the exact semantics of today's helpers: `read_file_sync`, `read_bounded`, `head_of`, `write_atomic`, `stat_path`, `canonical_wsl_path` (move these into `read.rs` / `host.rs`).
+- [x] Run the contract suite against `HostWorkspace` on Windows and Linux CI.
+  - Windows only so far; see Task 13 for Linux and macOS.
+- [x] Add `backend_for` in `src-tauri/src/modules/workspace.rs`.
 
-### Task 4: Migrate `fs/file.rs`
+### Task 4: Migrate `fs/file.rs` (`ff961c0`)
 
-- [ ] `fs_read_binary`, `fs_read_bytes`, `fs_read_head`, `fs_read_file`, `fs_write_file`, `fs_canonicalize`, `fs_stat` call `backend_for(&env)`; their bodies shrink to authorize → call → map result.
-- [ ] Existing `file.rs` tests keep passing; tests of moved helpers move with them.
+- [x] `fs_read_binary`, `fs_read_bytes`, `fs_read_head`, `fs_read_file`, `fs_write_file`, `fs_canonicalize`, `fs_stat` call `backend_for(&env)`; their bodies shrink to authorize → call → map result.
+- [x] Existing `file.rs` tests keep passing; tests of moved helpers move with them.
 
-### Task 5: Migrate `fs/tree.rs`, `fs/mutate.rs`, `fs/supersede.rs`
+### Task 5: Migrate `fs/tree.rs`, `fs/mutate.rs`, `fs/supersede.rs` (`7a088ad`)
 
-- [ ] `fs_read_dir`, `list_subdirs`, `fs_create_file`, `fs_create_dir`, `fs_rename`, `fs_move`, `fs_delete`, `fs_delete_batch` go through the primitives.
-- [ ] Watch for Windows-specific behaviour in `mutate.rs` (case-only renames, read-only attribute, trash vs. delete). Whatever is host-only stays in `HostWorkspace` behind the primitive, not in the command.
+- [x] `fs_read_dir`, `list_subdirs`, `fs_create_file`, `fs_create_dir`, `fs_rename`, `fs_move`, `fs_delete`, `fs_delete_batch` go through the primitives.
+- [x] Watch for Windows-specific behaviour in `mutate.rs` (case-only renames, read-only attribute, trash vs. delete). Whatever is host-only stays in `HostWorkspace` behind the primitive, not in the command.
 
 ### Task 6: Move the copy engine (`fs_copy`) behind `Workspace::import`
 
@@ -153,10 +161,10 @@ Git holds `repo.local_path`, the registry's canonical *host* path (`\\wsl.localh
 
 - [x] **11a, registry internals.** A grant is a `Location { env, path }`: the canonical path in the workspace's own `/`-separated spelling (`C:/Users/x` local on Windows, `/home/x` in a distro or on a remote host). Containment is component-wise (`/a/b` is within `/a`, `/a/bc` is not) and only within the same workspace (distro names compare case-insensitively), so a root in one workspace never covers the same text in another. The host-path methods (`authorize`, `is_authorized`, `authorize_derived`, `revoke_derived`) stay as adapters through `Location::of_host`, which reads a `\\wsl.localhost\` / `\\wsl$\` path as that distro and anything else as local: on local and WSL roots this is the same coverage as before, and no caller changes. Tests: host spellings map to the right workspace; containment never crosses workspaces (mutation-checked).
 - [x] **Fix to 11a: grants compare exact spellings.** 11a keyed grants by `to_canon` strings, which are lossy: a directory named `repo\xff` (Unix) or with an unpaired surrogate (Windows) spells as `repo\u{FFFD}`, equal to a real sibling of that name, so a grant on one covered the other (`PathBuf::starts_with` had compared exactly). `Location::of_host` is now `None` for a path that is not valid Unicode, so the registry never covers it and refuses it as a root; `HostWorkspace::canonicalize` fails with `InvalidData` rather than return a lossy spelling. Every authorization input is a string anyway (frontend, git output); a non-Unicode path only appears after resolving a link, where refusing is safe. Tests: `a_non_unicode_sibling_cannot_alias_an_authorized_root` (red before the fix, on Windows too) and `a_path_that_cannot_be_spelled_exactly_is_never_covered`, mutation-checked.
-- [ ] **11b, callers to workspace paths**, module by module; delete each host adapter once nothing uses it.
+- [x] **11b, callers to workspace paths**, module by module; delete each host adapter once nothing uses it.
   - [x] API: `registry.canonicalize_in(ws, path)` (through the backend, same 1 s cache), `registry.covers(env, canonical)` and `within(env, path, root)`. `Location::in_workspace` reads `/mnt/<drive>/...` inside a distro as that local drive (drvfs), because that is where `wsl_path_to_host` sends it and where the host-path adapters file it: grants made either way name the same location (tested on Windows against `canonical_wsl_path`).
   - [x] fs mutations (`resolve_authorized_root`, `authorize_mutation_entry`) and `copy_destination` authorize canonical workspace paths through the backend. Errors now print the workspace path.
-  - [ ] Git, with Task 10 (foundation done).
+  - [x] Git, with Task 10 (`1588d64`, `daa1eb1`, `5595835`).
   - Staying on the host adapters until their remote counterpart exists: `workspace_authorize` and `workspace_current_dir` (they return the host spelling the frontend keys on), spawn cwd for shell/pty/lsp/control (a process spawns on the host; the remote shell runs in the agent), and the fs watcher's `prepare_dirs` (the watcher engine runs on host paths; the remote one runs in the agent).
 - [x] **11c, confined reads.** One backend operation that opens a file, checks the opened handle's real path lies inside an authorized root, applies the secret-path policy to that real path, and reads with a limit. Port `fs_read_project_memory`, asset serving and `ai_read_file`/`ai_read_dir` to it, keeping each caller's error messages. The agent implements the same check on the server.
   - `Workspace::read_confined(path, ConfinedRead{roots, secret_policy, offset, limit})` in the core: opens without ever opening a device or blocking on a FIFO (`O_PATH` then reopen on Linux, `O_NONBLOCK` elsewhere), asks the OS for the opened handle's real path, refuses one that is not valid Unicode (`Inexact`), and checks containment (`Confine{path, subtree}`) and, if asked, the secret-path policy on that real path. In the contract suite; link, junction, FIFO/device and lossy-name tests in `host.rs`.
@@ -191,10 +199,15 @@ Each step: the module's existing tests (`*_tests.rs`, `hardening_tests.rs`, `edg
 ### Task 13: Full verification and handoff
 
 - [ ] Rust: clippy and nextest on Windows; CI green on Linux and macOS.
-- [ ] Frontend: `pnpm lint`, `pnpm check-types`, `pnpm test` (unchanged code, should be green).
+  - Windows: clippy clean, `cargo test --workspace --locked` green (nextest is not installed here). Linux and macOS: not yet; CI runs only for pull requests to and pushes on `main`, and no pull request for `dydev` has been opened (owner's decision, 2026-11-22). The app's Unix-only tests have never been compiled.
+- [x] Frontend: `pnpm lint`, `pnpm check-types`, `pnpm test` (unchanged code, should be green).
+  - Lint: 0 errors (156 warnings, all pre-existing: Phase 1 touches no frontend file). Types clean. 4881 tests pass.
 - [ ] Manual smoke test in `pnpm tauri dev` with an isolated identifier: open a local folder and a WSL folder; explorer, editor save, rename/delete, copy-paste, search, grep, file watch (edit a file outside Terax), git status/diff/commit, worktree create/remove, checkpoint.
-- [ ] Measure: cold `fs_read_dir` of a large folder and a full `fs_search` before and after, to confirm the trait adds no measurable cost.
-- [ ] Save a learning on anything non-obvious found during the migration.
+  - Closed by the owner without it (2026-11-23): not run, neither the local nor the WSL half. This machine has no WSL distribution, so the WSL half cannot run here at all: WSL paths are covered only by unit tests (drvfs and `\\wsl.localhost` mapping, distro comparison), never by reads, git or the watcher on a real distribution.
+- [x] Measure: cold `fs_read_dir` of a large folder and a full `fs_search` before and after, to confirm the trait adds no measurable cost.
+  - Release builds of `39a9d40` (before) and `c593044` (after), a fixture of 20,000 files in one directory and 50,000 in 1,000 directories, median of 15 runs per round, six alternating rounds. Medians over the rounds: `read_dir` 2.15 s before, 2.25 s after; search on a fresh index 430 ms before, 464 ms after; search on a cached list 6.3 ms before, 3.5 ms after. One binary varies up to 2x between rounds on this machine (fresh search before: 328 to 1,227 ms), so the differences are within noise: no measurable cost. The bench was a temporary `#[ignore]` test, not committed.
+- [x] Save a learning on anything non-obvious found during the migration.
+  - In `.trail/learnings/`: confined reads check the opened handle; joining workspace paths as text; authorization compares exact path spellings; never run `cargo fmt` on the whole crate.
 
 ## Order, size and risk
 
