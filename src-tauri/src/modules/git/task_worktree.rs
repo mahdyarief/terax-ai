@@ -76,7 +76,7 @@ pub fn list(
     home: &Path,
 ) -> Result<Vec<TaskRecord>> {
     let repo = open(registry, root, workspace)?;
-    let root = to_canon(&repo.local_path);
+    let root = to_canon(repo.local_path()?);
     Ok(Store::open(home)?
         .tasks()
         .iter()
@@ -174,12 +174,12 @@ pub fn create(
     let id = new_id()?;
     let mut store = Store::open(home)?;
     let port = store.allocate(&config.ports, None)?;
-    let target = project_config::location(&config.worktree, &repo.local_path, home, &name)?;
-    let path = claim(&target, &repo.local_path, home)?;
+    let target = project_config::location(&config.worktree, repo.local_path()?, home, &name)?;
+    let path = claim(&target, repo.local_path()?, home)?;
     let task = TaskRecord {
         id,
         name,
-        root: to_canon(&repo.local_path),
+        root: to_canon(repo.local_path()?),
         path: to_canon(&path),
         branch,
         status: TaskStatus::Creating,
@@ -262,7 +262,7 @@ fn materialize(
             run_ok(&restored, args, "task snapshot restore failed")?;
         }
         let copy = worktree::copy_ignored_included(repo, &target, &task.include)?;
-        let (shared, mut skipped) = share(&repo.local_path, &target, &task.shared)?;
+        let (shared, mut skipped) = share(repo.local_path()?, &target, &task.shared)?;
         skipped.extend(copy.skipped);
         task.shared_links = shared
             .iter()
@@ -388,11 +388,12 @@ fn active_repo(
 }
 
 fn managed_links(repo: &ResolvedGitDirectory, task: &TaskRecord) -> Result<Vec<String>> {
+    let local = repo.local_path()?;
     let mut links: Vec<String> = task
         .shared_links
         .iter()
         .filter_map(|(relative, target)| {
-            let mut parent = repo.local_path.clone();
+            let mut parent = local.clone();
             let parts: Vec<_> = Path::new(relative).components().collect();
             for part in parts.iter().take(parts.len().saturating_sub(1)) {
                 parent.push(part);
@@ -402,7 +403,7 @@ fn managed_links(repo: &ResolvedGitDirectory, task: &TaskRecord) -> Result<Vec<S
                     return None;
                 }
             }
-            let path = repo.local_path.join(relative);
+            let path = local.join(relative);
             (std::fs::symlink_metadata(&path).is_ok_and(|m| m.file_type().is_symlink())
                 && std::fs::read_link(&path).is_ok_and(|p| to_canon(p) == *target))
             .then(|| relative.clone())
@@ -547,7 +548,7 @@ pub fn prepare_archive(
 ) -> Result<TaskArchive> {
     let repo = open(registry, root, workspace)?;
     let _operation = lock_operation(&repo)?;
-    let mut task = Store::open(home)?.task(&to_canon(&repo.local_path), id)?;
+    let mut task = Store::open(home)?.task(&to_canon(repo.local_path()?), id)?;
     if task.status == TaskStatus::Archived {
         return Err(GitError::command("task archive", "already archived"));
     }
@@ -578,7 +579,7 @@ pub fn archive(
 ) -> Result<TaskArchive> {
     let repo = open(registry, root, workspace)?;
     let _operation = lock_operation(&repo)?;
-    let mut task = Store::open(home)?.task(&to_canon(&repo.local_path), id)?;
+    let mut task = Store::open(home)?.task(&to_canon(repo.local_path()?), id)?;
     if task.status == TaskStatus::Archived {
         return Err(GitError::command("task archive", "already archived"));
     }
@@ -699,7 +700,7 @@ pub fn restore(
 ) -> Result<TaskCreated> {
     let repo = open(registry, root, workspace)?;
     let _operation = lock_operation(&repo)?;
-    let mut task = Store::open(home)?.task(&to_canon(&repo.local_path), id)?;
+    let mut task = Store::open(home)?.task(&to_canon(repo.local_path()?), id)?;
     recover_removed(registry, &repo, &mut task, home)?;
     if task.status != TaskStatus::Archived {
         return Err(GitError::command("task restore", "task is not archived"));
@@ -750,7 +751,7 @@ pub fn restore(
             name: task.branch.clone(),
         }
     };
-    let target = project_config::location(&config.worktree, &repo.local_path, home, &task.name)?;
+    let target = project_config::location(&config.worktree, repo.local_path()?, home, &task.name)?;
     let mut store = Store::open(home)?;
     task.port = store.allocate(
         &Ports {
@@ -759,7 +760,7 @@ pub fn restore(
         },
         Some(task.port),
     )?;
-    task.path = to_canon(claim(&target, &repo.local_path, home)?);
+    task.path = to_canon(claim(&target, repo.local_path()?, home)?);
     task.status = TaskStatus::Creating;
     if let Err(error) = store.put(task.clone()) {
         let _ = std::fs::remove_dir(&task.path);
@@ -801,7 +802,7 @@ pub fn disk_usage(
 ) -> Result<DiskUsage> {
     let repo = open(registry, root, workspace)?;
     let store = Store::open(home)?;
-    let task = store.task(&to_canon(&repo.local_path), id)?;
+    let task = store.task(&to_canon(repo.local_path()?), id)?;
     drop(store);
     if task.status == TaskStatus::Archived {
         return Ok(DiskUsage {
@@ -812,7 +813,7 @@ pub fn disk_usage(
     }
     let active = active_repo(registry, &repo, &task)?;
     Ok(measure(
-        &active.local_path,
+        active.local_path()?,
         100_000,
         Duration::from_millis(250),
     ))

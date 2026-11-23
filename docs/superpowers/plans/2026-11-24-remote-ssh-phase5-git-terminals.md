@@ -31,9 +31,11 @@ In a server's space, source control (status, diff, stage, commit, branches, fetc
 
 ### Task 1: Git on a server
 
-- [ ] `canonical_dir` / `ResolvedGitDirectory` env-aware (no `resolve_path` on SSH), authorization by `covers`, locks by workspace path, `ensure_git_available` not caching a disconnect.
-- [ ] `worktree list`'s `entry_exists` through the backend; host-only commands refuse by name on SSH.
-- [ ] Tests (`remote/git_tests.rs`, a real repo served by the in-process agent): status, diff, stage/unstage, commit, log, show, branches and checkout, discard, apply hunks, upstream info; a path outside the folder refused; the refusals' messages. Guard entries move to `Works`/`Refused`.
+- [x] `canonical_dir` / `ResolvedGitDirectory` env-aware (no `resolve_path` on SSH), authorization by `covers`, locks by workspace path, `ensure_git_available` not caching a disconnect.
+- [x] `worktree list`'s `entry_exists` through the backend; host-only commands refuse by name on SSH.
+- [x] Tests (`remote/git_tests.rs`, a real repo served by the in-process agent): status, diff, stage/unstage, commit, log, show, branches and checkout, discard, apply hunks, upstream info; a path outside the folder refused; the refusals' messages. Guard entries move to `Works`/`Refused`.
+
+Done: `ResolvedGitDirectory::local` is `None` on a server and `local_path()` refuses there, so every host-only path (worktree add/remove, checkpoint create/restore, tasks) says so instead of using the placeholder; repo resolution authorizes with `covers`, the repo lock keys on the workspace path, and a server that cannot be reached is no longer cached as "git not installed". `remote/git_tests.rs` (5 tests) runs status, diff, stage/unstage, commit, log, commit files and diffs, branches (create, rename, checkout, upstream), discard, review summary/file/apply hunks, merge base, a remote with fetch/push/pull, worktree list/prune and checkpoint list/prune on the in-process agent, and checks the refusals. Guard: 30 git commands `Works`, 11 `Refused`; `git_watch` waits for Task 2.
 
 ### Task 2: Git state live on a server
 

@@ -20,6 +20,13 @@ enum Ssh {
 use Ssh::*;
 
 const PHASE5: Ssh = Pending("Phase 5: git and terminals on a server");
+/// Worktrees and checkpoints made on this machine's file system (hard
+/// links, a copied index, host paths).
+const HOST_ONLY_GIT: Ssh =
+    Refused("needs this machine's file system: \"only supported in local workspaces\"");
+/// Task worktrees, their state and the project's task config live on this
+/// machine (`~/.terax`, an OS file lock).
+const TASKS: Ssh = Refused("task worktrees are local: \"only supported in local workspaces\"");
 const PHASE6: Ssh = Pending("Phase 6: AI tools on a server");
 
 /// (file under `src/modules`, command, what it does on a server)
@@ -158,52 +165,184 @@ const COMMANDS: &[(&str, &str, Ssh)] = &[
         "fs_watch_remove",
         Works("a_watched_server_folder_reports_changes_and_is_watched_again_after_a_reconnect"),
     ),
-    ("git/commands.rs", "git_checkout_branch", PHASE5),
-    ("git/commands.rs", "git_commit", PHASE5),
-    ("git/commands.rs", "git_commit_file_diff", PHASE5),
-    ("git/commands.rs", "git_commit_files", PHASE5),
-    ("git/commands.rs", "git_diff", PHASE5),
-    ("git/commands.rs", "git_diff_content", PHASE5),
-    ("git/commands.rs", "git_discard", PHASE5),
-    ("git/commands.rs", "git_fetch", PHASE5),
-    ("git/commands.rs", "git_list_branches", PHASE5),
-    ("git/commands.rs", "git_log", PHASE5),
-    ("git/commands.rs", "git_panel_snapshot", PHASE5),
-    ("git/commands.rs", "git_pull_ff_only", PHASE5),
-    ("git/commands.rs", "git_push", PHASE5),
-    ("git/commands.rs", "git_remote_url", PHASE5),
-    ("git/commands.rs", "git_resolve_repo", PHASE5),
-    ("git/commands.rs", "git_show_commit", PHASE5),
-    ("git/commands.rs", "git_stage", PHASE5),
-    ("git/commands.rs", "git_status", PHASE5),
-    ("git/commands.rs", "git_unstage", PHASE5),
-    ("git/commands_review.rs", "git_apply_hunks", PHASE5),
-    ("git/commands_review.rs", "git_branch_create", PHASE5),
-    ("git/commands_review.rs", "git_branch_rename", PHASE5),
-    ("git/commands_review.rs", "git_checkpoint_create", PHASE5),
-    ("git/commands_review.rs", "git_checkpoint_list", PHASE5),
-    ("git/commands_review.rs", "git_checkpoint_prune", PHASE5),
-    ("git/commands_review.rs", "git_checkpoint_restore", PHASE5),
-    ("git/commands_review.rs", "git_diff_file", PHASE5),
-    ("git/commands_review.rs", "git_diff_summary", PHASE5),
-    ("git/commands_review.rs", "git_merge_base", PHASE5),
-    ("git/commands_review.rs", "git_upstream_info", PHASE5),
+    (
+        "git/commands.rs",
+        "git_checkout_branch",
+        Works("branches_and_discards_run_on_the_server"),
+    ),
+    (
+        "git/commands.rs",
+        "git_commit",
+        Works("changes_are_staged_committed_and_shown_in_the_history"),
+    ),
+    (
+        "git/commands.rs",
+        "git_commit_file_diff",
+        Works("reviews_and_remotes_run_on_the_server"),
+    ),
+    (
+        "git/commands.rs",
+        "git_commit_files",
+        Works("changes_are_staged_committed_and_shown_in_the_history"),
+    ),
+    (
+        "git/commands.rs",
+        "git_diff",
+        Works("changes_are_staged_committed_and_shown_in_the_history"),
+    ),
+    (
+        "git/commands.rs",
+        "git_diff_content",
+        Works("reviews_and_remotes_run_on_the_server"),
+    ),
+    (
+        "git/commands.rs",
+        "git_discard",
+        Works("branches_and_discards_run_on_the_server"),
+    ),
+    (
+        "git/commands.rs",
+        "git_fetch",
+        Works("reviews_and_remotes_run_on_the_server"),
+    ),
+    (
+        "git/commands.rs",
+        "git_list_branches",
+        Works("branches_and_discards_run_on_the_server"),
+    ),
+    (
+        "git/commands.rs",
+        "git_log",
+        Works("changes_are_staged_committed_and_shown_in_the_history"),
+    ),
+    (
+        "git/commands.rs",
+        "git_panel_snapshot",
+        Works("the_panel_finds_the_repository_on_the_server"),
+    ),
+    (
+        "git/commands.rs",
+        "git_pull_ff_only",
+        Works("reviews_and_remotes_run_on_the_server"),
+    ),
+    (
+        "git/commands.rs",
+        "git_push",
+        Works("reviews_and_remotes_run_on_the_server"),
+    ),
+    (
+        "git/commands.rs",
+        "git_remote_url",
+        Works("reviews_and_remotes_run_on_the_server"),
+    ),
+    (
+        "git/commands.rs",
+        "git_resolve_repo",
+        Works("the_panel_finds_the_repository_on_the_server"),
+    ),
+    (
+        "git/commands.rs",
+        "git_show_commit",
+        Works("changes_are_staged_committed_and_shown_in_the_history"),
+    ),
+    (
+        "git/commands.rs",
+        "git_stage",
+        Works("changes_are_staged_committed_and_shown_in_the_history"),
+    ),
+    (
+        "git/commands.rs",
+        "git_status",
+        Works("changes_are_staged_committed_and_shown_in_the_history"),
+    ),
+    (
+        "git/commands.rs",
+        "git_unstage",
+        Works("changes_are_staged_committed_and_shown_in_the_history"),
+    ),
+    (
+        "git/commands_review.rs",
+        "git_apply_hunks",
+        Works("reviews_and_remotes_run_on_the_server"),
+    ),
+    (
+        "git/commands_review.rs",
+        "git_branch_create",
+        Works("branches_and_discards_run_on_the_server"),
+    ),
+    (
+        "git/commands_review.rs",
+        "git_branch_rename",
+        Works("branches_and_discards_run_on_the_server"),
+    ),
+    (
+        "git/commands_review.rs",
+        "git_checkpoint_create",
+        HOST_ONLY_GIT,
+    ),
+    (
+        "git/commands_review.rs",
+        "git_checkpoint_list",
+        Works("worktrees_are_listed_and_host_only_features_refuse_by_name"),
+    ),
+    (
+        "git/commands_review.rs",
+        "git_checkpoint_prune",
+        Works("worktrees_are_listed_and_host_only_features_refuse_by_name"),
+    ),
+    (
+        "git/commands_review.rs",
+        "git_checkpoint_restore",
+        HOST_ONLY_GIT,
+    ),
+    (
+        "git/commands_review.rs",
+        "git_diff_file",
+        Works("reviews_and_remotes_run_on_the_server"),
+    ),
+    (
+        "git/commands_review.rs",
+        "git_diff_summary",
+        Works("reviews_and_remotes_run_on_the_server"),
+    ),
+    (
+        "git/commands_review.rs",
+        "git_merge_base",
+        Works("reviews_and_remotes_run_on_the_server"),
+    ),
+    (
+        "git/commands_review.rs",
+        "git_upstream_info",
+        Works("branches_and_discards_run_on_the_server"),
+    ),
     ("git/commands_review.rs", "git_watch", PHASE5),
-    ("git/commands_review.rs", "git_worktree_add", PHASE5),
-    ("git/commands_review.rs", "git_worktree_list", PHASE5),
-    ("git/commands_review.rs", "git_worktree_prune", PHASE5),
-    ("git/commands_review.rs", "git_worktree_remove", PHASE5),
-    ("git/commands_tasks.rs", "task_project_config", PHASE5),
-    ("git/commands_tasks.rs", "task_worktree_archive", PHASE5),
-    ("git/commands_tasks.rs", "task_worktree_create", PHASE5),
-    ("git/commands_tasks.rs", "task_worktree_disk_usage", PHASE5),
-    ("git/commands_tasks.rs", "task_worktree_list", PHASE5),
+    ("git/commands_review.rs", "git_worktree_add", HOST_ONLY_GIT),
+    (
+        "git/commands_review.rs",
+        "git_worktree_list",
+        Works("worktrees_are_listed_and_host_only_features_refuse_by_name"),
+    ),
+    (
+        "git/commands_review.rs",
+        "git_worktree_prune",
+        Works("worktrees_are_listed_and_host_only_features_refuse_by_name"),
+    ),
+    (
+        "git/commands_review.rs",
+        "git_worktree_remove",
+        HOST_ONLY_GIT,
+    ),
+    ("git/commands_tasks.rs", "task_project_config", TASKS),
+    ("git/commands_tasks.rs", "task_worktree_archive", TASKS),
+    ("git/commands_tasks.rs", "task_worktree_create", TASKS),
+    ("git/commands_tasks.rs", "task_worktree_disk_usage", TASKS),
+    ("git/commands_tasks.rs", "task_worktree_list", TASKS),
     (
         "git/commands_tasks.rs",
         "task_worktree_prepare_archive",
         PHASE5,
     ),
-    ("git/commands_tasks.rs", "task_worktree_restore", PHASE5),
+    ("git/commands_tasks.rs", "task_worktree_restore", TASKS),
     (
         "lsp/mod.rs",
         "lsp_spawn",

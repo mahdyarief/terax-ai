@@ -748,7 +748,7 @@ fn layout_for(repo: &crate::modules::git::utils::ResolvedGitDirectory) -> Result
     let common = common_dir(repo)?;
     let canon = |p: PathBuf| std::fs::canonicalize(&p).unwrap_or(p);
     Ok(Layout {
-        root: to_canon(&repo.local_path),
+        root: to_canon(repo.local_path()?),
         git_dir: to_canon(canon(git)),
         common_dir: to_canon(canon(common)),
     })

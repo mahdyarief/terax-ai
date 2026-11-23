@@ -124,13 +124,18 @@ fn list_entries(repo: &ResolvedGitDirectory) -> Result<Vec<WorktreeEntry>> {
 
 /// Whether a path git printed exists. Git prints paths in its own environment
 /// (Linux paths inside WSL), so they are mapped to the host before being
-/// looked up.
+/// looked up; a server's are looked up on the server.
 fn entry_exists(workspace: &WorkspaceEnv, path: &str) -> bool {
+    if workspace.is_ssh() {
+        return crate::modules::workspace::backend_for(workspace)
+            .metadata(path)
+            .is_ok_and(|meta| meta.kind == terax_workspace_core::workspace::EntryKind::Dir);
+    }
     resolve_path(path, workspace).is_dir()
 }
 
-const WSL_WORKTREES_UNSUPPORTED: &str =
-    "creating and removing worktrees is not supported in WSL workspaces yet";
+const WORKTREES_UNSUPPORTED: &str =
+    "creating and removing worktrees is only supported in local workspaces";
 
 /// A linked worktree is trusted only if its `.git` file points back into this
 /// repository's `worktrees/` administrative area.
@@ -156,8 +161,11 @@ fn authorize_linked(
         return;
     }
     let path = Path::new(&entry.path);
+    let Ok(local) = repo.local_path() else {
+        return;
+    };
     if backlinks_to(path, common) {
-        let _ = registry.authorize_derived(path, &repo.local_path);
+        let _ = registry.authorize_derived(path, local);
     }
 }
 
@@ -342,7 +350,8 @@ fn choose_target(
                 path.strip_prefix(existing_prefix(&path))
                     .unwrap_or(Path::new("")),
             );
-            if resolved.starts_with(&repo.local_path) || repo.local_path.starts_with(&resolved) {
+            if resolved.starts_with(repo.local_path()?) || repo.local_path()?.starts_with(&resolved)
+            {
                 return Err(GitError::InvalidPath(format!(
                     "{raw} overlaps the repository"
                 )));
@@ -418,7 +427,7 @@ fn add_inner(
     claimed: Option<Target>,
 ) -> Result<WorktreeAdded> {
     if !workspace.is_local() {
-        return Err(GitError::Unsupported(WSL_WORKTREES_UNSUPPORTED));
+        return Err(GitError::Unsupported(WORKTREES_UNSUPPORTED));
     }
     let repo = open_worktree(registry, repo_root, workspace)?;
     if request.include.len() > MAX_INCLUDE_PATTERNS {
@@ -479,10 +488,10 @@ fn add_inner(
     };
 
     let entries = list_entries(&repo)?;
-    let main_path = entries
-        .first()
-        .map(|e| PathBuf::from(&e.path))
-        .unwrap_or_else(|| repo.local_path.clone());
+    let main_path = match entries.first() {
+        Some(e) => PathBuf::from(&e.path),
+        None => repo.local_path()?.clone(),
+    };
     let target = match claimed {
         Some(target) => target,
         None => choose_target(registry, &repo, &main_path, worktrees_dir, request)?,
@@ -511,12 +520,12 @@ fn add_inner(
     }
 
     let local = std::fs::canonicalize(&target.path)?;
-    registry.authorize_derived(&local, &repo.local_path)?;
+    registry.authorize_derived(&local, repo.local_path()?)?;
 
     let (copied, skipped, include_truncated) = if request.include.is_empty() {
         (Vec::new(), Vec::new(), false)
     } else {
-        let report = copy_included(&repo.local_path, &local, &request.include);
+        let report = copy_included(repo.local_path()?, &local, &request.include);
         (report.copied, report.skipped, report.truncated)
     };
 
@@ -672,7 +681,7 @@ pub(crate) fn copy_ignored_included(
     dst: &Path,
     patterns: &[String],
 ) -> Result<CopyReport> {
-    copy_included_inner(&repo.local_path, dst, patterns, Some(repo))
+    copy_included_inner(repo.local_path()?, dst, patterns, Some(repo))
 }
 
 fn copy_included_inner(
@@ -1144,7 +1153,7 @@ fn remove_inner(
     inspect: Option<&[String]>,
 ) -> Result<WorktreeRemoveReport> {
     if !workspace.is_local() {
-        return Err(GitError::Unsupported(WSL_WORKTREES_UNSUPPORTED));
+        return Err(GitError::Unsupported(WORKTREES_UNSUPPORTED));
     }
     let repo = open_worktree(registry, repo_root, workspace)?;
     let target = PathBuf::from(path);
@@ -1198,8 +1207,10 @@ fn remove_inner(
             authorize_linked(registry, &repo, &common_dir(&repo)?, &entry);
         }
         let worktree = open_new(registry, Path::new(&entry.path), workspace)?;
-        if !registry.is_authorized(&worktree.local_path) {
-            return Err(GitError::PathOutsideWorkspace(worktree.local_path));
+        if !registry.is_authorized(worktree.local_path()?) {
+            return Err(GitError::PathOutsideWorkspace(
+                worktree.local_path()?.clone(),
+            ));
         }
         let status = run_ok(
             &worktree,
@@ -1240,8 +1251,9 @@ fn remove_inner(
             // What was listed may be only a part of the ignored files.
             report.inconclusive.push("ignored-files".to_string());
         }
+        let (main_local, worktree_local) = (main.local_path()?, worktree.local_path()?);
         let summary = summarize_ignored(&ignored.stdout, |entry| {
-            identical_to_main(&main.local_path, &worktree.local_path, entry)
+            identical_to_main(main_local, worktree_local, entry)
         });
         report.ignored_files = summary.sample;
         report.ignored_total = summary.total;

@@ -1,4 +1,5 @@
 use std::ffi::{OsStr, OsString};
+use std::path::PathBuf;
 
 use crate::modules::git::errors::{GitError, Result};
 use crate::modules::git::parser::parse_porcelain_v2;
@@ -25,8 +26,8 @@ pub fn resolve_repo(
     workspace: &WorkspaceEnv,
 ) -> Result<Option<GitRepoInfo>> {
     let cwd = canonical_dir(registry, cwd, workspace)?;
-    if !registry.is_authorized(&cwd.local_path) {
-        return Err(GitError::PathOutsideWorkspace(cwd.local_path));
+    if !registry.covers(&cwd.workspace, &cwd.ws_path) {
+        return Err(GitError::PathOutsideWorkspace(PathBuf::from(&cwd.ws_path)));
     }
     ensure_git_available(&cwd.workspace)?;
     resolve_repo_in_authorized(registry, &cwd)
@@ -45,8 +46,10 @@ fn resolve_repo_in_authorized(
         return Ok(None);
     };
     let canonical_root = canonical_dir(registry, &root_line, &cwd.workspace)?;
-    if !registry.is_authorized(&canonical_root.local_path) {
-        return Err(GitError::PathOutsideWorkspace(canonical_root.local_path));
+    if !registry.covers(&canonical_root.workspace, &canonical_root.ws_path) {
+        return Err(GitError::PathOutsideWorkspace(PathBuf::from(
+            &canonical_root.ws_path,
+        )));
     }
 
     let head = match git_stdout_lines(
@@ -89,8 +92,8 @@ pub fn panel_snapshot(
     workspace: &WorkspaceEnv,
 ) -> Result<GitPanelSnapshot> {
     let cwd = canonical_dir(registry, cwd, workspace)?;
-    if !registry.is_authorized(&cwd.local_path) {
-        return Err(GitError::PathOutsideWorkspace(cwd.local_path));
+    if !registry.covers(&cwd.workspace, &cwd.ws_path) {
+        return Err(GitError::PathOutsideWorkspace(PathBuf::from(&cwd.ws_path)));
     }
     ensure_git_available(&cwd.workspace)?;
     let Some(root_line) = git_stdout_line_opt(
@@ -105,8 +108,10 @@ pub fn panel_snapshot(
         });
     };
     let canonical_root = canonical_dir(registry, &root_line, &cwd.workspace)?;
-    if !registry.is_authorized(&canonical_root.local_path) {
-        return Err(GitError::PathOutsideWorkspace(canonical_root.local_path));
+    if !registry.covers(&canonical_root.workspace, &canonical_root.ws_path) {
+        return Err(GitError::PathOutsideWorkspace(PathBuf::from(
+            &canonical_root.ws_path,
+        )));
     }
 
     let status = status_inner(&canonical_root)?;

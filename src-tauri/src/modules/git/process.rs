@@ -62,7 +62,9 @@ pub fn ensure_git_available(workspace: &WorkspaceEnv) -> Result<()> {
     let value = match cached {
         Some(v) => v,
         None => {
-            let fresh = check_git_availability(workspace);
+            // Not reaching a server is not a missing git: reported as is,
+            // and not remembered.
+            let fresh = check_git_availability(workspace)?;
             let mut guard = availability_cell()
                 .lock()
                 .expect("git availability poisoned");
@@ -87,20 +89,21 @@ pub fn ensure_git_available(workspace: &WorkspaceEnv) -> Result<()> {
     }
 }
 
-fn check_git_availability(workspace: &WorkspaceEnv) -> Availability {
+fn check_git_availability(workspace: &WorkspaceEnv) -> Result<Availability> {
     let output = match run_git(workspace, None, ["--version"], 10) {
         Ok(o) => o,
-        Err(_) => return Availability::NotInstalled,
+        Err(GitError::Io(error)) if workspace.is_ssh() => return Err(GitError::Io(error)),
+        Err(_) => return Ok(Availability::NotInstalled),
     };
     if output.timed_out || output.exit_code != Some(0) {
-        return Availability::NotInstalled;
+        return Ok(Availability::NotInstalled);
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     let version = parse_git_version(stdout.trim()).unwrap_or_else(|| "unknown".into());
     if !version_meets_minimum(&version, MIN_GIT_VERSION) {
-        return Availability::TooOld(version);
+        return Ok(Availability::TooOld(version));
     }
-    Availability::Ok
+    Ok(Availability::Ok)
 }
 
 fn parse_git_version(line: &str) -> Option<String> {

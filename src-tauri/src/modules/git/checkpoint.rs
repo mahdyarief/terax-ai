@@ -1243,7 +1243,7 @@ pub fn restore(
         .collect();
     let mut writes: Vec<&String> = Vec::new();
     for path in &plan.writes {
-        let exists = std::fs::symlink_metadata(repo.local_path.join(path)).is_ok();
+        let exists = std::fs::symlink_metadata(repo.local_path()?.join(path)).is_ok();
         if exists && !in_snapshot.contains(path.as_str()) {
             report.skipped.push(Skipped {
                 path: path.clone(),
@@ -1285,7 +1285,7 @@ pub fn restore(
 
     let mut touched: Vec<String> = Vec::new();
     for path in &plan.deletes {
-        match remove_tracked_path(&repo.local_path, path) {
+        match remove_tracked_path(repo.local_path()?, path) {
             Ok(true) => {
                 report.removed += 1;
                 touched.push(path.clone());

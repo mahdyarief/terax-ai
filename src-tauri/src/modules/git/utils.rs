@@ -15,12 +15,20 @@ pub struct ResolvedGitDirectory {
     pub git_path: String,
     /// The canonical workspace path, which file access and authorization use.
     pub ws_path: String,
-    /// The canonical host path. Being replaced by `ws_path` module by module
-    /// (phase 1, task 10).
-    pub local_path: PathBuf,
+    /// The canonical host path, for the host-only modules (worktrees,
+    /// checkpoints, tasks, the local watcher). `None` on a server, which has
+    /// no host spelling: read it through `local_path()`, which refuses.
+    pub local: Option<PathBuf>,
 }
 
 impl ResolvedGitDirectory {
+    /// The canonical host path; refused for a workspace on a server.
+    pub fn local_path(&self) -> Result<&PathBuf> {
+        self.local
+            .as_ref()
+            .ok_or_else(|| GitError::Io(terax_workspace_core::env::not_on_this_machine()))
+    }
+
     /// The backend that reaches this repository's files.
     pub fn backend(&self) -> Arc<dyn Workspace> {
         backend_for(&self.workspace)
@@ -101,30 +109,36 @@ pub fn canonical_dir(
     path: &str,
     workspace: &WorkspaceEnv,
 ) -> Result<ResolvedGitDirectory> {
-    let candidate = resolve_path(path, workspace);
     let is_dir = backend_for(workspace)
         .metadata(path)
         .is_ok_and(|meta| meta.kind == terax_workspace_core::workspace::EntryKind::Dir);
     if !is_dir {
         return Err(GitError::NotADirectory(path.to_string()));
     }
-    let local_path = registry
-        .canonicalize_cached(&candidate)
-        .map_err(GitError::Io)?;
+    // A server's path has no host spelling (`resolve_path` gives one
+    // placeholder for all of them).
+    let local = if workspace.is_ssh() {
+        None
+    } else {
+        Some(
+            registry
+                .canonicalize_cached(resolve_path(path, workspace))
+                .map_err(GitError::Io)?,
+        )
+    };
     let ws_path = registry
         .canonicalize_in(&*backend_for(workspace), path)
         .map_err(GitError::Io)?;
     // A WSL or SSH path is a Linux path, whatever this machine is.
-    let git_path = if !workspace.is_local() {
-        normalize_git_path(path)
-    } else {
-        display_path(&local_path)
+    let git_path = match &local {
+        Some(local) if workspace.is_local() => display_path(local),
+        _ => normalize_git_path(path),
     };
     Ok(ResolvedGitDirectory {
         workspace: workspace.clone(),
         git_path,
         ws_path,
-        local_path,
+        local,
     })
 }
 

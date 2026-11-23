@@ -14,7 +14,11 @@ use crate::modules::git::types::{GitOutput, DEFAULT_TIMEOUT_SECS};
 use crate::modules::git::utils::{authorized_repo_root, canonical_dir, ResolvedGitDirectory};
 use crate::modules::workspace::{WorkspaceEnv, WorkspaceRegistry};
 
-static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
+/// A repository's identity for its lock: the workspace and the canonical
+/// workspace path (a server's repositories have no host path).
+type RepoKey = (String, String);
+
+static LOCKS: OnceLock<Mutex<HashMap<RepoKey, Arc<Mutex<()>>>>> = OnceLock::new();
 
 /// The mutex that serializes every operation which reads and then writes a
 /// worktree's state (hunk apply, checkpoint create / restore / prune). It is
@@ -26,7 +30,8 @@ pub fn lock_for_repo(repo: &ResolvedGitDirectory) -> Arc<Mutex<()>> {
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    map.entry(repo.local_path.clone()).or_default().clone()
+    let key = (format!("{:?}", repo.workspace), repo.ws_path.clone());
+    map.entry(key).or_default().clone()
 }
 
 pub fn os_args<I, S>(items: I) -> Vec<OsString>
@@ -176,12 +181,12 @@ pub fn open_worktree(
     Ok(resolved)
 }
 
-fn absolute_from(repo: &ResolvedGitDirectory, printed: &str) -> PathBuf {
+fn absolute_from(repo: &ResolvedGitDirectory, printed: &str) -> Result<PathBuf> {
     let path = PathBuf::from(printed);
     if path.is_absolute() {
-        path
+        Ok(path)
     } else {
-        repo.local_path.join(path)
+        Ok(repo.local_path()?.join(path))
     }
 }
 
@@ -192,7 +197,7 @@ pub fn git_dir(repo: &ResolvedGitDirectory) -> Result<PathBuf> {
         os_args(["rev-parse", "--absolute-git-dir"]),
         "git rev-parse failed",
     )?;
-    Ok(absolute_from(repo, &stdout_text(&output)))
+    absolute_from(repo, &stdout_text(&output))
 }
 
 /// The git directory shared by all worktrees of the repository (refs, config).
@@ -203,7 +208,7 @@ pub fn common_dir(repo: &ResolvedGitDirectory) -> Result<PathBuf> {
         "git rev-parse failed",
     )?;
     let printed = stdout_text(&output);
-    let path = absolute_from(repo, &printed);
+    let path = absolute_from(repo, &printed)?;
     Ok(std::fs::canonicalize(&path).unwrap_or(path))
 }
 
