@@ -5,6 +5,13 @@
 **Branch:** `dydev`
 **Depends on:** Phase 1 (`2026-11-22-remote-ssh-phase1-workspace-core.md`): the `Workspace` trait, `HostWorkspace`, `read_confined` and the contract suite in `terax-workspace-core`.
 
+**Status (2026-11-23): complete.** Every task is done and committed on `dydev` (`36e80e2` to the Task 8 commit). Left open, none of them a known defect:
+
+- CI has not run Phase 2 on Linux or macOS (CI runs only for `main`; the owner deferred CI for `dydev` until every phase is done). The agent and protocol pass clippy for Linux (gnu and musl), and the contract passed on a real Linux server over SSH, which covers the Linux paths end to end.
+- The aarch64 agent builds and is static but has not run on ARM hardware.
+- The agent reports the crates' version (`[workspace.package]`, 0.9.3), not the app's (0.9.4-dy). Phase 3 decides which version the app compares before it reinstalls an agent.
+- `RemoteWorkspace::import` (uploading from this machine) is `Unsupported`.
+
 ## Goal
 
 A `terax-agent --stdio` binary that serves the `Workspace` trait over its stdin and stdout, and a client, `RemoteWorkspace`, that implements the same trait by calling it. The existing contract suite (`contract::run`) passes against `RemoteWorkspace` talking to a local agent child process over pipes, with no SSH involved. Nothing in the app changes yet; Phase 3 replaces the local pipes with an `ssh` process.
@@ -92,9 +99,11 @@ Each task: tests first, `cargo clippy --workspace --all-targets -- -D warnings`,
 
 ### Task 8: Guards and docs
 
-- [ ] Extend the dependency guard to `terax-remote-protocol` and `terax-agent` (no `tauri`, `tokio` or app).
-- [ ] TERAX.md: one paragraph on the agent and protocol.
-- [ ] A learning for anything non-obvious.
+- [x] Extend the dependency guard to `terax-remote-protocol` and `terax-agent` (no `tauri`, `tokio` or app).
+- [x] TERAX.md: one paragraph on the agent and protocol.
+- [x] A learning for anything non-obvious.
+  - The guard (`crates/terax-workspace-core/tests/dependencies.rs`) now reads all three manifests; the three crates may depend on each other and on nothing named `tauri*`, `tokio*` or another `terax*`. Probed: adding `tokio` to the agent's manifest fails it.
+  - TERAX.md gains "Remote agent and protocol". Learnings: `2026-11-23-the-remote-agent-must-hide-its-mahdy.md` (Task 6) and `2026-11-23-linux-agents-are-built-and-tested-mahdy.md` (building on Windows, the harness).
 
 ## Risks
 
