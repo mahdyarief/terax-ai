@@ -20,6 +20,9 @@ pub struct SshConnector {
     pub version: String,
     pub agents: AgentBundle,
     pub control: ControlState,
+    /// Extra `-o` options ahead of the user's config (the app passes none;
+    /// tests use a throwaway `UserKnownHostsFile`).
+    pub ssh_options: Vec<String>,
 }
 
 impl Connector for SshConnector {
@@ -34,6 +37,11 @@ impl Connector for SshConnector {
         log.push(format!("ssh: OpenSSH {}.{}", version.0, version.1));
 
         let mut transport = Transport::ssh(&self.ssh, host);
+        for option in self.ssh_options.iter().rev() {
+            transport
+                .args
+                .splice(0..0, ["-o".into(), option.clone().into()]);
+        }
         // Prompts only for an attempt the user started; an automatic
         // reconnect that would need one fails instead and waits for them.
         let grant = if interactive {

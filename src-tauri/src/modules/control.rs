@@ -159,6 +159,21 @@ impl Drop for AskpassGrant {
 
 impl ControlState {
     /// `None` when there is no control server or no bundled CLI to answer.
+    /// A state whose askpass grants send to `address` (a stand-in endpoint)
+    /// and name `cli`, without a Tauri app.
+    #[cfg(test)]
+    pub(crate) fn for_askpass_tests(address: &str, cli: PathBuf) -> Self {
+        let state = Self::default();
+        let _ = state.0.runtime.set(RuntimeInfo {
+            address: address.into(),
+            token: generate_token().expect("a token"),
+            descriptor_path: PathBuf::from("unused-control.json"),
+            cli_path: Some(cli),
+            launcher_dir: None,
+        });
+        state
+    }
+
     pub fn askpass_grant(&self, host: &str) -> Option<AskpassGrant> {
         if self.0.shutting_down.load(Ordering::Acquire) {
             return None;

@@ -291,3 +291,25 @@ fn a_refused_reconnect_stops_instead_of_retrying() {
         "no attempt after the refusal"
     );
 }
+
+#[test]
+fn a_drop_is_explained_only_by_what_ssh_said_since_connecting() {
+    use super::registry::drop_reason;
+    let lines = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+    assert_eq!(
+        drop_reason(&lines(&[
+            "stderr: Warning: Permanently added 'h' (ED25519) to the list of known hosts.",
+            "state: connected",
+        ])),
+        "the connection ended"
+    );
+    assert_eq!(
+        drop_reason(&lines(&[
+            "stderr: old news",
+            "state: connected",
+            "stderr: Connection reset by 203.0.113.7 port 22",
+        ])),
+        "Connection reset by 203.0.113.7 port 22"
+    );
+    assert_eq!(drop_reason(&[]), "the connection ended");
+}

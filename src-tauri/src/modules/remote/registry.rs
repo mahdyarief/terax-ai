@@ -407,14 +407,7 @@ impl Driver {
             .clone();
         let Some(workspace) = workspace else { return };
         if workspace.is_closed() {
-            let reason = self
-                .shared
-                .log
-                .lines()
-                .into_iter()
-                .rev()
-                .find_map(|line| line.strip_prefix("stderr: ").map(str::to_string))
-                .unwrap_or_else(|| "the connection ended".into());
+            let reason = drop_reason(&self.shared.log.lines());
             self.apply(Event::Dropped { reason });
             return;
         }
@@ -429,6 +422,19 @@ impl Driver {
             });
         }
     }
+}
+
+/// Why the live session ended: ssh's last word since it connected, if it
+/// said anything. Lines from before (an earlier session's warnings) are not
+/// this session's reason.
+pub fn drop_reason(lines: &[String]) -> String {
+    let connected = format!("state: {}", describe(&State::Ready));
+    lines
+        .iter()
+        .rev()
+        .take_while(|line| **line != connected)
+        .find_map(|line| line.strip_prefix("stderr: ").map(str::to_string))
+        .unwrap_or_else(|| "the connection ended".into())
 }
 
 fn describe(state: &State) -> String {

@@ -1,5 +1,7 @@
 # Plan: Remote SSH, Phase 3 — transport and connection
 
+**Status:** complete (2026-11-23), except the GUI walkthrough left to the owner (Task 8).
+
 **Date:** 2026-11-23
 **Spec:** `docs/superpowers/specs/2026-11-22-remote-ssh-workspace-design.md` (section 4, Security, Phases)
 **Branch:** `dydev` (all work stays here until the SSH feature ships as 0.9.5-dy)
@@ -111,9 +113,17 @@ Done.
 
 ### Task 8: End to end, guards and docs
 
-- [ ] With the owner's approval, from a dev build to `dypod`: a first install, a reconnect that reuses, a version change that installs beside the old one, a killed `ssh` that reconnects, a new host key prompt (with a throwaway `UserKnownHostsFile`), and a password prompt if a password host is available.
-- [ ] Guards: no `std::fs`/`Command::new` on an `Ssh` path (the Phase 1 guard covers new modules); `modules/remote` keeps answers out of logs.
-- [ ] TERAX.md (connection model, askpass), a learning for anything non-obvious, and this plan marked complete.
+- [x] With the owner's approval, from a dev build to `dypod`: a first install, a reconnect that reuses, a version change that installs beside the old one, a killed `ssh` that reconnects, a new host key prompt (with a throwaway `UserKnownHostsFile`), and a password prompt if a password host is available.
+- [x] Guards: no `std::fs`/`Command::new` on an `Ssh` path (the Phase 1 guard covers new modules); `modules/remote` keeps answers out of logs.
+- [x] TERAX.md (connection model, askpass), a learning for anything non-obvious, and this plan marked complete.
+
+Done, with one part left to the owner.
+- `src/modules/remote/e2e_tests.rs` (ignored; `TERAX_AGENT_SSH_HOST=dypod`) drives the app's own `Registry` and `SshConnector` with Windows' OpenSSH 9.5 and `terax-cli` as askpass (a stand-in control endpoint answers). On dypod: the new host key asked through `terax-cli` (a throwaway `UserKnownHostsFile`) and accepted; a first install, 2.1 to 2.6 s; disconnect and connect again reusing the agent, 0.7 to 1.0 s, no new question; the agent killed on the server, then an automatic reconnect without prompting, 1.6 s, with the roots put back; another version installed beside the first. The run removes its `~/.terax-server/0.0.0-e2e-*` directories.
+- That run found a bug: a drop was explained by the last stderr line in the log, which was an earlier session's "Permanently added ..." warning. `registry::drop_reason` now reads only what ssh said since the session connected.
+- No password host was available (dypod takes keys only); a key's passphrase through `terax-cli` was checked in Task 5.
+- Not done: clicking through the GUI. A dev build shares the installed Terax's control descriptor (`%LOCALAPPDATA%\terax\control.json`) and would break the owner's running copy, so the palette, status bar and dialogs are left for the owner to try (see the learning).
+- Guards: `workspace_guard_tests.rs` now scans `remote/` (only `ssh_config.rs` reads this machine's files, the user's ssh config); `remote/answers_guard_tests.rs` fails if a log call, a connection log line or `println!` on the askpass path (`control.rs`, `terax-cli`'s and the protocol's `askpass.rs`, `modules/remote`) formats an answer, a response or a result. Checked by planting `log::debug!("{:?}", request.params)` in `askpass_request`: the guard failed.
+- TERAX.md: an "SSH connections" section.
 
 ## Risks
 

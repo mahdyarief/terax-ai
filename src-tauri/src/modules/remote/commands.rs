@@ -24,6 +24,7 @@ pub fn install(app: &AppHandle, control: ControlState) {
             dev_root().map(PathBuf::from),
         ),
         control,
+        ssh_options: Vec::new(),
     };
     let emitter = app.clone();
     registry::install(Registry::new(Arc::new(connector), move |snapshot| {

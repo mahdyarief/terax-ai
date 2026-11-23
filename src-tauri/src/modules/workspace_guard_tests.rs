@@ -1,7 +1,9 @@
 //! Workspace commands reach files and processes through the `Workspace`
 //! backend, so they also work where this process cannot open the files (a
-//! remote host). This test reads the fs and git modules' sources and fails
+//! remote host). This test reads the fs, git and remote modules' sources and fails
 //! when a direct host call appears outside the files listed below.
+//! `remote` is scanned too: an SSH connection must never fall back to a
+//! path or a process on this machine.
 //!
 //! Each listed file has an exact count, so a new call in an allowed file is
 //! caught too. When a call moves behind the backend, lower its count; when one
@@ -70,6 +72,11 @@ const HOST_ONLY: &[(&str, usize, &str)] = &[
         "the task store is app state under ~/.terax, with an OS file lock",
     ),
     ("git/task_worktree.rs", 20, "task worktrees are local-only"),
+    (
+        "remote/ssh_config.rs",
+        1,
+        "the user's ~/.ssh/config and its includes are on this machine, as is ssh",
+    ),
     (
         "git/watch.rs",
         7,
@@ -150,7 +157,7 @@ fn count(lines: &[&str]) -> usize {
 fn host_calls() -> Vec<(String, usize)> {
     let root = modules_dir();
     let mut files = Vec::new();
-    for dir in ["fs", "git"] {
+    for dir in ["fs", "git", "remote"] {
         sources(&root.join(dir), &mut files);
     }
     let mut found: Vec<(String, usize)> = files
