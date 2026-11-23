@@ -118,3 +118,94 @@ fn the_agent_meets_the_contract_over_ssh() {
     assert!(status.success(), "ssh and the agent end cleanly: {status}");
     remote(&host, &format!("rm -rf -- '{scratch}'"));
 }
+
+/// The app's own transport against a real server: `ssh` from `PATH`, the
+/// bootstrap, an upload of the release agent, then a reconnect that reuses
+/// it. Installs under a throwaway version, removed before and after.
+///
+/// ```text
+/// TERAX_AGENT_SSH_HOST=myserver \
+/// cargo test -p terax-agent --test over_ssh transport -- --ignored --nocapture
+/// ```
+///
+/// The agent is `src-tauri/binaries/terax-agent-x86_64-linux-musl` (from
+/// `pnpm build:agent`), or `TERAX_AGENT_LINUX_BIN`.
+#[test]
+#[ignore = "needs TERAX_AGENT_SSH_HOST and a built Linux agent"]
+fn the_transport_installs_and_reuses_the_agent_over_ssh() {
+    use sha2::{Digest, Sha256};
+    use terax_remote_protocol::transport::{
+        connect, openssh_version, AgentFile, ConnectOptions, Log, Stage, Transport,
+    };
+    use terax_workspace_core::env::SshHost;
+
+    const TEST_VERSION: &str = "0.0.0-transport-test";
+    let host = std::env::var("TERAX_AGENT_SSH_HOST").expect("set TERAX_AGENT_SSH_HOST");
+    let path = std::env::var_os("TERAX_AGENT_LINUX_BIN")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../binaries/terax-agent-x86_64-linux-musl")
+        });
+    let bytes = std::fs::read(&path).expect("build the agent with `pnpm build:agent`");
+    let agent = AgentFile {
+        path,
+        sha256: Sha256::digest(&bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect(),
+    };
+    let cleanup = format!("rm -rf ~/.terax-server/{TEST_VERSION}");
+    remote(&host, &cleanup);
+
+    println!("ssh: {:?}", openssh_version(&"ssh".into()).unwrap());
+    let ssh_host = SshHost::try_from(host.as_str()).unwrap();
+    let transport = Transport::ssh("ssh", &ssh_host);
+    let env = WorkspaceEnv::Ssh { host: ssh_host };
+    let options = || ConnectOptions {
+        client: Options {
+            version: TEST_VERSION.into(),
+            ..Options::default()
+        },
+        bootstrap_timeout: Duration::from_secs(120),
+    };
+
+    for expect_install in [true, false] {
+        let log = std::sync::Arc::new(Log::new(500));
+        let stages = std::sync::Mutex::new(Vec::new());
+        let started = Instant::now();
+        let connected = connect(
+            &transport,
+            env.clone(),
+            &|platform| (platform == "x86_64-linux-musl").then(|| agent.clone()),
+            &log,
+            &|stage| stages.lock().unwrap().push(stage),
+            options(),
+        )
+        .unwrap_or_else(|e| panic!("{e}\n{:#?}", log.lines()));
+        let took = started.elapsed();
+        let ping = connected.workspace.ping(Duration::from_secs(10)).unwrap();
+        println!(
+            "connect (install: {}): {took:?}, ping {ping:?}, stages {:?}",
+            connected.installed,
+            stages.lock().unwrap()
+        );
+        assert_eq!(connected.installed, expect_install);
+        assert_eq!(
+            stages
+                .lock()
+                .unwrap()
+                .contains(&Stage::Installing(bytes.len() as u64)),
+            expect_install
+        );
+        for line in log.lines() {
+            println!("  log: {line}");
+        }
+    }
+    let installed = remote(
+        &host,
+        &format!("sha256sum ~/.terax-server/{TEST_VERSION}/terax-agent | cut -d' ' -f1; stat -c %a ~/.terax-server/{TEST_VERSION}/terax-agent"),
+    );
+    assert_eq!(installed, format!("{}\n700", agent.sha256));
+    remote(&host, &cleanup);
+}

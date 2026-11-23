@@ -60,9 +60,16 @@ From the app, connect to a host named in `~/.ssh/config` (or `user@host`), insta
 
 ### Task 4: Transport
 
-- [ ] Spawn `ssh` with the validated host, options and askpass environment; collect stderr into the log; run the bootstrap exchange over stdin/stdout (send `run` or `install` plus the bytes), then hand the same pipes to `RemoteWorkspace::connect`. The transport program is a parameter, so tests can use `sh -c` in place of `ssh`.
-- [ ] `ssh -V` parsing (pure): 8.4+ required.
-- [ ] Tests (Unix, `sh` as the transport, the real agent binary): a first connect installs and handshakes; a second reuses; a bootstrap that dies mid-install fails cleanly; stderr lines reach the log.
+- [x] Spawn `ssh` with the validated host, options and askpass environment; collect stderr into the log; run the bootstrap exchange over stdin/stdout (send `run` or `install` plus the bytes), then hand the same pipes to `RemoteWorkspace::connect`. The transport program is a parameter, so tests can use `sh -c` in place of `ssh`.
+- [x] `ssh -V` parsing (pure): 8.4+ required.
+- [x] Tests (Unix, `sh` as the transport, the real agent binary): a first connect installs and handshakes; a second reuses; a bootstrap that dies mid-install fails cleanly; stderr lines reach the log.
+  - Placed in `terax-remote-protocol::transport` (std only), not the app: its tests need the real agent binary, which only the agent crate's tests can name (`crates/terax-agent/tests/transport.rs`). The app adds askpass (Task 5) and the registry (Task 6) around it. `Transport { program, args, env }` takes the bootstrap command as its last argument; `Transport::ssh` gives `-T`, the keep-alives, `ConnectTimeout=20` and `--` before the host. On Windows the process gets `CREATE_NO_WINDOW`.
+  - `connect(transport, env, bundled, log, on_stage, options)` returns `Connected { workspace, process, report, installed }` or a `ConnectError`: `Spawn`, `Ended { stderr }` (ssh's last stderr line, such as "Permission denied (publickey)."), `Bootstrap`, `Unsupported`, `TimedOut` (a watchdog kills the process after `bootstrap_timeout`, 600 s by default, which covers a 300 s prompt), `Handshake`. Stages: `Connecting`, `Installing(bytes)`, `Handshaking`. The workspace starts with no roots.
+  - Lines the server's shell prints before `TERAX-BOOTSTRAP 1` (startup files that echo) are skipped and logged as `server: ...`, up to 100. stderr goes to the `Log` as `stderr: ...` (500 lines kept). On `Ended`, the client waits up to 2 s for stderr to close before stopping the process: a mutant that skipped the wait survived the first tests, and showed the stop came first and could cut ssh's last message; a test now prints it after stdout has closed.
+  - The bootstrap now also removes upload temp files older than a day, left by a session cut off mid-upload (a recent one may be another upload in progress).
+  - `check_openssh_version` needs 8.4+, with a message pointing to key authentication for older clients; parses `OpenSSH_for_Windows_9.5p2` and `OpenSSH_9.9p1`.
+  - Tests: 4 units; 9 transport tests on Unix (install then reuse, noise and stderr, killed mid-upload leaves no agent, a refused login, late last words, no bundled agent, wrong output, timeout, missing program), run on dypod; `bootstrap_sh` (now 7) on dypod. Mutation: 8 mutants killed.
+  - Over real SSH from Windows (`over_ssh.rs`, ignored, throwaway version removed before and after): Git's OpenSSH 9.9 installs in 3.0 s and reconnects in 1.3 s; Windows' OpenSSH 9.5 in 2.8 s and 1.0 s; ping about 50 ms; the installed agent's hash matches and its mode is 700.
 
 ### Task 5: Askpass
 

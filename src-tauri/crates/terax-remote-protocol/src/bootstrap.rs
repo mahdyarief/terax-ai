@@ -75,6 +75,9 @@ fn script(version: &str) -> String {
         "a=\"$d/$v/terax-agent\"",
         "mkdir -p \"$d/$v\" || { echo \"ERROR cannot create $d/$v\"; exit 1; }",
         "chmod 700 \"$d\" \"$d/$v\"",
+        // An upload cut off by a dropped session leaves its temp file; one
+        // older than a day belongs to no upload still running.
+        "find \"$d/$v\" -maxdepth 1 -name \".terax-agent.*\" -mtime +0 -exec rm -f {} + 2>/dev/null",
         "h=none",
         "if command -v sha256sum >/dev/null 2>&1; then h=sha256sum; fi",
         "s=none",

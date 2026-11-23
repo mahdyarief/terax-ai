@@ -226,6 +226,31 @@ fn without_head_c_the_upload_falls_back_to_dd() {
 }
 
 #[test]
+fn temp_files_of_uploads_cut_off_long_ago_are_removed() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = agent_path(home.path()).parent().unwrap().to_path_buf();
+    std::fs::create_dir_all(&dir).unwrap();
+    let (old, fresh) = (dir.join(".terax-agent.123"), dir.join(".terax-agent.456"));
+    std::fs::write(&old, b"partial").unwrap();
+    std::fs::write(&fresh, b"partial").unwrap();
+    assert!(Command::new("touch")
+        .args(["-t", "202001010000"])
+        .arg(&old)
+        .status()
+        .unwrap()
+        .success());
+    let mut session = Session::start("sh", home.path(), None);
+    session.report();
+    session.send(
+        b"quit
+",
+    );
+    session.finish();
+    assert!(!old.exists(), "a day-old temp file is removed");
+    assert!(fresh.exists(), "a recent one may be an upload in progress");
+}
+
+#[test]
 fn versions_untouched_for_thirty_days_are_removed_and_recent_ones_kept() {
     let home = tempfile::tempdir().unwrap();
     let root = home.path().join(INSTALL_DIR);

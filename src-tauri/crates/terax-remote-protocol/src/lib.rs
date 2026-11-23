@@ -6,4 +6,5 @@ pub mod client;
 pub mod bootstrap;
 pub mod frame;
 pub mod handshake;
+pub mod transport;
 pub mod message;
