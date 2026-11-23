@@ -5113,6 +5113,8 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_bytes",
+ "sha2",
+ "tempfile",
  "terax-workspace-core",
 ]
 

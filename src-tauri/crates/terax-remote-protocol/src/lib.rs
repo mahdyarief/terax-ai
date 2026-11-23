@@ -3,6 +3,7 @@
 //! Tauri, no async runtime, so the agent can link it.
 
 pub mod client;
+pub mod bootstrap;
 pub mod frame;
 pub mod handshake;
 pub mod message;

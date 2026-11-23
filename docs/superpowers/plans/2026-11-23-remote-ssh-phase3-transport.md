@@ -39,8 +39,14 @@ From the app, connect to a host named in `~/.ssh/config` (or `user@host`), insta
 
 ### Task 2: Bootstrap and install planning (pure)
 
-- [ ] The bootstrap script text, the report parser, and `plan(report, bundled) -> Run | Install { triple } | Unsupported(reason)`. Old-version cleanup in the script.
-- [ ] Tests: report parsing (x86_64, aarch64, other arch, other OS, missing `sha256sum`, hash match and mismatch, garbage); on Unix, run the script under `sh` against a temp `HOME`, with `cat` standing in for the agent: install, reuse, a truncated upload refused, a corrupted upload refused and nothing left in place, a stale version removed.
+- [x] The bootstrap script text, the report parser, and `plan(report, bundled) -> Run | Install { triple } | Unsupported(reason)`. Old-version cleanup in the script.
+- [x] Tests: report parsing (x86_64, aarch64, other arch, other OS, missing `sha256sum`, hash match and mismatch, garbage); on Unix, run the script under `sh` against a temp `HOME`, with `cat` standing in for the agent: install, reuse, a truncated upload refused, a corrupted upload refused and nothing left in place, a stale version removed.
+  - `terax-remote-protocol::bootstrap`: `remote_command(version)` gives `sh -c '<script>'`, one line with no quote, backslash or newline inside, so any login shell (bash, zsh, fish, csh) hands it to `sh` unchanged; the version is checked (`[A-Za-z0-9._+-]`, at most 64, no leading `.`) because it is spliced into the script. `parse_report` and `plan` are pure; `install_line(len, sha256)`.
+  - The exchange: the script prints `TERAX-BOOTSTRAP 1`, `os=`, `arch=`, `hasher=`, `sha256=`, `END`; reads one line (`run`, or `install <bytes> <sha256>`); for install it reads exactly that many bytes into a temp file in the version directory (`head -c`, falling back to `dd bs=1` where `head` has no `-c`), checks the hash, `chmod 700` and `mv` into place, or removes the temp file and prints `ERROR <reason>`; then prints `READY` and `exec`s the agent. The client writes nothing more until `READY`, so the script never reads protocol bytes. Any other instruction ends the session with nothing run.
+  - The hash is checked on the server, so a short or altered upload never replaces the installed agent. `umask 077`, and `~/.terax-server` and the version directory are forced to 700 even when they already existed looser.
+  - Cleanup: each connect touches its version directory; sibling directories with an mtime over 30 days are removed.
+  - `plan` refuses non-Linux, architectures other than x86_64/amd64/aarch64/arm64, a server without `sha256sum`, and a build without the agent for that triple, each with a reason for the user.
+  - Tests: 7 pure unit tests; `tests/bootstrap_sh.rs` (Unix only) runs the real command under every login shell present, with a stand-in agent script: install then reuse, modes, a truncated and an altered upload (old agent kept, no temp left), a bad size and an unknown instruction, the `dd` fallback, stale-version cleanup. Run on dypod (Ubuntu 24.04; `sh`, `bash`, `dash`): 6 passed. Mutation-checked on dypod: 7 mutants of the script (hash check, temp removal, chmod, cleanup, size check, unknown instruction, `dd` fallback) all fail a test.
 
 ### Task 3: Bundling the agent
 
