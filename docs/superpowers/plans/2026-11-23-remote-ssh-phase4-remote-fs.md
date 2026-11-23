@@ -79,8 +79,15 @@ Done. What the audit found and fixed:
 
 ### Task 5: Search, grep and glob
 
-- [ ] `fs_search`, `fs_list_files`, `fs_warm_index` for `Ssh` through `Workspace::list_files`; the index cache keyed by env; `fs_grep`, `fs_grep_interactive`, `fs_glob` checked on a remote space.
-- [ ] Tests: fuzzy search finds a file in the in-process host; ignored files are left out; a reconnect rebuilds the index; a cancelled search stops.
+- [x] `fs_search`, `fs_list_files`, `fs_warm_index` for `Ssh` through `Workspace::list_files`; the index cache keyed by env; `fs_grep`, `fs_grep_interactive`, `fs_glob` checked on a remote space.
+- [x] Tests: fuzzy search finds a file in the in-process host; ignored files are left out; a reconnect rebuilds the index; a cancelled search stops.
+
+Done.
+- The finder's commands checked the root with the host's `is_dir()` (always false for a server); `search_root` now asks the workspace. A hit's path on a server is the root joined in the server's spelling.
+- The index cache was invalidated by host spellings, one placeholder for every server path. Changes on a server are now spelled `ssh:<host>:<path>` (`remote_change_path`), for the cache's prefixes and for our own mutations (`note_changed_in`, `note_dir_changed_in`, used by every file command).
+- Changes made on the server while nothing watches are not seen until a reconnect: on each `ready` the app drops that host's cache (`forget_host`). Task 6 makes this live.
+- `fs_grep`, `fs_grep_interactive` and `fs_glob` already went through the backend; tested.
+- Tests: 4 in `remote/search_tests.rs` (fuzzy search, gitignored and pruned folders left out, our own change seen at once, a server-side change seen after a reconnect, a cancelled search, a missing root, grep and glob).
 
 ### Task 6: Watching
 

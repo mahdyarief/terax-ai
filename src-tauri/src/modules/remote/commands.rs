@@ -8,8 +8,10 @@ use tauri::{AppHandle, Emitter, Manager};
 use terax_workspace_core::env::SshHost;
 
 use super::connector::SshConnector;
+use super::machine::State;
 use super::registry::{self, Registry, Snapshot};
 use crate::modules::control::ControlState;
+use crate::modules::fs::index::FileIndexState;
 use crate::modules::remote_agent::{dev_root, AgentBundle};
 
 pub const STATE_EVENT: &str = "remote://state";
@@ -28,6 +30,15 @@ pub fn install(app: &AppHandle, control: ControlState) {
     };
     let emitter = app.clone();
     registry::install(Registry::new(Arc::new(connector), move |snapshot| {
+        if matches!(snapshot.state, State::Ready) {
+            // Files may have changed while nothing was watching.
+            if let (Some(index), Ok(host)) = (
+                emitter.try_state::<FileIndexState>(),
+                SshHost::try_from(snapshot.host.clone()),
+            ) {
+                index.forget_host(&host);
+            }
+        }
         let _ = emitter.emit(STATE_EVENT, snapshot);
     }));
 }

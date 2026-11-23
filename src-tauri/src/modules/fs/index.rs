@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 
 use super::to_canon;
 use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv};
+use terax_workspace_core::env::SshHost;
 pub use terax_workspace_core::index::{FileIndex, Packed, MAX_SCANNED, PRUNE_DIRS};
 #[cfg(test)]
 use terax_workspace_core::index::MAX_PACKED_BYTES;
@@ -129,6 +130,21 @@ impl Drop for WalkGuard<'_> {
 
 #[derive(Clone, Default)]
 pub struct FileIndexState(Arc<Inner>);
+
+/// How a change on a server is spelled for the index: `ssh:<host>:<path>`.
+/// A server path has no host spelling (they all resolve to one placeholder),
+/// so its changes and its roots are matched in this spelling instead.
+pub fn remote_change_path(host: &SshHost, path: &str) -> String {
+    format!("ssh:{}:{}", host.as_str(), path.trim_end_matches('/'))
+}
+
+/// The prefix that changes under `root` start with, in `env`'s spelling.
+fn event_prefix_in(env: &WorkspaceEnv, root: &str) -> String {
+    match env {
+        WorkspaceEnv::Ssh { host } => format!("{}/", remote_change_path(host, root)),
+        _ => event_prefix(&resolve_path(root, env)),
+    }
+}
 
 fn event_prefix(root: &Path) -> String {
     let canonical = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
@@ -247,9 +263,10 @@ impl FileIndexState {
                     .unwrap_or_else(|e| e.into_inner()),
             );
         };
-        // Watcher events and our own mutations report canonical host paths,
-        // so the prefix that matches them is computed on the host spelling.
-        let prefix = event_prefix(&resolve_path(&key.root.to_string_lossy(), &key.env));
+        // Watcher events and our own mutations report canonical host paths
+        // (a server's in `remote_change_path`'s spelling), so the prefix that
+        // matches them is computed in the same spelling.
+        let prefix = event_prefix_in(&key.env, &key.root.to_string_lossy());
         let walk = self.begin_walk(&prefix);
         let abandoned = || cancelled() && owned.build.waiters.load(Ordering::SeqCst) == 0;
         let index = if abandoned() {
@@ -327,6 +344,19 @@ impl FileIndexState {
             }
         }
         table.slots.retain(|slot| !covers(&slot.event_prefix, path));
+    }
+
+    /// Drops everything cached for `host`: after a reconnect its files may
+    /// have changed while nothing was watching.
+    pub fn forget_host(&self, host: &SshHost) {
+        let prefix = format!("ssh:{}:", host.as_str());
+        let mut table = self.0.table.lock().unwrap_or_else(|e| e.into_inner());
+        for walk in &mut table.walks {
+            if walk.event_prefix.starts_with(&prefix) {
+                walk.dirty = true;
+            }
+        }
+        table.slots.retain(|slot| !slot.event_prefix.starts_with(&prefix));
     }
 
     #[cfg(test)]

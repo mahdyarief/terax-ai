@@ -1,6 +1,6 @@
-use super::{index::FileIndexState, mutate::note_dir_changed, to_canon};
+use super::{index::FileIndexState, mutate::note_dir_changed_in, to_canon};
 use crate::modules::workspace::{
-    backend_for, is_absolute_in, resolve_path, within, WorkspaceEnv, WorkspaceRegistry,
+    backend_for, is_absolute_in, within, WorkspaceEnv, WorkspaceRegistry,
 };
 use terax_workspace_core::workspace::EntryKind;
 use serde::Serialize;
@@ -96,7 +96,7 @@ pub(crate) fn copy_batch(
         }
     }
     if !result.created.is_empty() {
-        note_dir_changed(index, &resolve_path(&dest, workspace));
+        note_dir_changed_in(index, workspace, &dest);
     }
     Ok(result)
 }

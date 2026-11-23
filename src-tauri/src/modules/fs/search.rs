@@ -8,7 +8,8 @@ use tauri::State;
 use super::index::{FileIndexState, IndexKey, Packed};
 use super::supersede::Supersede;
 use super::{blocking, display_path};
-use crate::modules::workspace::{resolve_path, WorkspaceEnv};
+use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv};
+use terax_workspace_core::workspace::EntryKind;
 
 #[derive(Serialize, Clone)]
 pub struct SearchHit {
@@ -162,12 +163,12 @@ pub fn run_search(
 
 /// Resolves and validates the root a search runs over; shared by every entry
 /// point that reads the index so none of them can reach a different root.
+/// Asked of the workspace, so a server's folder is checked on the server.
 fn search_root(root: &str, workspace: &WorkspaceEnv) -> Result<std::path::PathBuf, String> {
-    let root_path = resolve_path(root, workspace);
-    if !root_path.is_dir() {
-        return Err(format!("not a directory: {root}"));
+    match backend_for(workspace).metadata(root) {
+        Ok(meta) if meta.kind == EntryKind::Dir => Ok(resolve_path(root, workspace)),
+        _ => Err(format!("not a directory: {root}")),
     }
-    Ok(root_path)
 }
 
 fn search_key(root: &str, workspace: &WorkspaceEnv, show_hidden: Option<bool>) -> IndexKey {
@@ -219,6 +220,10 @@ pub fn run_warm_index(
 }
 
 fn abs_path(rel: &str, root_path: &Path, root_display: &str, workspace: &WorkspaceEnv) -> String {
+    // A server's root has no host spelling to join onto.
+    if workspace.is_ssh() {
+        return terax_workspace_core::paths::join(root_display, rel);
+    }
     display_path(&root_path.join(rel), root_path, root_display, workspace)
 }
 
@@ -316,10 +321,7 @@ pub fn run_list_files(
     let cap = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, HARD_LIMIT);
     let depth = max_depth.unwrap_or(DEFAULT_DEPTH).clamp(1, HARD_DEPTH);
     let workspace = WorkspaceEnv::from_option(workspace);
-    let root_path = resolve_path(&root, &workspace);
-    if !root_path.is_dir() {
-        return Err(format!("not a directory: {root}"));
-    }
+    search_root(&root, &workspace)?;
 
     let key = IndexKey {
         env: workspace,

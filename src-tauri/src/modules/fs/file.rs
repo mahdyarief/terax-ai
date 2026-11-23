@@ -6,8 +6,8 @@ use tauri::Emitter;
 
 use super::blocking;
 use super::index::FileIndexState;
-use super::mutate::note_changed;
-use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv};
+use super::mutate::note_changed_in;
+use crate::modules::workspace::{backend_for, WorkspaceEnv};
 use terax_workspace_core::workspace::{EntryKind, ReadRequest, Workspace};
 #[cfg(windows)]
 use terax_workspace_core::paths::canonical_wsl_path;
@@ -322,7 +322,7 @@ pub async fn fs_write_file(
             })?;
         if written.created {
             // The file index is host-side state keyed by host paths.
-            note_changed(&index, &resolve_path(&path, &workspace));
+            note_changed_in(&index, &workspace, &path);
         }
         Ok((path, written.mtime_ms))
     })

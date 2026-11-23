@@ -1,5 +1,5 @@
 use super::blocking;
-use super::index::FileIndexState;
+use super::index::{remote_change_path, FileIndexState};
 use crate::modules::workspace::{
     backend_for, resolve_path, same_spelling, within, WorkspaceEnv, WorkspaceRegistry,
 };
@@ -13,6 +13,30 @@ use terax_workspace_core::workspace::{EntryKind, Meta, Workspace};
 /// only covers expanded directories, so our own mutations report themselves.
 pub(super) fn note_changed(index: &FileIndexState, entry: &Path) {
     note_dir_changed(index, entry.parent().unwrap_or(entry));
+}
+
+/// `note_changed` for a workspace path: by its host spelling on this
+/// machine, by `remote_change_path` on a server.
+pub(crate) fn note_changed_in(index: &FileIndexState, workspace: &WorkspaceEnv, entry: &str) {
+    match workspace {
+        WorkspaceEnv::Ssh { host } => {
+            let entry = entry.trim_end_matches('/');
+            let parent = match entry.rfind('/') {
+                Some(0) | None => "/",
+                Some(at) => &entry[..at],
+            };
+            index.note_change(&remote_change_path(host, parent));
+        }
+        _ => note_changed(index, &resolve_path(entry, workspace)),
+    }
+}
+
+/// `note_dir_changed` for a workspace directory.
+pub(super) fn note_dir_changed_in(index: &FileIndexState, workspace: &WorkspaceEnv, dir: &str) {
+    match workspace {
+        WorkspaceEnv::Ssh { host } => index.note_change(&remote_change_path(host, dir)),
+        _ => note_dir_changed(index, &resolve_path(dir, workspace)),
+    }
 }
 
 pub(super) fn note_dir_changed(index: &FileIndexState, dir: &Path) {
@@ -118,7 +142,7 @@ pub async fn fs_create_file(
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
         create_file(&*backend_for(&workspace), &path)?;
-        note_changed(&index, &resolve_path(&path, &workspace));
+        note_changed_in(&index, &workspace, &path);
         Ok(())
     })
     .await
@@ -147,7 +171,7 @@ pub async fn fs_create_dir(
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
         create_dir(&*backend_for(&workspace), &path)?;
-        note_changed(&index, &resolve_path(&path, &workspace));
+        note_changed_in(&index, &workspace, &path);
         Ok(())
     })
     .await
@@ -175,8 +199,8 @@ pub async fn fs_rename(
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
         rename(&*backend_for(&workspace), &from, &to)?;
-        note_changed(&index, &resolve_path(&from, &workspace));
-        note_changed(&index, &resolve_path(&to, &workspace));
+        note_changed_in(&index, &workspace, &from);
+        note_changed_in(&index, &workspace, &to);
         Ok(())
     })
     .await
@@ -214,8 +238,8 @@ pub async fn fs_move(
         let moved = fs_move_impl(&*ws, &from, &to, &root, expected_conflict.as_deref())?;
         if moved == FsMoveResult::Moved {
             let index = app.state::<FileIndexState>();
-            note_changed(&index, &resolve_path(&from, &workspace));
-            note_changed(&index, &resolve_path(&to, &workspace));
+            note_changed_in(&index, &workspace, &from);
+            note_changed_in(&index, &workspace, &to);
         }
         Ok(moved)
     })
@@ -280,7 +304,7 @@ pub async fn fs_delete(
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
         delete_path(&*backend_for(&workspace), &path)?;
-        note_changed(&index, &resolve_path(&path, &workspace));
+        note_changed_in(&index, &workspace, &path);
         Ok(())
     })
     .await
@@ -314,7 +338,7 @@ pub async fn fs_delete_batch(
         let result = fs_delete_batch_impl(&*ws, paths, &root);
         let index = app.state::<FileIndexState>();
         for deleted in &result.deleted {
-            note_changed(&index, &resolve_path(deleted, &workspace));
+            note_changed_in(&index, &workspace, deleted);
         }
         result
     })

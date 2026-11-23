@@ -23,3 +23,6 @@ mod authorize_tests;
 
 #[cfg(test)]
 mod fs_tests;
+
+#[cfg(test)]
+mod search_tests;
