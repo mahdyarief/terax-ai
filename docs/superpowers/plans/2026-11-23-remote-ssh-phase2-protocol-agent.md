@@ -64,8 +64,13 @@ Each task: tests first, `cargo clippy --workspace --all-targets -- -D warnings`,
 
 ### Task 5: Client
 
-- [ ] `RemoteWorkspace::connect(reader, writer, env, roots)`: handshake, `SetRoots`, the call table, the reader thread, a deadline per call, `Ping` for liveness. Implements `Workspace`.
-- [ ] Tests over in-memory pipes against a scripted fake agent: replies routed to the right waiter when they arrive out of order; a dropped connection fails waiting and later calls with `ConnectionAborted`; an oversize write fails before anything is sent.
+- [x] `RemoteWorkspace::connect(reader, writer, env, roots)`: handshake, `SetRoots`, the call table, the reader thread, a deadline per call, `Ping` for liveness. Implements `Workspace`.
+- [x] Tests over in-memory pipes against a scripted fake agent: replies routed to the right waiter when they arrive out of order; a dropped connection fails waiting and later calls with `ConnectionAborted`; an oversize write fails before anything is sent.
+  - In `terax-remote-protocol::client`. The reader thread holds only the waiters, never the writer, so dropping the `RemoteWorkspace` closes the agent's input and the agent exits.
+  - Deadlines: 15 s to connect (Hello and `SetRoots`), 60 s per file operation, 10 min per walk, and an `exec`'s own timeout plus 60 s. A call past its deadline fails with `TimedOut` and sends `Cancel`; a late reply is dropped. A walk polls its caller's cancel flag every 50 ms and sends `Cancel` once.
+  - Errors: the agent's errors come back as the same `io::ErrorKind` and text; `read_confined` keeps the `ConfinedError` variant; a refusal by the agent's roots is `PermissionDenied` (and `Outside` for a confined read). `list_files` returns `None` on failure as well as on cancel, since the trait has no error to give.
+  - `import` (uploading from this machine) returns `Unsupported`; a later phase adds it.
+  - Tests: 11 against a scripted fake agent. Mutation-checked: 8 mutants fail a test (the closed check, both `Cancel` sends, the size check, waking waiters on close, routing by id, the required capability, the confined error mapping); a ninth survived because its branch was redundant, and the branch was removed.
 
 ### Task 6: The contract over a real child process
 
