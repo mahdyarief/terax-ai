@@ -83,9 +83,12 @@ Each task: tests first, `cargo clippy --workspace --all-targets -- -D warnings`,
 
 ### Task 7: Linux binaries (trial for the packaging risk)
 
-- [ ] Install `zig` and `cargo-zigbuild` (asks first). Build `terax-agent` for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` on Windows; record size and confirm the binaries are static.
-- [ ] With the owner's approval, on a real server: copy the agent over, then run the contract suite through `ssh <host> <path>/terax-agent --stdio` as the transport (a manual test harness, not app code). This exercises the real network, the real Linux file system and git before Phase 3 builds the connection.
-- [ ] Record the outcome in the spec's packaging section (zigbuild on Windows, or CI artifacts).
+- [x] Install `zig` and `cargo-zigbuild` (asks first). Build `terax-agent` for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` on Windows; record size and confirm the binaries are static.
+- [x] With the owner's approval, on a real server: copy the agent over, then run the contract suite through `ssh <host> <path>/terax-agent --stdio` as the transport (a manual test harness, not app code). This exercises the real network, the real Linux file system and git before Phase 3 builds the connection.
+- [x] Record the outcome in the spec's packaging section (zigbuild on Windows, or CI artifacts).
+  - Outcome: zigbuild on Windows works (2.7 and 2.5 MiB, static); the contract passes on the owner's server `dypod` (Ubuntu 24.04, x86_64) over SSH in 3.6 s. Details in the spec. The core now calls `SYS_renameat2` directly, since zig's musl lacks the wrapper.
+  - The agent is served with no arguments, so the transport is `ssh -T <host> <path>/terax-agent` (the plan's `--stdio` was dropped in Task 4). Running the harness from Git Bash needs `MSYS2_ENV_CONV_EXCL=TERAX_AGENT_SSH_PATH`, or Git Bash rewrites the remote path into a Windows one.
+  - The test agent stays at `~/.cache/terax-agent-test/terax-agent` on the server for reruns.
 
 ### Task 8: Guards and docs
 

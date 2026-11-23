@@ -132,6 +132,9 @@ All of it is pure: encode and decode, a request table and the credit accounting,
 
 - CI builds both musl agents (`cargo-zigbuild`) on Linux and attaches them as release artifacts.
 - `tauri.conf.json` bundles them as resources. The Windows installer, which is built on the owner's machine, either pulls the CI artifacts or cross-compiles with `cargo-zigbuild` on Windows. This needs a trial run before Phase 2 is planned in detail.
+- **Trial result (2026-11-23, Phase 2 Task 7): cross-compiling on Windows works.** With `rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl`, `pip install ziglang` (zig 0.17.1, its directory on `PATH`) and `cargo install cargo-zigbuild` (0.24.1), `cargo zigbuild --release -p terax-agent --target <triple>` builds both agents on the owner's machine: 2.7 MiB (x86_64) and 2.5 MiB (aarch64), statically linked with no interpreter (the server's `file` and `ldd` agree). So the Windows installer can bundle agents it builds itself; CI artifacts are not needed for it.
+  - One change was needed: zig's musl has no `renameat2` wrapper, so the core calls the `SYS_renameat2` system call directly (the wrapper only forwards; this also works with glibc before 2.28).
+  - On a real server (Ubuntu 24.04, x86_64, over SSH with `ssh -T host <path>/terax-agent` as the transport): the whole workspace contract passes in 3.6 s, connecting takes 0.7 s, a ping round trip about 30 ms, git runs in the session's root, and a path outside it is refused. The harness is `crates/terax-agent/tests/over_ssh.rs` (ignored by default). aarch64 has not run on hardware yet.
 - The agent version is tied to the app version. A newer app installs its own agent beside the old one; old versions are cleaned up after 30 days.
 
 ## Testing
@@ -156,7 +159,7 @@ Each phase ends green on the full test suite and is reviewable on its own. Phase
 ## Risks and open questions
 
 - **Scale.** About 115 commands touch `WorkspaceEnv`. Phase 1 must land in small slices (fs, then search, then git) to stay reviewable.
-- **Windows packaging** of Linux binaries, while Windows installers are built locally (see the dy release learning). Needs a decision after a `cargo-zigbuild` trial.
+- **Windows packaging** of Linux binaries, while Windows installers are built locally (see the dy release learning). Resolved by the trial in Packaging: `cargo-zigbuild` on Windows builds both agents.
 - **Askpass on Windows:** `SSH_ASKPASS_REQUIRE=force` is supported by OpenSSH 8.4+ (9.9 here). Older client versions need a fallback message asking the user to set up key auth.
 - **HTML preview** currently serves local files through the `terax-doc` scheme; remote assets need an in-memory publish path. Exact design is deferred to Phase 4.
 - **Terminal survival across drops.** v1 restarts terminals after a reconnect. A per-user agent daemon on a Unix socket, which `--stdio` would attach to, could keep them alive. Deferred.

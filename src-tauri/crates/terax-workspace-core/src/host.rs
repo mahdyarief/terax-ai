@@ -206,12 +206,15 @@ pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     }
 }
 
+/// Through the system call itself: musl (the static agent binary) and glibc
+/// before 2.28 have no `renameat2` wrapper, and the wrapper only forwards.
 #[cfg(target_os = "linux")]
 pub fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     let from = c_path(from)?;
     let to = c_path(to)?;
     let result = unsafe {
-        libc::renameat2(
+        libc::syscall(
+            libc::SYS_renameat2,
             libc::AT_FDCWD,
             from.as_ptr(),
             libc::AT_FDCWD,
