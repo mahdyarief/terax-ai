@@ -10,6 +10,7 @@ use terax_workspace_core::env::SshHost;
 use super::connector::SshConnector;
 use super::machine::State;
 use super::registry::{self, Registry, Snapshot};
+use super::watch::RemoteWatches;
 use crate::modules::control::ControlState;
 use crate::modules::fs::index::FileIndexState;
 use crate::modules::remote_agent::{dev_root, AgentBundle};
@@ -31,12 +32,12 @@ pub fn install(app: &AppHandle, control: ControlState) {
     let emitter = app.clone();
     registry::install(Registry::new(Arc::new(connector), move |snapshot| {
         if matches!(snapshot.state, State::Ready) {
-            // Files may have changed while nothing was watching.
-            if let (Some(index), Ok(host)) = (
-                emitter.try_state::<FileIndexState>(),
-                SshHost::try_from(snapshot.host.clone()),
-            ) {
-                index.forget_host(&host);
+            if let Ok(host) = SshHost::try_from(snapshot.host.clone()) {
+                // Files may have changed while nothing was watching.
+                if let Some(index) = emitter.try_state::<FileIndexState>() {
+                    index.forget_host(&host);
+                }
+                resume_watching(&emitter, host);
             }
         }
         let _ = emitter.emit(STATE_EVENT, snapshot);
@@ -104,4 +105,20 @@ pub async fn remote_browse_dirs(
     let host = parse(host)?;
     crate::modules::fs::blocking(move || live(&host)?.browse_dirs(&path).map_err(|e| e.to_string()))
         .await
+}
+
+/// A new connection gets the host's watched set again, off the registry's
+/// thread (it waits for the agent).
+fn resume_watching(app: &AppHandle, host: SshHost) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let Some(ws) = registry::global().and_then(|r| r.workspace(&host)) else {
+            return;
+        };
+        let set = app.state::<RemoteWatches>().set(&host);
+        let deliver = crate::modules::fs::watch::remote_deliver(&app);
+        if let Err(error) = super::watch::resume(&ws, &host, set, deliver) {
+            log::warn!("watching on {}: {error}", host.as_str());
+        }
+    });
 }

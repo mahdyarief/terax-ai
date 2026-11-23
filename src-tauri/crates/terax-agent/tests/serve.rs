@@ -565,3 +565,47 @@ fn browsing_lists_only_directories_and_works_outside_the_roots() {
     }
     agent.finish().unwrap();
 }
+
+#[test]
+fn watched_folders_and_files_report_changes_until_the_set_is_emptied() {
+    let tree = tree();
+    let mut agent = Agent::ready();
+    set_roots(&mut agent, &tree);
+    let src = format!("{}/src", tree.root());
+    let main = format!("{src}/main.rs");
+    let watch = Call::SetWatch {
+        // Outside the roots and missing: left out, not an error.
+        dirs: vec![
+            src.clone(),
+            format!("{}/outside", tree.base),
+            format!("{}/nope", tree.root()),
+        ],
+        files: vec![main.clone()],
+    };
+    assert_eq!(agent.call(2, watch), Ok(Reply::Unit));
+
+    std::fs::write(format!("{src}/new.rs"), "").unwrap();
+    let Some(Envelope::Changed { paths }) = agent.recv() else {
+        panic!("a new file is reported");
+    };
+    assert_eq!(paths, std::slice::from_ref(&src));
+
+    std::fs::write(&main, "fn main() { changed() }\n").unwrap();
+    let Some(Envelope::Changed { paths }) = agent.recv() else {
+        panic!("an edit of a watched file is reported");
+    };
+    assert_eq!(paths, std::slice::from_ref(&main));
+
+    let stop = Call::SetWatch {
+        dirs: Vec::new(),
+        files: Vec::new(),
+    };
+    assert_eq!(agent.call(3, stop), Ok(Reply::Unit));
+    std::fs::write(format!("{src}/later.rs"), "").unwrap();
+    std::fs::write(&main, "fn main() {}\n").unwrap();
+    // Past the debounce window: nothing came before the pong.
+    thread::sleep(std::time::Duration::from_millis(1500));
+    agent.send(&Envelope::Ping { nonce: 9 });
+    assert_eq!(agent.recv(), Some(Envelope::Pong { nonce: 9 }));
+    agent.finish().unwrap();
+}

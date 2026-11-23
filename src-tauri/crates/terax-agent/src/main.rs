@@ -24,6 +24,7 @@ fn main() -> ExitCode {
         }
     }
     keep_stdio_from_children();
+    terax_agent::log::install();
     let ws = Arc::new(HostWorkspace::new(WorkspaceEnv::Local));
     match serve(std::io::stdin().lock(), std::io::stdout(), ws, options) {
         Ok(()) => ExitCode::SUCCESS,

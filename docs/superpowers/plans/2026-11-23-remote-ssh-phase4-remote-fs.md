@@ -91,8 +91,16 @@ Done.
 
 ### Task 6: Watching
 
-- [ ] Protocol `Watch` / `Unwatch` / `Changed`; the agent's watcher (the core engine on inotify); the client's event routing; `fs_watch_add` / `fs_watch_remove` for `Ssh`; re-registration and one catch-up `fs:changed` after a reconnect.
-- [ ] Tests: over pipes, a file created in a watched directory reaches the callback, debounced; `Unwatch` stops it; a reconnect re-registers; a watch the server refuses (the inotify limit) is reported in the connection log and does not end the session.
+- [x] Protocol `Watch` / `Unwatch` / `Changed`; the agent's watcher (the core engine on inotify); the client's event routing; `fs_watch_add` / `fs_watch_remove` for `Ssh`; re-registration and one catch-up `fs:changed` after a reconnect.
+- [x] Tests: over pipes, a file created in a watched directory reaches the callback, debounced; `Unwatch` stops it; a reconnect re-registers; a watch the server refuses (the inotify limit) is reported in the connection log and does not end the session.
+
+Done, with one change to the design: instead of `Watch` / `Unwatch`, a single `Call::SetWatch { dirs, files }` replaces the whole set (protocol 3). Re-registering after a reconnect is then just sending it again, and nothing can drift between the two sides.
+- Agent (`terax-agent/src/watch.rs`): the core `Watcher` (debounce, listing filter, file stamps) on the server's own notifications, pushing `Envelope::Changed { paths }`. Paths outside the roots or missing are left out, not refused, so one stale path does not cost the rest their watch. Runs in order with `SetRoots` on the read loop.
+- Client: `set_watch`, and `on_changed` for the pushes (routed on the reader thread).
+- App (`remote/watch.rs`): `RemoteWatches` counts the explorer's and the editor tabs' registrations per host and sends the set when it changes; `fs_watch_add` / `fs_watch_remove` take that path for `ssh`. A push reaches the file index (`remote_change_path`) and the frontend (`fs:changed`) as a local change does. On every `ready` the app resumes: the callback, the set, and one catch-up `fs:changed` with every watched path.
+- A folder the server will not watch (past the inotify limit) is a `debug` line in the core; the agent now logs warnings and the watch engine's lines to stderr (the connection log) as `terax-agent log: ...`, and `drop_reason` skips those lines so they are never shown as why a connection ended. Simulating the inotify limit is not practical in a test; the logger's filter and `drop_reason` are tested.
+- Not covered yet: a new file in a folder that is not watched (collapsed in the explorer) does not reach the file finder's index until our own change or a reconnect touches it, unlike on this machine, where every event notes the index.
+- Tests: 1 over pipes in `terax-agent/tests/serve.rs` (a new file, an edit of a watched file, stopping), 1 in `remote/watch_tests.rs` (delivery, a reconnect with catch-up and a new watch, release), counting in `remote/watch.rs`, the logger filter, `drop_reason`.
 
 ### Task 7: Previews
 

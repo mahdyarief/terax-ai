@@ -25,6 +25,7 @@ use terax_workspace_core::exec::ExecSpec;
 use terax_workspace_core::workspace::{EntryKind, Workspace};
 
 use crate::roots::{Refusal, Roots};
+use crate::watch::Watches;
 
 pub const PROGRAM: &str = "terax-agent";
 
@@ -75,6 +76,13 @@ pub fn serve(
         None => return Ok(()),
     }
 
+    let watches = {
+        let output = output.clone();
+        Watches::new(Arc::new(move |paths| {
+            // The client may be gone; the read loop notices when input ends.
+            let _ = send(&output, &Envelope::Changed { paths });
+        }))
+    };
     let home = Arc::new(options.home);
     let roots = Arc::new(RwLock::new(Roots::default()));
     let in_flight: InFlight = Arc::default();
@@ -104,7 +112,16 @@ pub fn serve(
         })
         .collect();
 
-    let outcome = read_loop(&mut input, &output, ws.as_ref(), &roots, &in_flight, &jobs);
+    let outcome = read_loop(
+        &mut input,
+        &output,
+        ws.as_ref(),
+        &roots,
+        &watches,
+        &in_flight,
+        &jobs,
+    );
+    drop(watches);
 
     for cancel in in_flight.lock().unwrap().values() {
         cancel.store(true, Ordering::Relaxed);
@@ -121,6 +138,7 @@ fn read_loop(
     output: &Output,
     ws: &dyn Workspace,
     roots: &RwLock<Roots>,
+    watches: &Watches,
     in_flight: &InFlight,
     jobs: &mpsc::Sender<Job>,
 ) -> io::Result<()> {
@@ -135,6 +153,18 @@ fn read_loop(
                         *roots.write().unwrap() = new;
                         Reply::Unit
                     })
+                    .map_err(|e| WireError::from_io(&e));
+                respond(output, id, result)?;
+            }
+            // In order with `SetRoots`, and against the roots it set.
+            Envelope::Request {
+                id,
+                call: Call::SetWatch { dirs, files },
+            } => {
+                let roots = roots.read().unwrap().clone();
+                let result = watches
+                    .set(ws, &roots, &dirs, &files)
+                    .map(|()| Reply::Unit)
                     .map_err(|e| WireError::from_io(&e));
                 respond(output, id, result)?;
             }
@@ -161,7 +191,7 @@ fn read_loop(
             }
             Envelope::Ping { nonce } => send(output, &Envelope::Pong { nonce })?,
             Envelope::Pong { .. } => {}
-            other @ (Envelope::Hello(_) | Envelope::Response { .. }) => {
+            other @ (Envelope::Hello(_) | Envelope::Response { .. } | Envelope::Changed { .. }) => {
                 return Err(invalid(format!(
                     "unexpected message from the client: {other:?}"
                 )));
@@ -188,6 +218,7 @@ fn handle(
 
     match call {
         Call::SetRoots { .. } => Err(WireError::Protocol("SetRoots runs in order".into())),
+        Call::SetWatch { .. } => Err(WireError::Protocol("SetWatch runs in order".into())),
         Call::Home => match home {
             Some(home) => ws.canonicalize(home).map(Reply::Path).map_err(io),
             None => Err(io(io::Error::new(
@@ -454,6 +485,7 @@ mod tests {
             &output,
             &ws,
             &RwLock::default(),
+            &crate::watch::Watches::new(Arc::new(|_| {})),
             &in_flight,
             &jobs,
         )

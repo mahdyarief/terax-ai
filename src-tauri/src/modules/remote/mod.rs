@@ -18,6 +18,8 @@ mod answers_guard_tests;
 #[cfg(test)]
 pub(crate) mod testing;
 
+pub mod watch;
+
 #[cfg(test)]
 mod authorize_tests;
 
@@ -26,3 +28,6 @@ mod fs_tests;
 
 #[cfg(test)]
 mod search_tests;
+
+#[cfg(test)]
+mod watch_tests;

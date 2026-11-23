@@ -215,6 +215,22 @@ fn a_drop_is_explained_only_by_what_ssh_said_since_connecting() {
         "Connection reset by 203.0.113.7 port 22"
     );
     assert_eq!(drop_reason(&[]), "the connection ended");
+    // The agent's own notes are not why the connection ended.
+    assert_eq!(
+        drop_reason(&lines(&[
+            "state: connected",
+            "stderr: Connection reset by 203.0.113.7 port 22",
+            "stderr: terax-agent log: DEBUG: fs_watch add /srv/x failed: No space left on device",
+        ])),
+        "Connection reset by 203.0.113.7 port 22"
+    );
+    assert_eq!(
+        drop_reason(&lines(&[
+            "state: connected",
+            "stderr: terax-agent log: DEBUG: fs_watch add /srv/x failed",
+        ])),
+        "the connection ended"
+    );
 }
 
 #[test]

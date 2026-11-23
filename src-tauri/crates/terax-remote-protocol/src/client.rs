@@ -73,7 +73,13 @@ struct Shared {
     pings: Mutex<HashMap<u64, mpsc::Sender<()>>>,
     /// Why the connection ended; set once, before the waiters are dropped.
     closed: Mutex<Option<String>>,
+    /// Gets each `Changed` the agent pushes.
+    on_changed: Mutex<Option<OnChanged>>,
 }
+
+/// Receives the paths of an `Envelope::Changed`, on the reader thread: it
+/// must only hand them off.
+pub type OnChanged = Arc<dyn Fn(Vec<String>) + Send + Sync>;
 
 impl Shared {
     fn close(&self, why: String) {
@@ -191,6 +197,20 @@ impl RemoteWorkspace {
             Reply::Browse(browse) => Ok(browse),
             other => Err(unexpected(&other)),
         }
+    }
+
+    /// Replaces the watched set on the server (`Call::SetWatch`); changes
+    /// arrive at the `on_changed` callback.
+    pub fn set_watch(&self, dirs: Vec<String>, files: Vec<String>) -> io::Result<()> {
+        match self.op(Call::SetWatch { dirs, files })? {
+            Reply::Unit => Ok(()),
+            other => Err(unexpected(&other)),
+        }
+    }
+
+    /// Where the agent's `Changed` pushes go from now on.
+    pub fn on_changed(&self, callback: OnChanged) {
+        *self.shared.on_changed.lock().unwrap() = Some(callback);
     }
 
     /// Whether the stream has ended; every call fails from then on.
@@ -404,6 +424,12 @@ fn read_loop(mut reader: impl Read, shared: &Shared, hello: mpsc::Sender<io::Res
             Ok(Some(Envelope::Pong { nonce })) => {
                 if let Some(waiter) = shared.pings.lock().unwrap().remove(&nonce) {
                     let _ = waiter.send(());
+                }
+            }
+            Ok(Some(Envelope::Changed { paths })) => {
+                let callback = shared.on_changed.lock().unwrap().clone();
+                if let Some(callback) = callback {
+                    callback(paths);
                 }
             }
             Ok(Some(other)) => {

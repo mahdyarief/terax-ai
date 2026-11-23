@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex, RwLock};
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::blocking;
-use super::index::FileIndexState;
+use super::index::{remote_change_path, FileIndexState};
+use crate::modules::remote::watch::{Deliver, RemoteWatches};
+use terax_workspace_core::env::SshHost;
 use super::to_canon;
 use crate::modules::workspace::{resolve_path, WorkspaceEnv, WorkspaceRegistry};
 // The engine lives in the core; the macOS backend below plugs into it.
@@ -77,6 +79,36 @@ impl Reporter for AppReporter {
 
     fn changed(&self, paths: Vec<String>) {
         let _ = self.app.emit("fs:changed", ChangedPayload { paths });
+    }
+}
+
+/// Where a server's `Changed` pushes go: the file index and the frontend,
+/// as this machine's changes do.
+pub(crate) fn remote_deliver(app: &AppHandle) -> Deliver {
+    let app = app.clone();
+    Arc::new(move |host: &SshHost, paths: Vec<String>| {
+        if let Some(index) = app.try_state::<FileIndexState>() {
+            for path in &paths {
+                index.note_change(&remote_change_path(host, path));
+            }
+        }
+        let _ = app.emit("fs:changed", ChangedPayload { paths });
+    })
+}
+
+/// `fs_watch_add` / `fs_watch_remove` on a server: counted here, the whole
+/// set sent to the agent when it changed. Not connected: sent on `ready`.
+fn remote_watch(app: &AppHandle, host: &SshHost, add: bool, dirs: &[String], files: &[String]) {
+    let watches = app.state::<RemoteWatches>();
+    let set = if add {
+        watches.add(host, dirs, files)
+    } else {
+        watches.remove(host, dirs, files)
+    };
+    let Some(set) = set else { return };
+    let ws = crate::modules::remote::registry::global().and_then(|r| r.workspace(host));
+    if let Err(error) = crate::modules::remote::watch::push(ws, set) {
+        log::warn!("watching on {}: {error}", host.as_str());
     }
 }
 
@@ -201,6 +233,10 @@ pub async fn fs_watch_add(
 ) -> Result<(), String> {
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
+        if let WorkspaceEnv::Ssh { host } = &workspace {
+            remote_watch(&app, host, true, &paths, &files.unwrap_or_default());
+            return Ok(());
+        }
         let dirs = prepare_dirs(&app.state::<WorkspaceRegistry>(), &workspace, paths);
         let files: Vec<_> = files
             .unwrap_or_default()
@@ -237,6 +273,10 @@ pub async fn fs_watch_remove(
 ) -> Result<(), String> {
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
+        if let WorkspaceEnv::Ssh { host } = &workspace {
+            remote_watch(&app, host, false, &paths, &files.unwrap_or_default());
+            return Ok(());
+        }
         // A removed/renamed dir no longer canonicalizes; fall back so the
         // refcount entry is still released.
         let dirs: Vec<String> = paths

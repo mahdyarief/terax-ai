@@ -34,6 +34,10 @@ pub enum Envelope {
     Cancel { id: CallId },
     Ping { nonce: u64 },
     Pong { nonce: u64 },
+    /// From the agent, unasked: watched directories whose listing changed
+    /// and watched files whose stamp moved (debounced), as `SetWatch` named
+    /// them in canonical form.
+    Changed { paths: Vec<String> },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -75,6 +79,13 @@ pub enum Call {
     /// outside the roots, as a folder dialog shows them: no file names, no
     /// contents. What a remote folder is picked (and authorized) with.
     BrowseDirs { path: String },
+    /// Replaces the whole watched set: directories (inside the roots) and
+    /// files (whose parent is inside them). Empty stops watching. Changes
+    /// arrive as `Envelope::Changed`.
+    SetWatch {
+        dirs: Vec<String>,
+        files: Vec<String>,
+    },
 }
 
 /// What `BrowseDirs` returns.
@@ -459,6 +470,10 @@ mod tests {
             Call::Exec { spec: exec_spec() },
             Call::Home,
             Call::BrowseDirs { path: path() },
+            Call::SetWatch {
+                dirs: vec![path()],
+                files: vec![format!("{}/a.rs", path())],
+            },
         ];
         for call in &calls {
             match call {
@@ -483,7 +498,8 @@ mod tests {
                 | Call::ListFiles { .. }
                 | Call::Exec { .. }
                 | Call::Home
-                | Call::BrowseDirs { .. } => {}
+                | Call::BrowseDirs { .. }
+                | Call::SetWatch { .. } => {}
             }
         }
         calls
@@ -492,7 +508,7 @@ mod tests {
     #[test]
     fn every_call_round_trips() {
         let calls = every_call();
-        assert_eq!(calls.len(), 22);
+        assert_eq!(calls.len(), 23);
         for (id, call) in calls.into_iter().enumerate() {
             round_trip(Envelope::Request {
                 id: id as u64,
@@ -591,6 +607,9 @@ mod tests {
             Envelope::Cancel { id: 7 },
             Envelope::Ping { nonce: 1 },
             Envelope::Pong { nonce: 1 },
+            Envelope::Changed {
+                paths: vec!["/srv/repo".into(), "/srv/repo/a.rs".into()],
+            },
         ] {
             round_trip(envelope);
         }

@@ -5082,6 +5082,7 @@ dependencies = [
 name = "terax-agent"
 version = "0.9.4-dy"
 dependencies = [
+ "log",
  "sha2",
  "tempfile",
  "terax-remote-protocol",

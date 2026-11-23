@@ -433,16 +433,22 @@ impl Driver {
 
 /// Why the live session ended: ssh's last word since it connected, if it
 /// said anything. Lines from before (an earlier session's warnings) are not
-/// this session's reason.
+/// this session's reason, and neither are the agent's own log lines (a
+/// folder it could not watch).
 pub fn drop_reason(lines: &[String]) -> String {
     let connected = format!("state: {}", describe(&State::Ready));
     lines
         .iter()
         .rev()
         .take_while(|line| **line != connected)
-        .find_map(|line| line.strip_prefix("stderr: ").map(str::to_string))
+        .filter_map(|line| line.strip_prefix("stderr: "))
+        .find(|line| !line.starts_with(AGENT_LOG))
+        .map(str::to_string)
         .unwrap_or_else(|| "the connection ended".into())
 }
+
+/// `terax_agent::log::PREFIX`; the app does not link the agent.
+const AGENT_LOG: &str = "terax-agent log: ";
 
 fn describe(state: &State) -> String {
     match state {
