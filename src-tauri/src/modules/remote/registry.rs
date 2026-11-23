@@ -192,6 +192,13 @@ impl Registry {
             .unwrap_or_default()
     }
 
+    /// The canonical path of a directory on the host, resolved by the
+    /// agent (allowed before it is a root: that is how it becomes one).
+    pub fn canonical_dir(&self, host: &SshHost, path: &str) -> io::Result<String> {
+        let workspace = self.workspace(host).ok_or_else(|| not_connected(host))?;
+        Ok(workspace.browse_dirs(path)?.path)
+    }
+
     /// Sets the roots the agent allows, now if connected and again after
     /// every reconnect.
     pub fn set_roots(&self, host: &SshHost, roots: Vec<String>) -> io::Result<()> {

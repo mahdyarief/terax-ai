@@ -38,9 +38,11 @@ Task 2 runs before Task 1: authorizing a remote folder canonicalizes it on the s
 
 ### Task 1: Remote authorization and roots
 
-- [ ] `WorkspaceRegistry::authorize_in(env, path)`: local and WSL as today, `Ssh` through the backend's `canonicalize`; `workspace_authorize` uses it. The host's root list goes to `remote::registry::set_roots` on every change (authorize, `authorize_derived`, revoke).
-- [ ] Tests: with the in-process agent from Phase 3's registry tests, authorizing a remote folder lets the agent read inside it and nowhere else; revoking takes it away; a reconnect keeps it; authorizing while disconnected fails with `NotConnected`.
-- [ ] A shared test helper (`remote::testing`) that installs one app-wide registry with an in-process host serving a temp directory, since `registry::global` is set once per process.
+- [x] `WorkspaceRegistry::authorize_in(env, path)`: local and WSL as today, `Ssh` through the backend's `canonicalize`; `workspace_authorize` uses it. The host's root list goes to `remote::registry::set_roots` on every change (authorize, `authorize_derived`, revoke).
+- [x] Tests: with the in-process agent from Phase 3's registry tests, authorizing a remote folder lets the agent read inside it and nowhere else; revoking takes it away; a reconnect keeps it; authorizing while disconnected fails with `NotConnected`.
+- [x] A shared test helper (`remote::testing`) that installs one app-wide registry with an in-process host serving a temp directory, since `registry::global` is set once per process.
+
+Done. `WorkspaceRegistry::authorize_in` (used by `workspace_authorize`): local and WSL unchanged; `Ssh` takes the canonical path from `remote::registry::canonical_dir` (`BrowseDirs`, so only a directory), stores `Location { env: Ssh, path }`, and sends every root of that host to `set_roots`, which the registry keeps for reconnects. There is no revocation of plain roots in the app today (only derived worktree grants, which are local), so a host's list only grows for the app's lifetime. `remote/testing.rs` holds the in-process connector (its cut switch now per host) and `global_registry()` / `connected(host)` for tests that go through `backend_for`. Tests (`remote/authorize_tests.rs`, 4): resolved on the server and confining the agent, covered per env and per host, a second root added, roots back after a reconnect, a file refused (`NotADirectory`), a host never connected refused (`NotConnected`). Mutation: dropping the `set_roots` push fails three of them.
 
 ### Task 2: `Home` and `BrowseDirs`
 

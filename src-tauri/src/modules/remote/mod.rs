@@ -14,3 +14,9 @@ mod e2e_tests;
 
 #[cfg(test)]
 mod answers_guard_tests;
+
+#[cfg(test)]
+pub(crate) mod testing;
+
+#[cfg(test)]
+mod authorize_tests;

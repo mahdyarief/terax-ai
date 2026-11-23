@@ -1,113 +1,17 @@
 //! The registry with the real agent served in-process over pipes, and a
 //! switch that cuts the stream as a dropped network would.
 
-use std::collections::VecDeque;
-use std::io::{self, Read, Write};
+use std::io;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use terax_remote_protocol::client::{Options, RemoteWorkspace};
-use terax_remote_protocol::transport::Log;
 use terax_workspace_core::env::{SshHost, WorkspaceEnv};
-use terax_workspace_core::host::HostWorkspace;
 use terax_workspace_core::workspace::{EntryKind, Workspace};
 
-use super::machine::{Failure, Stage, State};
-use super::registry::{Connector, Link, Registry, Snapshot};
-
-type Gate = Arc<Mutex<Option<io::PipeWriter>>>;
-
-#[derive(Default)]
-struct InProcess {
-    /// Scripted failures, one per attempt; an empty script connects.
-    failures: Mutex<VecDeque<Option<(String, Failure)>>>,
-    /// Whether each attempt was interactive.
-    calls: Mutex<Vec<bool>>,
-    gate: Mutex<Option<Gate>>,
-}
-
-impl InProcess {
-    fn script(failures: Vec<Option<(String, Failure)>>) -> Arc<Self> {
-        Arc::new(Self {
-            failures: Mutex::new(failures.into()),
-            ..Self::default()
-        })
-    }
-
-    /// Cuts the live stream: the client sees it end.
-    fn cut(&self) {
-        let gate = self.gate.lock().unwrap().take().expect("a live link");
-        gate.lock().unwrap().take();
-    }
-
-    fn calls(&self) -> Vec<bool> {
-        self.calls.lock().unwrap().clone()
-    }
-}
-
-impl Connector for InProcess {
-    fn connect(
-        &self,
-        host: &SshHost,
-        interactive: bool,
-        _log: &Arc<Log>,
-        on_stage: &dyn Fn(Stage),
-    ) -> Result<Link, (String, Failure)> {
-        self.calls.lock().unwrap().push(interactive);
-        on_stage(Stage::Handshaking);
-        if let Some(Some(failure)) = self.failures.lock().unwrap().pop_front() {
-            return Err(failure);
-        }
-        let (client_read, relay_write) = io::pipe().unwrap();
-        let (agent_read, client_write) = io::pipe().unwrap();
-        let (mut relay_read, agent_write) = io::pipe().unwrap();
-        let gate: Gate = Arc::new(Mutex::new(Some(relay_write)));
-        let relay_gate = Arc::clone(&gate);
-        thread::spawn(move || {
-            let mut buffer = [0u8; 64 * 1024];
-            while let Ok(n) = relay_read.read(&mut buffer) {
-                if n == 0 {
-                    break;
-                }
-                let mut gate = relay_gate.lock().unwrap();
-                let written = gate
-                    .as_mut()
-                    .is_some_and(|writer| writer.write_all(&buffer[..n]).is_ok());
-                if !written {
-                    break;
-                }
-            }
-            relay_gate.lock().unwrap().take();
-        });
-        thread::spawn(move || {
-            let ws: Arc<dyn Workspace> = Arc::new(HostWorkspace::new(WorkspaceEnv::Local));
-            let _ = terax_agent::serve::serve(
-                agent_read,
-                agent_write,
-                ws,
-                terax_agent::serve::Options {
-                    version: "test".into(),
-                    workers: 2,
-                    home: None,
-                },
-            );
-        });
-        let workspace = RemoteWorkspace::connect(
-            client_read,
-            client_write,
-            WorkspaceEnv::Ssh { host: host.clone() },
-            Vec::new(),
-            Options::default(),
-        )
-        .map_err(|error| (error.to_string(), Failure::Transient))?;
-        *self.gate.lock().unwrap() = Some(gate);
-        Ok(Link {
-            workspace,
-            process: None,
-        })
-    }
-}
+use super::machine::{Failure, State};
+use super::registry::{Registry, Snapshot};
+use super::testing::{global_registry, InProcess};
 
 struct Fixture {
     registry: Registry,
@@ -199,10 +103,8 @@ fn after_a_disconnect_the_backend_is_not_connected() {
     f.registry.set_roots(&f.host, vec![path.clone()]).unwrap();
 
     // `backend_for` answers from the app-wide registry.
-    let global = fixture("in-process-global", InProcess::script(vec![]));
-    let host = global.host.clone();
-    super::registry::install(global.registry);
-    let registry = super::registry::global().unwrap();
+    let registry = global_registry();
+    let host = SshHost::try_from("in-process-global").unwrap();
     let env = WorkspaceEnv::Ssh { host: host.clone() };
     registry.connect(&host);
     let deadline = Instant::now() + Duration::from_secs(15);
@@ -232,7 +134,7 @@ fn a_drop_reconnects_on_its_own_without_prompting_and_keeps_the_roots() {
     f.ready();
     f.registry.set_roots(&f.host, vec![path.clone()]).unwrap();
 
-    f.connector.cut();
+    f.connector.cut(&f.host);
     f.wait("reconnecting", |s| matches!(s, State::Reconnecting { .. }));
     assert!(
         f.registry.workspace(&f.host).is_none(),
@@ -283,7 +185,7 @@ fn a_refused_reconnect_stops_instead_of_retrying() {
     let f = fixture("in-process-e", InProcess::script(vec![None, refused]));
     f.registry.connect(&f.host);
     f.ready();
-    f.connector.cut();
+    f.connector.cut(&f.host);
     f.wait("failed", |s| matches!(s, State::Failed { .. }));
     thread::sleep(Duration::from_secs(3));
     assert_eq!(

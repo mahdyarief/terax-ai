@@ -231,6 +231,37 @@ impl WorkspaceRegistry {
         Ok(canonical)
     }
 
+    /// Authorizes `path` in `env` and returns its canonical workspace path.
+    /// Local and WSL paths are resolved on this machine, as `authorize`
+    /// does. A server's folder is resolved on the server (it must be a
+    /// directory), and the host's agent is then confined to every root
+    /// authorized on it, now and after each reconnect.
+    pub fn authorize_in(&self, env: &WorkspaceEnv, path: &str) -> std::io::Result<String> {
+        let WorkspaceEnv::Ssh { host } = env else {
+            let canonical = self.authorize(resolve_path(path, env))?;
+            return Ok(crate::modules::fs::to_canon(&canonical));
+        };
+        let registry = crate::modules::remote::registry::global()
+            .ok_or_else(|| crate::modules::remote::registry::not_connected(host))?;
+        let canonical = registry.canonical_dir(host, path)?;
+        let roots = {
+            let mut set = self.roots.lock().expect("workspace registry poisoned");
+            set.insert(Location {
+                env: env.clone(),
+                path: canonical.clone(),
+            });
+            let mut roots: Vec<String> = set
+                .iter()
+                .filter(|root| root.env == *env)
+                .map(|root| root.path.clone())
+                .collect();
+            roots.sort();
+            roots
+        };
+        registry.set_roots(host, roots)?;
+        Ok(canonical)
+    }
+
     pub fn is_authorized(&self, target: &Path) -> bool {
         let set = self.roots.lock().expect("workspace registry poisoned");
         let derived = self.derived.lock().expect("workspace registry poisoned");
@@ -442,11 +473,9 @@ pub async fn workspace_authorize(
     // Canonicalizing touches the disk (possibly a network volume).
     crate::modules::fs::blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
-        let resolved = resolve_path(&path, &workspace);
-        let canonical = tauri::Manager::state::<WorkspaceRegistry>(&app)
-            .authorize(&resolved)
-            .map_err(|e| e.to_string())?;
-        Ok(crate::modules::fs::to_canon(&canonical))
+        tauri::Manager::state::<WorkspaceRegistry>(&app)
+            .authorize_in(&workspace, &path)
+            .map_err(|e| e.to_string())
     })
     .await
 }
