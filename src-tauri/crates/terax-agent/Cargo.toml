@@ -1,6 +1,8 @@
 [package]
 name = "terax-agent"
-version.workspace = true
+# The app's version (src-tauri/Cargo.toml), not the CLI's: the app compares
+# it with its own to decide whether to reinstall the agent on a server.
+version = "0.9.4-dy"
 edition.workspace = true
 license.workspace = true
 publish = false

@@ -9,7 +9,7 @@
 
 - CI has not run Phase 2 on Linux or macOS (CI runs only for `main`; the owner deferred CI for `dydev` until every phase is done). The agent and protocol pass clippy for Linux (gnu and musl), and the contract passed on a real Linux server over SSH, which covers the Linux paths end to end.
 - The aarch64 agent builds and is static but has not run on ARM hardware.
-- The agent reports the crates' version (`[workspace.package]`, 0.9.3), not the app's (0.9.4-dy). Phase 3 decides which version the app compares before it reinstalls an agent.
+- ~~The agent reports the crates' version, not the app's.~~ Resolved on 2026-11-23: `main` (the 0.9.4-dy bump) was merged into `dydev`, and the agent carries the app's version (`crates/terax-agent/Cargo.toml`, 0.9.4-dy), locked by the test `the_agent_carries_the_apps_version`. The SSH feature will ship as 0.9.5-dy; that bump moves both.
 - `RemoteWorkspace::import` (uploading from this machine) is `Unsupported`.
 
 ## Goal

@@ -190,3 +190,17 @@ fn the_binary_reports_its_version() {
         .unwrap();
     assert_eq!(bad.status.code(), Some(2));
 }
+
+/// The app reinstalls an agent whose version differs from its own, so a
+/// release that bumps the app must bump the agent with it.
+#[test]
+fn the_agent_carries_the_apps_version() {
+    let manifest = include_str!("../../../Cargo.toml");
+    let app = manifest
+        .split("[package]")
+        .nth(1)
+        .and_then(|package| package.lines().find_map(|line| line.strip_prefix("version = ")))
+        .map(|value| value.trim().trim_matches('"'))
+        .expect("the app's [package] version");
+    assert_eq!(env!("CARGO_PKG_VERSION"), app, "bump crates/terax-agent/Cargo.toml with the app");
+}
