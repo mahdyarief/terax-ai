@@ -173,7 +173,13 @@ import {
   WindowVibrancyBridge,
 } from "@/modules/theme";
 import { UpdaterDialog } from "@/modules/updater";
-import { AskpassDialog, RemoteConnections } from "@/modules/remote";
+import {
+  AskpassDialog,
+  folderName,
+  RemoteConnections,
+  RemoteGate,
+  useRemoteStore,
+} from "@/modules/remote";
 import {
   useWorkspaceEnvStore,
   type WorkspaceEnv,
@@ -1471,6 +1477,29 @@ export default function App() {
     ],
   );
 
+  // A folder picked on a server opens as a new space on that host.
+  useEffect(() => {
+    const { setFolderHandler } = useRemoteStore.getState();
+    setFolderHandler(async (host, path) => {
+      if (isSpaceWindow(windowLabel)) {
+        throw new Error("Open a server folder from the main window.");
+      }
+      const env: WorkspaceEnv = { kind: "ssh", host };
+      const root = await invoke<string>("workspace_authorize", {
+        path,
+        workspace: env,
+      });
+      const { create, setActive } = useSpaces.getState();
+      const meta = create({ name: `${folderName(root)} (${host})`, root, env });
+      // The env first: the new tab must never start on this machine.
+      useWorkspaceEnvStore.getState().setEnv(env);
+      setActiveSpaceForNewTabs(meta.id);
+      newTab(root);
+      setActive(meta.id);
+    });
+    return () => setFolderHandler(null);
+  }, [windowLabel, setActiveSpaceForNewTabs, newTab]);
+
   const handlePickFolderForSpace = useCallback(
     async (spaceId: string) => {
       const space = useSpaces.getState().spaces.find((s) => s.id === spaceId);
@@ -2556,6 +2585,7 @@ export default function App() {
                       className="min-h-0 flex-1 terax-panel-in"
                     >
                       {sidebarView === "explorer" ? (
+                        <RemoteGate env={workspaceEnv} root={explorerRoot}>
                         <FileExplorer
                           ref={explorerRef}
                           rootPath={explorerRoot}
@@ -2578,6 +2608,7 @@ export default function App() {
                           pathDropTarget={terminalPathDropTarget}
                           visible={!sidebarCollapsed}
                         />
+                        </RemoteGate>
                       ) : sidebarView === "source-control" ? (
                         <SourceControlPanel
                           open

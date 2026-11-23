@@ -10,7 +10,6 @@ import {
 import { Clock01Icon, ServerStack03Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 import {
   fetchSshHosts,
   type PickerEntry,
@@ -34,7 +33,7 @@ export function ConnectSshDialog() {
 
 function Picker({ onClose }: { onClose: () => void }) {
   const recents = useRemoteStore((s) => s.recents);
-  const connect = useRemoteStore((s) => s.connect);
+  const openFolderPicker = useRemoteStore((s) => s.openFolderPicker);
   const [configHosts, setConfigHosts] = useState<string[]>([]);
   const [query, setQuery] = useState("");
 
@@ -53,9 +52,11 @@ function Picker({ onClose }: { onClose: () => void }) {
     [recents, configHosts, query],
   );
 
+  // The folder picker connects (asking through the askpass dialog if ssh
+  // needs to), then browses the server.
   const pick = (host: string) => {
     onClose();
-    connect(host).catch((e) => toast.error(`SSH: ${host}`, { description: String(e) }));
+    openFolderPicker(host);
   };
 
   return (

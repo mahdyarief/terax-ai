@@ -54,8 +54,14 @@ Done. `Call::Home` (the agent's `Options::home`, `$HOME` by default, canonicaliz
 
 ### Task 3: Open a remote folder
 
-- [ ] Frontend: after a connect from the palette, a remote folder picker (`RemoteFolderPicker`: the current path, its subdirectories, up, a typed path, Open), then a space with env `ssh:<host>` and that root; `resolveEnvHome` asks `remote_home`; restoring a remote space connects first; the explorer shows the connection state and Connect while not ready.
-- [ ] Tests: the picker's states (loading, a listing, an error, a typed path); the space created with the right env and root; `resolveEnvHome` for `ssh`.
+- [x] Frontend: after a connect from the palette, a remote folder picker (`RemoteFolderPicker`: the current path, its subdirectories, up, a typed path, Open), then a space with env `ssh:<host>` and that root; `resolveEnvHome` asks `remote_home`; restoring a remote space connects first; the explorer shows the connection state and Connect while not ready.
+- [x] Tests: the picker's states (loading, a listing, an error, a typed path); the space created with the right env and root; `resolveEnvHome` for `ssh`.
+
+Done (frontend only).
+- Picking a host in "Connect to SSH Host..." opens `RemoteFolderPicker`, which calls `ensureConnected` (a user-started attempt; resolves on `ready`, rejects with ssh's reason when this attempt fails, ignoring a `failed` left from an earlier one), then lists `remote_home` through `remote_browse_dirs`: the path, `..`, the folders, a typed path with Go, Open. Open calls the handler the app registers (`setFolderHandler`): `workspace_authorize` with the `ssh` env, a new space named `<folder> (<host>)` with that root and env, the env set before the first tab so it never starts on this machine.
+- `resolveEnvHome` for `ssh` connects, then asks `remote_home`; a restored remote space therefore connects right away. If that fails, `RemoteGate` (around the explorer) shows the host, the state, the reason and Connect; on every new connection (`readyEpochs`) it authorizes the space's root again and remounts the explorer, so it reloads.
+- The first tab of a remote space is a terminal, which refuses with "not available for a workspace on an SSH host" until Phase 5 (a space must have a tab).
+- Tests: 15 in `remoteFolder.test.ts` (paths, `ensureConnected`'s outcomes, ready epochs, the picker's and the gate's states) and 3 for `resolveEnvHome`. Not yet seen in the running app (Task 8).
 
 ### Task 4: Files, editor and file operations on a remote space
 

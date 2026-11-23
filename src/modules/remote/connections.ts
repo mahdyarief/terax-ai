@@ -163,8 +163,35 @@ function saveRecents(recents: string[]) {
   }
 }
 
+/** What `remote_browse_dirs` returns. */
+export type Browse = { path: string; dirs: string[] };
+
+/** The parent of a server path (`/` stays `/`). */
+export function parentPath(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  const at = trimmed.lastIndexOf("/");
+  return at <= 0 ? "/" : trimmed.slice(0, at);
+}
+
+export function childPath(path: string, name: string): string {
+  return path.endsWith("/") ? `${path}${name}` : `${path}/${name}`;
+}
+
+/** A folder's last component, for a space's name. */
+export function folderName(path: string): string {
+  return path.split("/").filter(Boolean).pop() ?? "/";
+}
+
+type FolderHandler = (host: string, path: string) => Promise<void>;
+
 type Store = {
   hosts: Record<string, RemoteState>;
+  /** Times each host became ready: a new connection, so views reload. */
+  readyEpochs: Record<string, number>;
+  /** The host whose folder picker is open. */
+  folderPickerHost: string | null;
+  /** Opens a picked folder as a space; set by the app. */
+  folderHandler: FolderHandler | null;
   recents: string[];
   pickerOpen: boolean;
   logHost: string | null;
@@ -174,15 +201,29 @@ type Store = {
   disconnect: (host: string) => Promise<void>;
   setPickerOpen: (open: boolean) => void;
   showLog: (host: string | null) => void;
+  openFolderPicker: (host: string | null) => void;
+  setFolderHandler: (handler: FolderHandler | null) => void;
 };
 
 export const useRemoteStore = create<Store>((set, get) => ({
   hosts: {},
+  readyEpochs: {},
+  folderPickerHost: null,
+  folderHandler: null,
   recents: loadRecents(),
   pickerOpen: false,
   logHost: null,
   apply: ({ host, state }) =>
-    set((s) => ({ hosts: { ...s.hosts, [host]: state } })),
+    set((s) => {
+      const becameReady =
+        state.state === "ready" && s.hosts[host]?.state !== "ready";
+      return {
+        hosts: { ...s.hosts, [host]: state },
+        readyEpochs: becameReady
+          ? { ...s.readyEpochs, [host]: (s.readyEpochs[host] ?? 0) + 1 }
+          : s.readyEpochs,
+      };
+    }),
   load: async () => {
     const all = await invoke<unknown[]>("remote_state");
     for (const raw of all) {
@@ -201,7 +242,57 @@ export const useRemoteStore = create<Store>((set, get) => ({
   },
   setPickerOpen: (pickerOpen) => set({ pickerOpen }),
   showLog: (logHost) => set({ logHost }),
+  openFolderPicker: (folderPickerHost) => set({ folderPickerHost }),
+  setFolderHandler: (folderHandler) => set({ folderHandler }),
 }));
+
+const ATTEMPTING = new Set(["connecting", "installing", "handshaking"]);
+
+/**
+ * Resolves once `host` is ready, connecting it if needed (a user-started
+ * attempt, so ssh may ask through the askpass dialog). Rejects with ssh's
+ * reason if that attempt fails.
+ */
+export function ensureConnected(host: string): Promise<void> {
+  const store = useRemoteStore.getState();
+  if (store.hosts[host]?.state === "ready") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    // A `failed` left from an earlier attempt is not this one's outcome.
+    let attempted = false;
+    const settle = (state: RemoteState | undefined): boolean => {
+      if (!state) return false;
+      if (state.state === "ready") {
+        resolve();
+        return true;
+      }
+      if (ATTEMPTING.has(state.state)) attempted = true;
+      if (state.state === "failed" && attempted) {
+        reject(new Error(state.reason));
+        return true;
+      }
+      return false;
+    };
+    const stop = useRemoteStore.subscribe((s, previous) => {
+      if (s.hosts[host] === previous.hosts[host]) return;
+      if (settle(s.hosts[host])) stop();
+    });
+    store.connect(host).catch((e) => {
+      stop();
+      reject(e instanceof Error ? e : new Error(String(e)));
+    });
+  });
+}
+
+export async function fetchRemoteHome(host: string): Promise<string> {
+  return invoke<string>("remote_home", { host });
+}
+
+export async function browseRemoteDirs(
+  host: string,
+  path: string,
+): Promise<Browse> {
+  return invoke<Browse>("remote_browse_dirs", { host, path });
+}
 
 export function openSshPicker() {
   useRemoteStore.getState().setPickerOpen(true);

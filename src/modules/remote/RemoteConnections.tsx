@@ -2,6 +2,7 @@ import { listen } from "@tauri-apps/api/event";
 import { useEffect } from "react";
 import { ConnectSshDialog } from "./ConnectSshDialog";
 import { parseSnapshot, STATE_EVENT, useRemoteStore } from "./connections";
+import { RemoteFolderPicker } from "./RemoteFolderPicker";
 import { RemoteLogDialog } from "./RemoteLogDialog";
 
 /** Follows the app's connection states and hosts the picker and the log. */
@@ -30,6 +31,7 @@ export function RemoteConnections() {
     <>
       <ConnectSshDialog />
       <RemoteLogDialog />
+      <RemoteFolderPicker />
     </>
   );
 }

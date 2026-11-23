@@ -7,6 +7,7 @@ import {
 } from "react";
 import { homeDir } from "@tauri-apps/api/path";
 import { native } from "@/modules/ai/lib/native";
+import { ensureConnected, fetchRemoteHome } from "@/modules/remote";
 import type { Tab } from "@/modules/tabs";
 import {
   getWslHome,
@@ -15,14 +16,15 @@ import {
   type WorkspaceEnv,
 } from "@/modules/workspace";
 
-async function resolveEnvHome(env: WorkspaceEnv): Promise<string> {
+export async function resolveEnvHome(env: WorkspaceEnv): Promise<string> {
   switch (env.kind) {
     case "wsl":
       return getWslHome(env.distro);
     case "ssh":
-      // The server's home comes from its connection (a later phase); this
-      // machine's would be the wrong directory.
-      throw new Error(`no home directory for ${env.host} yet`);
+      // The server's own home, over its connection (connecting first: a
+      // restored remote space connects right away).
+      await ensureConnected(env.host);
+      return fetchRemoteHome(env.host);
     case "local":
       return (await homeDir()).replace(/\\/g, "/");
   }
