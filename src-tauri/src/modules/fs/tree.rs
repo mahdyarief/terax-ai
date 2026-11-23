@@ -61,6 +61,56 @@ fn git_non_ignored_names(dir: &Path, show_hidden: bool) -> HashSet<String> {
         .collect()
 }
 
+/// The names in `dir` (on a server) that git ignores, from one
+/// `git check-ignore` run there. Outside a repository, or without git, none.
+fn remote_ignored_names<'a>(
+    ws: &dyn terax_workspace_core::workspace::Workspace,
+    dir: &str,
+    names: impl Iterator<Item = &'a str>,
+) -> HashSet<String> {
+    use terax_workspace_core::exec::capture::Limits;
+    use terax_workspace_core::exec::ExecSpec;
+
+    let mut stdin = Vec::new();
+    for name in names.filter(|name| *name != ".git") {
+        stdin.extend_from_slice(name.as_bytes());
+        stdin.push(0);
+    }
+    if stdin.is_empty() {
+        return HashSet::new();
+    }
+    let spec = ExecSpec {
+        program: "git".into(),
+        args: ["check-ignore", "-z", "--stdin"].map(Into::into).to_vec(),
+        cwd: Some(dir.to_string()),
+        env: vec![
+            ("GIT_TERMINAL_PROMPT".into(), "0".into()),
+            ("GIT_OPTIONAL_LOCKS".into(), "0".into()),
+        ],
+        env_remove: ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"]
+            .map(Into::into)
+            .to_vec(),
+        stdin: Some(stdin),
+        timeout: std::time::Duration::from_secs(10),
+        limits: Limits {
+            stdout: 1024 * 1024,
+            stderr: 64 * 1024,
+            stop_on_stdout_cap: true,
+        },
+    };
+    match ws.exec(spec) {
+        // 0: some are ignored; 1: none; 128: not a repository.
+        Ok(out) if out.exit_code == Some(0) => out
+            .stdout
+            .split(|byte| *byte == 0)
+            .filter(|name| !name.is_empty())
+            .filter_map(|name| std::str::from_utf8(name).ok())
+            .map(|name| name.trim_end_matches('/').to_string())
+            .collect(),
+        _ => HashSet::new(),
+    }
+}
+
 fn natural_cmp_inner(a: &str, b: &str) -> Ordering {
     let a = a.as_bytes();
     let b = b.as_bytes();
@@ -155,8 +205,14 @@ pub fn read_dir_entries(
         e.to_string()
     })?;
 
-    // Gitignore decorations walk host paths with the `ignore` crate, so a
-    // server's folder has none (its files are all shown as not ignored).
+    // On this machine gitignore decorations walk host paths with the
+    // `ignore` crate; a server's folder asks git there (`check-ignore`).
+    let remote_ignored = if git_decorations.unwrap_or(false) && workspace.is_ssh() {
+        let names = read.iter().map(|entry| entry.name.as_str());
+        Some(remote_ignored_names(&*ws, &path, names))
+    } else {
+        None
+    };
     let root = resolve_path(&path, &workspace);
     // Gate on a real repo: outside one the walk is pointless and would probe
     // each child for a nested `.git`, which trips macOS folder-access prompts.
@@ -193,7 +249,10 @@ pub fn read_dir_entries(
                 EntryKind::File
             };
 
-            let gitignored = git_decorations && !git_visible.contains(&name);
+            let gitignored = match &remote_ignored {
+                Some(ignored) => ignored.contains(&name),
+                None => git_decorations && !git_visible.contains(&name),
+            };
             Some(DirEntry {
                 name,
                 kind,

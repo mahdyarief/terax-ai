@@ -609,12 +609,9 @@ export function useSourceControl(
     contextPath,
   );
   useEffect(() => {
-    if (
-      !enabled ||
-      !live ||
-      workspaceEnv.kind !== "local" ||
-      !watchedRoot
-    )
+    // WSL has no live git state (the backend would refuse); a server's
+    // comes from its agent.
+    if (!enabled || !live || workspaceEnv.kind === "wsl" || !watchedRoot)
       return;
     return watchSourceControl(
       watchedRoot,

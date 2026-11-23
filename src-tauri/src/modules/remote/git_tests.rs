@@ -351,3 +351,104 @@ fn reviews_and_remotes_run_on_the_server() {
         "pushed"
     );
 }
+
+#[test]
+fn a_commit_made_on_the_server_reaches_source_control() {
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::Duration;
+
+    use super::git_watch::RemoteGitWatches;
+    use super::testing::global_registry;
+    use super::watch::{resume, Deliver, RemoteWatches, WatchSet};
+    use crate::modules::git::utils::authorized_repo_root;
+    use crate::modules::git::watch::{remote_rewatch_in, remote_subscribe_in};
+
+    let r = repo("git-watch");
+    let WorkspaceEnv::Ssh { host } = &r.env else {
+        unreachable!()
+    };
+    std::fs::create_dir(format!("{}/src", r.root)).unwrap();
+    std::fs::write(format!("{}/src/lib.rs", r.root), "").unwrap();
+    git(Path::new(&r.root), &["add", "."]);
+    git(Path::new(&r.root), &["commit", "-q", "-m", "src"]);
+
+    let git_watches = Arc::new(RemoteGitWatches::default());
+    let watches = RemoteWatches::default();
+    let (tx, rx) = mpsc::channel();
+    let tx = Mutex::new(tx);
+    let seen = Arc::clone(&git_watches);
+    // What `fs::watch::remote_deliver` does for source control.
+    let deliver: Deliver = Arc::new(move |host, paths| {
+        for change in seen.changed(host, &paths) {
+            let _ = tx.lock().unwrap().send(change);
+        }
+    });
+    let ws = global_registry().workspace(host).unwrap();
+    resume(&ws, host, WatchSet::default(), deliver).unwrap();
+
+    let repo = authorized_repo_root(&r.registry, &r.root, &r.env).unwrap();
+    let info = remote_subscribe_in(&git_watches, &watches, host, &repo);
+    assert!(info.watching);
+    assert_eq!(info.repo, super::git_watch::key(host, &r.root));
+    assert!(info.watched_dirs >= 3, "root, refs/heads and src: {info:?}");
+    let next = || {
+        let mut kinds = Vec::new();
+        // Changes come in bursts; gather until it is quiet.
+        while let Ok((repo, more)) = rx.recv_timeout(Duration::from_millis(1500)) {
+            assert_eq!(repo, info.repo);
+            kinds.extend(more);
+        }
+        kinds.sort_unstable();
+        kinds.dedup();
+        kinds
+    };
+
+    // A file added in a tracked folder, outside the app. (Folders report
+    // their listing; an edit to a file's contents alone is seen on the
+    // panel's focus refresh, or through the editor's own watch.)
+    std::fs::write(
+        format!("{}/src/main.rs", r.root),
+        "fn main() {}
+",
+    )
+    .unwrap();
+    assert!(next().contains(&"worktree"));
+    // Committed on the server: git writes the index and the branch through
+    // lock files, so `.git` and the refs move.
+    git(Path::new(&r.root), &["add", "."]);
+    git(Path::new(&r.root), &["commit", "-q", "-m", "x"]);
+    let kinds = next();
+    assert!(
+        kinds.contains(&"index") && kinds.contains(&"refs"),
+        "{kinds:?}"
+    );
+
+    // The last subscriber leaves: the folders are no longer watched.
+    let (released_host, paths) = git_watches.unsubscribe(&info.repo).unwrap();
+    remote_rewatch_in(&watches, &released_host, &paths, false);
+    assert!(watches.set(host).is_empty());
+}
+
+#[test]
+fn the_explorer_dims_what_git_on_the_server_ignores() {
+    use crate::modules::fs::tree::read_dir_entries;
+
+    let r = repo("git-ignored");
+    std::fs::write(format!("{}/.gitignore", r.root), "build/\n*.log\n").unwrap();
+    std::fs::create_dir(format!("{}/build", r.root)).unwrap();
+    std::fs::create_dir(format!("{}/src", r.root)).unwrap();
+    std::fs::write(format!("{}/debug.log", r.root), "").unwrap();
+    let ignored = |decorations: bool| -> Vec<String> {
+        let mut names: Vec<String> =
+            read_dir_entries(r.root.clone(), true, Some(decorations), Some(r.env.clone()))
+                .unwrap()
+                .into_iter()
+                .filter(|e| e.gitignored)
+                .map(|e| e.name)
+                .collect();
+        names.sort();
+        names
+    };
+    assert_eq!(ignored(true), ["build", "debug.log"]);
+    assert!(ignored(false).is_empty(), "only when asked for");
+}

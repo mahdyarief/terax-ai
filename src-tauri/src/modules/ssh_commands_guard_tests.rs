@@ -315,7 +315,11 @@ const COMMANDS: &[(&str, &str, Ssh)] = &[
         "git_upstream_info",
         Works("branches_and_discards_run_on_the_server"),
     ),
-    ("git/commands_review.rs", "git_watch", PHASE5),
+    (
+        "git/commands_review.rs",
+        "git_watch",
+        Works("a_commit_made_on_the_server_reaches_source_control"),
+    ),
     ("git/commands_review.rs", "git_worktree_add", HOST_ONLY_GIT),
     (
         "git/commands_review.rs",

@@ -278,6 +278,6 @@ pub async fn git_watch(
 /// the worktree may already be gone, and its watch must still be released.
 #[tauri::command]
 pub async fn git_unwatch(repo: String, app: AppHandle) -> Result<(), String> {
-    app.state::<GitWatchState>().unsubscribe(&repo);
+    app.state::<GitWatchState>().unsubscribe(&app, &repo);
     Ok(())
 }

@@ -11,7 +11,10 @@ const harness = vi.hoisted(() => ({
   slots: [] as unknown[],
   effects: [] as (() => void)[],
   cleanups: new Set<() => void>(),
-  env: { kind: "local" } as { kind: "local" } | { kind: "wsl"; distro: string },
+  env: { kind: "local" } as
+    | { kind: "local" }
+    | { kind: "wsl"; distro: string }
+    | { kind: "ssh"; host: string },
   snapshot: vi.fn(),
   status: vi.fn(),
   watch: vi.fn(),
@@ -26,7 +29,11 @@ vi.mock("@/modules/workspace", () => ({
   useWorkspaceEnvStore: (select: (s: { env: typeof harness.env }) => unknown) =>
     select({ env: harness.env }),
   workspaceScopeKey: (env: typeof harness.env) =>
-    env.kind === "local" ? "local" : `wsl:${env.distro}`,
+    env.kind === "local"
+      ? "local"
+      : env.kind === "wsl"
+        ? `wsl:${env.distro}`
+        : `ssh:${env.host}`,
 }));
 vi.mock("react", async (original) => {
   function slot<T>(initial: () => T): T {
@@ -276,14 +283,20 @@ it("updates repository metadata after a branch or upstream change", async () => 
   expect(harness.watch).toHaveBeenCalledTimes(1);
 });
 
-it.each(["local", "wsl"] as const)(
+it.each(["local", "wsl", "ssh"] as const)(
   "keeps focus fallback in %s workspaces",
   async (kind) => {
-    harness.env = kind === "local" ? { kind } : { kind, distro: "Ubuntu" };
+    harness.env =
+      kind === "local"
+        ? { kind }
+        : kind === "wsl"
+          ? { kind, distro: "Ubuntu" }
+          : { kind, host: "dypod" };
     const props = { path: "/real/repo" };
     render(props);
     await settle(props);
-    expect(harness.watch).toHaveBeenCalledTimes(kind === "local" ? 1 : 0);
+    // A server's git state is watched through its agent; WSL has none.
+    expect(harness.watch).toHaveBeenCalledTimes(kind === "wsl" ? 0 : 1);
     await vi.advanceTimersByTimeAsync(2000);
     window.dispatchEvent(new Event("focus"));
     await vi.advanceTimersByTimeAsync(400);

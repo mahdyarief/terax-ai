@@ -2,6 +2,7 @@
 
 pub mod commands;
 pub mod connector;
+pub mod git_watch;
 pub mod machine;
 pub mod registry;
 pub mod ssh_config;

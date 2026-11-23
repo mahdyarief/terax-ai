@@ -20,6 +20,14 @@ use crate::modules::git::utils::{
 use crate::modules::workspace::{WorkspaceEnv, WorkspaceRegistry};
 use terax_workspace_core::workspace::Workspace;
 
+/// The path a refusal names: the host path where there is one (as before),
+/// otherwise the server's.
+fn refused_path(dir: &ResolvedGitDirectory) -> PathBuf {
+    dir.local
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(&dir.ws_path))
+}
+
 pub fn resolve_repo(
     registry: &WorkspaceRegistry,
     cwd: &str,
@@ -27,7 +35,7 @@ pub fn resolve_repo(
 ) -> Result<Option<GitRepoInfo>> {
     let cwd = canonical_dir(registry, cwd, workspace)?;
     if !registry.covers(&cwd.workspace, &cwd.ws_path) {
-        return Err(GitError::PathOutsideWorkspace(PathBuf::from(&cwd.ws_path)));
+        return Err(GitError::PathOutsideWorkspace(refused_path(&cwd)));
     }
     ensure_git_available(&cwd.workspace)?;
     resolve_repo_in_authorized(registry, &cwd)
@@ -47,9 +55,8 @@ fn resolve_repo_in_authorized(
     };
     let canonical_root = canonical_dir(registry, &root_line, &cwd.workspace)?;
     if !registry.covers(&canonical_root.workspace, &canonical_root.ws_path) {
-        return Err(GitError::PathOutsideWorkspace(PathBuf::from(
-            &canonical_root.ws_path,
-        )));
+        let refused = refused_path(&canonical_root);
+        return Err(GitError::PathOutsideWorkspace(refused));
     }
 
     let head = match git_stdout_lines(
@@ -93,7 +100,7 @@ pub fn panel_snapshot(
 ) -> Result<GitPanelSnapshot> {
     let cwd = canonical_dir(registry, cwd, workspace)?;
     if !registry.covers(&cwd.workspace, &cwd.ws_path) {
-        return Err(GitError::PathOutsideWorkspace(PathBuf::from(&cwd.ws_path)));
+        return Err(GitError::PathOutsideWorkspace(refused_path(&cwd)));
     }
     ensure_git_available(&cwd.workspace)?;
     let Some(root_line) = git_stdout_line_opt(
@@ -109,9 +116,8 @@ pub fn panel_snapshot(
     };
     let canonical_root = canonical_dir(registry, &root_line, &cwd.workspace)?;
     if !registry.covers(&canonical_root.workspace, &canonical_root.ws_path) {
-        return Err(GitError::PathOutsideWorkspace(PathBuf::from(
-            &canonical_root.ws_path,
-        )));
+        let refused = refused_path(&canonical_root);
+        return Err(GitError::PathOutsideWorkspace(refused));
     }
 
     let status = status_inner(&canonical_root)?;

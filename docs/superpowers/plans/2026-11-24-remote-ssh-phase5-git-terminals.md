@@ -39,10 +39,12 @@ Done: `ResolvedGitDirectory::local` is `None` on a server and `local_path()` ref
 
 ### Task 2: Git state live on a server
 
-- [ ] `git_watch` for SSH through `RemoteWatches`, emitting `terax:git-changed`; released with the subscription; resumed with the rest on `ready`.
-- [ ] Explorer `gitignored` on SSH via `git check-ignore`.
-- [ ] Frontend: source control watches on SSH too.
-- [ ] Tests: a commit made on the server (outside the app) reaches the subscriber; ignored entries flagged in a listing.
+- [x] `git_watch` for SSH through `RemoteWatches`, emitting `terax:git-changed`; released with the subscription; resumed with the rest on `ready`.
+- [x] Explorer `gitignored` on SSH via `git check-ignore`.
+- [x] Frontend: source control watches on SSH too.
+- [x] Tests: a commit made on the server (outside the app) reaches the subscriber; ignored entries flagged in a listing.
+
+Done, with a finding: the core's folder watch reports a folder only when its listing differs after the debounce, and git rewrites `index` and refs through `<name>.lock` renamed into place, so the listing ends as it began and a folder watch never sees a commit. Git's own files (`HEAD`, `index`, `packed-refs`, each loose branch ref) are watched as files, by their stamp; the agent watches a folder it normally leaves out (`.git`) when files in it are registered, since the core checks files only inside watched folders. Content-only edits to tracked files made outside the app are seen on the panel's focus refresh (folders report listings). `remote/git_watch.rs` classifies a change as head, index, refs or worktree; tests: the pure classifier and subscription counts, and a file added and a commit made on the in-process agent's server reaching the subscriber. Explorer dimming on a server comes from one `git check-ignore -z --stdin` per listing. Also fixed Task 1's local refusal message, which had started naming the workspace spelling instead of the host path (`tests/git_operations.rs`).
 
 ### Task 3: The PTY stream in the protocol and the agent
 

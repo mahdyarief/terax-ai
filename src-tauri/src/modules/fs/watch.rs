@@ -82,8 +82,8 @@ impl Reporter for AppReporter {
     }
 }
 
-/// Where a server's `Changed` pushes go: the file index and the frontend,
-/// as this machine's changes do.
+/// Where a server's `Changed` pushes go: the file index, source control
+/// (`terax:git-changed`) and the frontend, as this machine's changes do.
 pub(crate) fn remote_deliver(app: &AppHandle) -> Deliver {
     let app = app.clone();
     Arc::new(move |host: &SshHost, paths: Vec<String>| {
@@ -92,6 +92,7 @@ pub(crate) fn remote_deliver(app: &AppHandle) -> Deliver {
                 index.note_change(&remote_change_path(host, path));
             }
         }
+        crate::modules::git::watch::remote_changed(&app, host, &paths);
         let _ = app.emit("fs:changed", ChangedPayload { paths });
     })
 }

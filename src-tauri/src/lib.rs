@@ -356,6 +356,7 @@ pub fn run() {
         .manage(secrets::SecretsState::default())
         .manage(fs::watch::FsWatchState::default())
         .manage(modules::remote::watch::RemoteWatches::default())
+        .manage(modules::remote::git_watch::RemoteGitWatches::default())
         .manage(fs::assets::AssetGrants::default())
         .manage(fs::preview::HtmlPreviews::default())
         .manage(git::watch::GitWatchState::default())

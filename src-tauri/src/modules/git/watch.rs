@@ -20,8 +20,11 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::modules::fs::to_canon;
 use crate::modules::fs::watch::FsWatchState;
 use crate::modules::git::errors::{GitError, Result};
-use crate::modules::git::plumbing::{common_dir, git_dir, open_worktree};
+use crate::modules::git::plumbing::{common_dir, git_dir, open_worktree, os_args, run};
+use crate::modules::git::utils::ResolvedGitDirectory;
+use crate::modules::remote::git_watch::{RemoteGitWatches, Watched};
 use crate::modules::workspace::{WorkspaceEnv, WorkspaceRegistry};
+use terax_workspace_core::env::SshHost;
 
 pub const EVENT: &str = "terax:git-changed";
 const MAX_WORKTREE_DIRS: usize = 2048;
@@ -410,6 +413,137 @@ impl<L: Link> Inner<L> {
     }
 }
 
+/// How many of a server repository's tracked folders are watched, beside
+/// its root, `.git` and the refs folders.
+const REMOTE_DIR_BUDGET: usize = 512;
+
+/// `git_watch` on a server: the repository's folders join the host's remote
+/// watch (sent to the agent, and again after a reconnect).
+fn remote_subscribe(app: &AppHandle, host: &SshHost, repo: &ResolvedGitDirectory) -> GitWatchInfo {
+    remote_subscribe_in(
+        &app.state::<RemoteGitWatches>(),
+        &app.state::<crate::modules::remote::watch::RemoteWatches>(),
+        host,
+        repo,
+    )
+}
+
+pub(crate) fn remote_subscribe_in(
+    git: &RemoteGitWatches,
+    watches: &crate::modules::remote::watch::RemoteWatches,
+    host: &SshHost,
+    repo: &ResolvedGitDirectory,
+) -> GitWatchInfo {
+    let root = repo.ws_path.trim_end_matches('/').to_string();
+    let mut truncated = false;
+    let (key, first) = git.subscribe(host, &root, || {
+        let lines = |args: &[&str]| -> Vec<String> {
+            run(repo, os_args(args))
+                .ok()
+                .filter(|output| output.exit_code == Some(0))
+                .map(|output| {
+                    output
+                        .stdout
+                        .split(|byte| *byte == 0 || *byte == b'\n')
+                        .filter(|name| !name.is_empty())
+                        .filter_map(|name| std::str::from_utf8(name).ok())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let git_dir = format!("{root}/.git");
+        // The tracked folders, by their listing (a file added or removed).
+        let tracked = lines(&["ls-tree", "-r", "-d", "-z", "--name-only", "HEAD"]);
+        truncated = tracked.len() > REMOTE_DIR_BUDGET;
+        // `.git` itself is watched only because its files are (the agent
+        // leaves it out of ordinary watches).
+        let mut dirs = vec![
+            root.clone(),
+            git_dir.clone(),
+            format!("{git_dir}/refs/heads"),
+        ];
+        dirs.extend(
+            tracked
+                .into_iter()
+                .take(REMOTE_DIR_BUDGET)
+                .map(|name| format!("{root}/{name}")),
+        );
+        // Git's files, by their stamp; a branch's ref only while it is loose
+        // (a missing file is left out by the agent, not failed).
+        let mut files = vec![
+            format!("{git_dir}/HEAD"),
+            format!("{git_dir}/index"),
+            format!("{git_dir}/packed-refs"),
+        ];
+        files.extend(
+            lines(&[
+                "for-each-ref",
+                "--format=%(refname)",
+                "refs/heads",
+                "refs/remotes",
+            ])
+            .into_iter()
+            .take(REMOTE_DIR_BUDGET)
+            .map(|name| format!("{git_dir}/{name}")),
+        );
+        Watched { dirs, files }
+    });
+    let watched_dirs = match &first {
+        Some(paths) => {
+            remote_rewatch_in(watches, host, paths, true);
+            paths.dirs.len() as u32
+        }
+        None => 0,
+    };
+    GitWatchInfo {
+        watching: true,
+        repo: key,
+        watched_dirs,
+        truncated,
+        reason: None,
+    }
+}
+
+fn remote_rewatch(app: &AppHandle, host: &SshHost, paths: &Watched, add: bool) {
+    remote_rewatch_in(
+        &app.state::<crate::modules::remote::watch::RemoteWatches>(),
+        host,
+        paths,
+        add,
+    );
+}
+
+pub(crate) fn remote_rewatch_in(
+    watches: &crate::modules::remote::watch::RemoteWatches,
+    host: &SshHost,
+    paths: &Watched,
+    add: bool,
+) {
+    use crate::modules::remote::watch::push;
+    let set = if add {
+        watches.add(host, &paths.dirs, &paths.files)
+    } else {
+        watches.remove(host, &paths.dirs, &paths.files)
+    };
+    let Some(set) = set else { return };
+    let ws = crate::modules::remote::registry::global().and_then(|r| r.workspace(host));
+    if let Err(error) = push(ws, set) {
+        log::warn!("watching git on {}: {error}", host.as_str());
+    }
+}
+
+/// A server's watched folders changed: each repository they belong to is
+/// told, as a local watch would.
+pub fn remote_changed(app: &AppHandle, host: &SshHost, paths: &[String]) {
+    let Some(remote) = app.try_state::<RemoteGitWatches>() else {
+        return;
+    };
+    for (repo, kinds) in remote.changed(host, paths) {
+        let _ = app.emit(EVENT, ChangedPayload { repo, kinds });
+    }
+}
+
 #[derive(Default)]
 pub struct GitWatchState {
     inner: Mutex<Inner<WorkerLink>>,
@@ -793,6 +927,9 @@ impl GitWatchState {
         workspace: &WorkspaceEnv,
     ) -> Result<GitWatchInfo> {
         let repo = open_worktree(registry, repo_root, workspace)?;
+        if let WorkspaceEnv::Ssh { host } = workspace {
+            return Ok(remote_subscribe(app, host, &repo));
+        }
         let key = repo.git_path.clone();
         if !workspace.is_local() {
             return Ok(GitWatchInfo {
@@ -825,7 +962,14 @@ impl GitWatchState {
 
     /// Releases one subscription by the `repo` key `subscribe` returned. It
     /// touches no repository, so it works after the worktree is gone.
-    pub fn unsubscribe(&self, key: &str) {
+    pub fn unsubscribe(&self, app: &AppHandle, key: &str) {
+        let remote = app.state::<RemoteGitWatches>();
+        if remote.holds(key) {
+            if let Some((host, paths)) = remote.unsubscribe(key) {
+                remote_rewatch(app, &host, &paths, false);
+            }
+            return;
+        }
         self.lock().release(key);
     }
 }

@@ -65,15 +65,6 @@ impl Watches {
         dirs: &[String],
         files: &[String],
     ) -> io::Result<()> {
-        let wanted_dirs: BTreeSet<String> = dirs
-            .iter()
-            .filter_map(|dir| {
-                roots.follow(ws, dir).ok()?;
-                let canonical = ws.canonicalize(dir).ok()?;
-                let is_dir = ws.metadata(&canonical).ok()?.kind == EntryKind::Dir;
-                (is_dir && !plan::is_skipped(Path::new(&canonical))).then_some(canonical)
-            })
-            .collect();
         let wanted_files: BTreeSet<(String, String)> = files
             .iter()
             .filter_map(|file| {
@@ -90,6 +81,19 @@ impl Watches {
             })
             .collect();
 
+        let wanted_dirs: BTreeSet<String> = dirs
+            .iter()
+            .filter_map(|dir| {
+                roots.follow(ws, dir).ok()?;
+                let canonical = ws.canonicalize(dir).ok()?;
+                let is_dir = ws.metadata(&canonical).ok()?.kind == EntryKind::Dir;
+                // A folder left out of listings (`.git`) is watched when files in it
+                // are (source control's `HEAD` and `index`).
+                let wanted = !plan::is_skipped(Path::new(&canonical))
+                    || wanted_files.iter().any(|(parent, _)| *parent == canonical);
+                (is_dir && wanted).then_some(canonical)
+            })
+            .collect();
         let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.watcher.is_none() {
             if wanted_dirs.is_empty() && wanted_files.is_empty() {
