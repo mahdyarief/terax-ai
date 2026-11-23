@@ -30,11 +30,11 @@ pub const INSTALL_DIR: &str = ".terax-server";
 pub const RUN: &str = "run\n";
 
 /// The agents this app can install, by the server's `uname -m`.
-const TRIPLES: [(&str, &str); 4] = [
-    ("x86_64", "x86_64-unknown-linux-musl"),
-    ("amd64", "x86_64-unknown-linux-musl"),
-    ("aarch64", "aarch64-unknown-linux-musl"),
-    ("arm64", "aarch64-unknown-linux-musl"),
+const PLATFORMS: [(&str, &str); 4] = [
+    ("x86_64", "x86_64-linux-musl"),
+    ("amd64", "x86_64-linux-musl"),
+    ("aarch64", "aarch64-linux-musl"),
+    ("arm64", "aarch64-linux-musl"),
 ];
 
 /// The command for `ssh <host> <command>`. The user's login shell parses it
@@ -161,14 +161,14 @@ pub fn parse_report(lines: &[&str]) -> Result<Report, String> {
 pub enum Plan {
     /// The installed agent is this app's: run it.
     Run,
-    /// Upload this app's agent for `triple`, then run it.
-    Install { triple: &'static str },
+    /// Upload this app's agent for `platform`, then run it.
+    Install { platform: &'static str },
     /// This server cannot run an agent from this app; why, for the user.
     Unsupported(String),
 }
 
 /// What to do on a server, given the agents this app carries:
-/// `bundled(triple)` is the SHA-256 of the agent for `triple`, if any.
+/// `bundled(platform)` is the SHA-256 of the agent for `platform`, if any.
 pub fn plan(report: &Report, bundled: impl Fn(&str) -> Option<String>) -> Plan {
     if report.os != "Linux" {
         return Plan::Unsupported(format!(
@@ -176,10 +176,10 @@ pub fn plan(report: &Report, bundled: impl Fn(&str) -> Option<String>) -> Plan {
             report.os
         ));
     }
-    let Some(triple) = TRIPLES
+    let Some(platform) = PLATFORMS
         .iter()
         .find(|(arch, _)| *arch == report.arch)
-        .map(|(_, triple)| *triple)
+        .map(|(_, platform)| *platform)
     else {
         return Plan::Unsupported(format!(
             "{} servers are not supported; Terax runs on x86_64 and aarch64",
@@ -191,13 +191,15 @@ pub fn plan(report: &Report, bundled: impl Fn(&str) -> Option<String>) -> Plan {
             "the server has no `sha256sum`, so the agent cannot be verified".into(),
         );
     }
-    let Some(expected) = bundled(triple) else {
-        return Plan::Unsupported(format!("this build of Terax carries no agent for {triple}"));
+    let Some(expected) = bundled(platform) else {
+        return Plan::Unsupported(format!(
+            "this build of Terax carries no agent for {platform}"
+        ));
     };
     if report.sha256.as_deref() == Some(expected.as_str()) {
         Plan::Run
     } else {
-        Plan::Install { triple }
+        Plan::Install { platform }
     }
 }
 
@@ -214,8 +216,8 @@ mod tests {
         }
     }
 
-    fn both(triple: &str) -> Option<String> {
-        Some(format!("sha-of-{triple}"))
+    fn both(platform: &str) -> Option<String> {
+        Some(format!("sha-of-{platform}"))
     }
 
     #[test]
@@ -289,20 +291,17 @@ mod tests {
         assert_eq!(
             plan(&report("x86_64", None), both),
             Plan::Install {
-                triple: "x86_64-unknown-linux-musl"
+                platform: "x86_64-linux-musl"
             }
         );
         assert_eq!(
             plan(&report("arm64", Some("old")), both),
             Plan::Install {
-                triple: "aarch64-unknown-linux-musl"
+                platform: "aarch64-linux-musl"
             }
         );
         assert_eq!(
-            plan(
-                &report("aarch64", Some("sha-of-aarch64-unknown-linux-musl")),
-                both
-            ),
+            plan(&report("aarch64", Some("sha-of-aarch64-linux-musl")), both),
             Plan::Run
         );
     }
@@ -320,10 +319,7 @@ mod tests {
         let mut bare = report("x86_64", None);
         bare.hasher = None;
         unsupported(plan(&bare, both), "sha256sum");
-        unsupported(
-            plan(&report("x86_64", None), |_| None),
-            "x86_64-unknown-linux-musl",
-        );
+        unsupported(plan(&report("x86_64", None), |_| None), "x86_64-linux-musl");
     }
 
     #[test]

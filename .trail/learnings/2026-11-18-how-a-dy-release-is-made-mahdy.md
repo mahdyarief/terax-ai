@@ -25,6 +25,7 @@ touches:
 
 ## Watch out
 - A version bump changes `package.json`, `src-tauri/tauri.conf.json`, the `[package]` version in `src-tauri/Cargo.toml`, `src-tauri/tauri.windows.conf.json` (wix, no suffix) and, since the remote agent exists, `src-tauri/crates/terax-agent/Cargo.toml` too: the app reinstalls an agent whose version differs from its own, and `the_agent_carries_the_apps_version` fails until the two match. `[workspace.package]` is the CLI's version and stays as it is. The SSH feature ships as 0.9.5-dy (the owner's plan, 2026-11-23); until then dydev carries 0.9.4-dy.
+- Since the remote agent is bundled, `build:nosign` first runs `pnpm build:agent`, which needs zig (`pip install ziglang`), `cargo-zigbuild` and the two musl Rust targets; `tauri.nosign.conf.json` lists the agents as resources, so any build with that config fails without them. `release-dy.yml` passes that config too, so its macOS and Linux jobs need a `pnpm build:agent` step before the 0.9.5-dy release.
 - A release build of the Rust side takes about 30 minutes here. The release and the tag can be created first; the tag starts the macOS and Linux builds while Windows still compiles.
 - Publishing a release starts "Update Nix sources", which fails in seconds because it downloads assets from the upstream repo. It changes nothing.
 - The app's updater still points at upstream's releases. When upstream ships 0.9.3 or later, a dy install will be offered that update and would lose the dy changes.

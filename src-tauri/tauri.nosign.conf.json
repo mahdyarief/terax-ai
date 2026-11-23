@@ -1,6 +1,10 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "bundle": {
-    "createUpdaterArtifacts": false
+    "createUpdaterArtifacts": false,
+    "resources": {
+      "binaries/terax-agent-x86_64-linux-musl": "agents/terax-agent-x86_64-linux-musl",
+      "binaries/terax-agent-aarch64-linux-musl": "agents/terax-agent-aarch64-linux-musl"
+    }
   }
 }

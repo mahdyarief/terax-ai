@@ -49,6 +49,7 @@ http-range = "0.1"
 memchr = "2"
 terax-control-protocol = { path = "crates/terax-control-protocol" }
 terax-workspace-core = { path = "crates/terax-workspace-core" }
+sha2 = "0.10"
 portable-pty = "0.9"
 rfd = "0.15"
 dirs = "7"
@@ -81,6 +82,8 @@ which = "8.0.4"
 
 [dev-dependencies]
 terax-cli = { path = "crates/terax-cli" }
+# A normal dependency once the transport uses it (Phase 3, Task 4).
+terax-remote-protocol = { path = "crates/terax-remote-protocol" }
 proptest = "1"
 tokio = { version = "1", features = ["macros", "rt", "test-util", "time"] }
 tempfile = "3"

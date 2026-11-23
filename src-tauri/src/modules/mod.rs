@@ -15,6 +15,7 @@ pub mod lsp;
 pub mod net;
 pub mod proc;
 pub mod pty;
+pub mod remote_agent;
 pub mod runtime;
 pub mod secrets;
 pub mod shell;

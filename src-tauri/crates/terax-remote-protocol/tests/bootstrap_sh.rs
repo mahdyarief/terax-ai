@@ -117,8 +117,8 @@ fn leftovers(home: &Path) -> Vec<String> {
         .collect()
 }
 
-fn bundled(triple: &str) -> Option<String> {
-    triple.ends_with("linux-musl").then(|| sha256(AGENT))
+fn bundled(platform: &str) -> Option<String> {
+    platform.ends_with("linux-musl").then(|| sha256(AGENT))
 }
 
 #[test]
