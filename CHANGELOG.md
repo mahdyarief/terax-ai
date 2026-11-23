@@ -8,6 +8,39 @@ Installers are on the
 [Releases page](https://github.com/mahdyarief/terax-ai/releases). They are not
 code-signed; see the release notes for how to open them.
 
+## 0.9.4-dy — 2026-11-23
+
+### Tabs and editor
+
+- **Split view**: a tab's context menu has "Split right". The tab shows on the
+  right while the active tab stays on the left; drag the divider to resize
+  (double-click resets), and "Close split view" returns to one pane.
+- **Open to the Side**: a file's context menu in the explorer opens it on the
+  right of a split view, so two files (say a .docx and an .xlsx) sit side by
+  side.
+- `.mmd` and `.mermaid` files open as rendered diagrams, with the same Raw,
+  Split and Rendered views as Markdown. A broken diagram keeps the last good
+  render under an error banner.
+- Text files too large to open show their start and load more as you scroll.
+
+### Workspace
+
+- Open or change the workspace folder from the File Explorer, the space
+  switcher and the command palette, with a native folder picker. New terminals
+  and spaces start in the workspace folder.
+
+### Fixes
+
+- Word documents that contain line breaks open again.
+- The space list shows its scrollbar.
+- The diagram error banner no longer sits on its own layer over the preview.
+
+### From upstream
+
+- Markdown preview renders links and local images.
+- New AI models in the model list (Gemini 3.5 Flash-Lite, Gemini 4 Hydrogen)
+  and deprecated ones removed.
+
 ## 0.9.3-dy — 2026-11-18
 
 ### Markdown
