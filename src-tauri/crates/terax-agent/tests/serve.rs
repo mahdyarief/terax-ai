@@ -471,3 +471,22 @@ fn writing_through_a_file_link_that_points_out_is_refused() {
     assert_eq!(std::fs::read(&target).unwrap(), b"secret");
     agent.finish().unwrap();
 }
+
+#[test]
+fn an_entry_named_dot_dot_cannot_reach_the_roots_parent() {
+    let tree = tree();
+    let mut agent = Agent::ready();
+    set_roots(&mut agent, &tree);
+    for path in [
+        format!("{}/..", tree.root()),
+        format!("{}/src/../..", tree.root()),
+    ] {
+        assert!(
+            refused(agent.call(2, Call::RemoveDirAll { path: path.clone() })),
+            "{path}"
+        );
+    }
+    assert!(std::path::Path::new(&format!("{}/outside/secret.txt", tree.base)).exists());
+    assert!(std::path::Path::new(&tree.root()).exists());
+    agent.finish().unwrap();
+}

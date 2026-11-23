@@ -10,6 +10,10 @@
 //!   or renaming a link, writing, creating, `symlink_metadata`).
 //!
 //! A path that does not exist yet is judged by its nearest existing ancestor.
+//! `.` and `..` are left to the operating system where they fall inside that
+//! ancestor (it resolves them as the operation will), and refused in the
+//! names after it: appended unresolved, `root/..` would read as inside
+//! `root`.
 
 use std::io;
 
@@ -18,7 +22,8 @@ use terax_workspace_core::workspace::Workspace;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Refusal {
-    /// Not absolute, or with `.`, `..` or empty components.
+    /// Not absolute, with empty components, or with `.` or `..` where they
+    /// cannot be resolved (in names that do not exist yet, or as the entry).
     Malformed(String),
     Outside(String),
     NoRoots,
@@ -106,10 +111,7 @@ fn parse(path: &str) -> Result<(String, Vec<&str>), Refusal> {
         return Ok((head, Vec::new()));
     }
     let parts: Vec<&str> = rest.split('/').collect();
-    if parts
-        .iter()
-        .any(|part| part.is_empty() || *part == "." || *part == "..")
-    {
+    if parts.iter().any(|part| part.is_empty()) {
         return Err(malformed());
     }
     Ok((head, parts))
@@ -130,6 +132,9 @@ fn resolve(ws: &dyn Workspace, path: &str, entry: bool) -> Result<String, Refusa
         let candidate = join(&head, &parts[..keep]);
         match ws.canonicalize(&candidate) {
             Ok(canonical) => {
+                if tail.iter().any(|name| *name == "." || *name == "..") {
+                    return Err(Refusal::Malformed(path.to_string()));
+                }
                 let mut out = canonical;
                 for name in tail.iter().rev() {
                     if !out.ends_with('/') {
@@ -220,12 +225,63 @@ mod tests {
     }
 
     #[test]
-    fn relative_dotted_and_empty_components_are_refused() {
+    fn dots_in_existing_directories_resolve_where_they_lead() {
+        let f = fixture();
+        for path in [
+            format!("{}/root/./a.txt", f.base),
+            format!("{}/root/sub/../a.txt", f.base),
+            format!("{}/root/sub/..", f.base),
+        ] {
+            f.roots.follow(&f.ws, &path).unwrap();
+        }
+        f.roots
+            .entry(&f.ws, &format!("{}/root/sub/../a.txt", f.base))
+            .unwrap();
+        for path in [
+            format!("{}/root/../outside/secret.txt", f.base),
+            format!("{}/root/..", f.base),
+            format!("{}/root/sub/../..", f.base),
+        ] {
+            assert!(
+                matches!(f.roots.follow(&f.ws, &path), Err(Refusal::Outside(_))),
+                "{path}"
+            );
+        }
+    }
+
+    /// Appended unresolved, these would read as inside the root while the
+    /// operation acts on the root's parent or on a directory outside.
+    #[test]
+    fn dots_that_cannot_be_resolved_are_refused() {
+        let f = fixture();
+        for path in [
+            format!("{}/root/..", f.base),
+            format!("{}/root/sub/..", f.base),
+            format!("{}/root/.", f.base),
+        ] {
+            assert!(
+                matches!(f.roots.entry(&f.ws, &path), Err(Refusal::Malformed(_))),
+                "entry {path}"
+            );
+        }
+        // Windows resolves `..` by the text, even past a name that does not
+        // exist (and so will the operation); elsewhere it cannot be resolved.
+        let escape = format!("{}/root/missing/../../outside", f.base);
+        assert!(f.roots.follow(&f.ws, &escape).is_err(), "{escape}");
+        #[cfg(unix)]
+        assert!(matches!(
+            f.roots
+                .follow(&f.ws, &format!("{}/root/missing/..", f.base)),
+            Err(Refusal::Malformed(_))
+        ));
+    }
+
+    #[test]
+    fn relative_and_empty_components_are_refused() {
         let f = fixture();
         for path in [
             "relative/a.txt".to_string(),
-            format!("{}/root/../outside/secret.txt", f.base),
-            format!("{}/root/./a.txt", f.base),
+            "../a.txt".to_string(),
             format!("{}/root//a.txt", f.base),
             String::new(),
         ] {

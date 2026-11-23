@@ -5082,6 +5082,7 @@ dependencies = [
  "tempfile",
  "terax-remote-protocol",
  "terax-workspace-core",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

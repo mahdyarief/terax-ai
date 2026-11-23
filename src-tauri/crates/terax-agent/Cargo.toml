@@ -14,5 +14,8 @@ path = "src/main.rs"
 terax-remote-protocol = { path = "../terax-remote-protocol" }
 terax-workspace-core = { path = "../terax-workspace-core" }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }
+
 [dev-dependencies]
 tempfile = "3"

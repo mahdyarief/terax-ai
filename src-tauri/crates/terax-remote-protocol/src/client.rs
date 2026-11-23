@@ -516,6 +516,15 @@ impl Workspace for RemoteWorkspace {
         request: &GrepRequest,
         cancel: &(dyn Fn() -> bool + Sync),
     ) -> Result<GrepResponse, String> {
+        // Cancelled before it starts: answered here, as the host would.
+        if cancel() {
+            return Ok(GrepResponse {
+                hits: Vec::new(),
+                truncated: false,
+                files_scanned: 0,
+                cancelled: true,
+            });
+        }
         let call = Call::Grep {
             request: request.clone(),
         };
@@ -551,6 +560,9 @@ impl Workspace for RemoteWorkspace {
         max_depth: Option<usize>,
         cancelled: &dyn Fn() -> bool,
     ) -> Option<FileIndex> {
+        if cancelled() {
+            return None;
+        }
         let call = Call::ListFiles {
             root: root.into(),
             show_hidden,
@@ -832,6 +844,35 @@ mod tests {
         };
         fake.reply(id, Ok(Reply::Grep(answer.clone())));
         assert_eq!(search.join().unwrap(), Ok(answer));
+    }
+
+    #[test]
+    fn a_walk_cancelled_before_it_starts_is_not_sent() {
+        let (ws, mut fake) = connect();
+        let request = GrepRequest {
+            root: "/srv/repo".into(),
+            pattern: GrepPattern::Literal { text: "x".into() },
+            globs: Vec::new(),
+            max_results: None,
+        };
+        let stopped = ws.grep(&request, &|| true).unwrap();
+        assert!(stopped.cancelled && stopped.hits.is_empty());
+        assert!(ws.list_files("/srv/repo", false, None, &|| true).is_none());
+        let ws = Arc::new(ws);
+        let next = {
+            let ws = ws.clone();
+            thread::spawn(move || ws.metadata("/srv/repo/a"))
+        };
+        let (id, call) = fake.request();
+        assert_eq!(
+            call,
+            Call::Metadata {
+                path: "/srv/repo/a".into()
+            },
+            "nothing came before it"
+        );
+        fake.reply(id, Ok(Reply::Meta(meta(1))));
+        next.join().unwrap().unwrap();
     }
 
     #[test]

@@ -57,7 +57,7 @@ Each task: tests first, `cargo clippy --workspace --all-targets -- -D warnings`,
 - [x] Root checks for every path argument (including both ends of rename, replace and copy, `read_confined`'s roots, and `exec`'s cwd).
 - [x] Unit tests drive `serve` over in-memory pipes: a request before the handshake is refused, a path outside the roots is refused even when it exists, a link inside a root to outside it is refused, a cancelled grep stops early, EOF ends the loop.
   - Serving is the default with no arguments (no `--stdio` flag); `--version` prints `terax-agent <version>`, anything else exits 2. The version is the crate's (`[workspace.package]`, today 0.9.3); Phase 3 must decide which version the app compares.
-  - Two checks per path (`roots.rs`): `follow` (where it leads: reads, listings, search roots, exec cwd, `create_dir_all`) and `entry` (where the entry sits: remove, rename, replace, `symlink_metadata`, `read_link`). Writes (`write_atomic`, `create_file`, the destination of a copy) need both, so a file link pointing out cannot be written through. Paths must be absolute with no `.`, `..` or empty components; a path that does not exist yet is judged by its nearest existing ancestor. The walks do not follow links, so a search only checks its root.
+  - Two checks per path (`roots.rs`): `follow` (where it leads: reads, listings, search roots, exec cwd, `create_dir_all`) and `entry` (where the entry sits: remove, rename, replace, `symlink_metadata`, `read_link`). Writes (`write_atomic`, `create_file`, the destination of a copy) need both, so a file link pointing out cannot be written through. Paths must be absolute with no empty components; a path that does not exist yet is judged by its nearest existing ancestor. `.` and `..` are resolved by the OS inside that ancestor (as the operation will resolve them) and refused in the names after it, including an entry named `..` (Task 6 found the contract needs `canonicalize("dir/..")`; refusing only unresolved dots also closes `root/..` reading as inside `root`). The walks do not follow links, so a search only checks its root.
   - `exec` runs with the SSH user's rights, as a shell would; only its starting directory is confined, and it defaults to the first root.
   - A request id already in flight is refused; a reply over the frame limit becomes an error reply; a message that cannot be decoded, or a second `Hello`, ends the session.
   - Tests: 9 unit (roots, cancel, the read loop) and 14 over pipes. Mutation-checked: 14 mutants (each path check, the write-through check, exec's cwd, cancel, the handshake, duplicate ids, the parser) all fail a test.
@@ -74,8 +74,11 @@ Each task: tests first, `cargo clippy --workspace --all-targets -- -D warnings`,
 
 ### Task 6: The contract over a real child process
 
-- [ ] Integration test in `terax-agent`: spawn the built binary (`CARGO_BIN_EXE_terax-agent`) with piped stdio, connect `RemoteWorkspace`, run `contract::run` on a temp directory.
-- [ ] Plus: confinement through the full stack, killing the agent mid-call fails the call promptly, the agent exits when the client drops its stdin.
+- [x] Integration test in `terax-agent`: spawn the built binary (`CARGO_BIN_EXE_terax-agent`) with piped stdio, connect `RemoteWorkspace`, run `contract::run` on a temp directory.
+- [x] Plus: confinement through the full stack, killing the agent mid-call fails the call promptly, the agent exits when the client drops its stdin.
+  - `crates/terax-agent/tests/contract.rs`: the whole `contract::run` passes through `RemoteWorkspace` and the child process, plus the roots holding through the stack, killing the agent during an `exec` (fails with `ConnectionAborted` within a second), the agent exiting when the client is dropped, and `--version`.
+  - Found and fixed on the way: (1) on Windows the agent's stdin and stdout handles were inheritable, so a command run by `exec` kept the stream open after the agent died and the client noticed only when that command ended; the agent now clears `HANDLE_FLAG_INHERIT` on them at start (Unix needs nothing: the child's 0-2 are replaced, the rest are close-on-exec). (2) A grep or listing cancelled before it starts is now answered by the client without a round trip, as the host does; the agent would otherwise finish a small search before the `Cancel` arrived.
+  - Mutation-checked: the unresolved-dot check, the inherit fix and both pre-cancel checks each fail a test.
 - [ ] Runs on Windows here and on the Linux and macOS CI jobs.
 
 ### Task 7: Linux binaries (trial for the packaging risk)
