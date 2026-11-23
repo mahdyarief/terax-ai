@@ -14,6 +14,7 @@ use terax_control_protocol::{
     PROTOCOL_VERSION, SERVER_RESPONSE_ID,
 };
 
+pub mod askpass;
 pub mod hook;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
@@ -67,6 +68,10 @@ const DEFAULT_TIMEOUTS: Timeouts = Timeouts {
 
 pub fn main_entry() -> ExitCode {
     let args: Vec<OsString> = env::args_os().skip(1).collect();
+    // Started by `ssh` as its askpass program: the arguments are its prompt.
+    if env::var_os(terax_control_protocol::askpass::ENV_ASKPASS).is_some_and(|v| v == "1") {
+        return askpass::main(&args);
+    }
     if args.first().is_some_and(|arg| arg == "hook") {
         return hook::main(&args[1..]);
     }

@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub mod askpass;
 pub mod hook;
 
 pub const PROTOCOL_VERSION: u16 = 1;

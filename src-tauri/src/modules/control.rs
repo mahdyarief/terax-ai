@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::ffi::OsString;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -10,6 +11,9 @@ use std::time::{Duration, SystemTime};
 
 use serde_json::{json, Value};
 use tauri::{Emitter, Manager};
+use terax_control_protocol::askpass::{
+    classify, AskpassParams, AskpassQuestion, ASKPASS_WAIT, ENV_ASKPASS, METHOD_ASKPASS,
+};
 use terax_control_protocol::{
     ControlDescriptor, ControlRequest, ControlResponse, FrontendRequest, FrontendResponse,
     OpenParams, MAX_MESSAGE_BYTES, METHODS, METHOD_CAPABILITIES, METHOD_HOOK, METHOD_IDENTIFY,
@@ -38,6 +42,14 @@ struct RuntimeInfo {
 }
 
 const RECENT_HOOK_IDS: usize = 4096;
+/// OpenSSH's longest prompts (a changed host key) are about 1.5 KiB.
+const MAX_ASKPASS_PROMPT: usize = 8 * 1024;
+
+/// One `ssh` process allowed to ask its questions, and those it is asking.
+struct AskpassEntry {
+    host: String,
+    pending: HashSet<String>,
+}
 
 struct PaneCredential {
     token: String,
@@ -57,6 +69,8 @@ struct ControlCore {
     panes: Mutex<HashMap<u32, PaneCredential>>,
     starting: Mutex<HashSet<String>>,
     started: Condvar,
+    /// By token; see `AskpassGrant`.
+    askpass: Mutex<HashMap<String, AskpassEntry>>,
 }
 
 #[derive(Clone)]
@@ -75,6 +89,7 @@ impl Default for ControlState {
             panes: Mutex::new(HashMap::new()),
             starting: Mutex::new(HashSet::new()),
             started: Condvar::new(),
+            askpass: Mutex::new(HashMap::new()),
         }))
     }
 }
@@ -105,7 +120,88 @@ impl Drop for PendingShell {
     }
 }
 
+/// Lets one `ssh` process ask its questions (passwords, host keys) in Terax,
+/// with a token of its own that is good for nothing else. Dropping the
+/// grant, when the connection attempt ends, revokes the token and gives up
+/// any question still open.
+pub struct AskpassGrant {
+    state: ControlState,
+    token: String,
+    env: Vec<(OsString, OsString)>,
+}
+
+impl AskpassGrant {
+    /// The environment for `ssh`: `terax-cli` as its askpass program, used
+    /// even without a terminal (OpenSSH 8.4+).
+    pub fn env(&self) -> &[(OsString, OsString)] {
+        &self.env
+    }
+}
+
+impl Drop for AskpassGrant {
+    fn drop(&mut self) {
+        let entry = self
+            .state
+            .0
+            .askpass
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&self.token);
+        if let Some(entry) = entry {
+            let mut pending = self.state.0.pending.lock().unwrap_or_else(|e| e.into_inner());
+            for id in entry.pending {
+                // Dropping the sender ends the wait at once.
+                pending.remove(&id);
+            }
+        }
+    }
+}
+
 impl ControlState {
+    /// `None` when there is no control server or no bundled CLI to answer.
+    pub fn askpass_grant(&self, host: &str) -> Option<AskpassGrant> {
+        if self.0.shutting_down.load(Ordering::Acquire) {
+            return None;
+        }
+        let runtime = self.0.runtime.get()?;
+        let cli = runtime.cli_path.clone()?;
+        let token = generate_token().ok()?;
+        self.0
+            .askpass
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                token.clone(),
+                AskpassEntry {
+                    host: host.to_string(),
+                    pending: HashSet::new(),
+                },
+            );
+        let env = vec![
+            ("SSH_ASKPASS".into(), cli.into_os_string()),
+            ("SSH_ASKPASS_REQUIRE".into(), "force".into()),
+            (ENV_ASKPASS.into(), "1".into()),
+            ("TERAX_CONTROL_ADDR".into(), runtime.address.clone().into()),
+            ("TERAX_CONTROL_TOKEN".into(), token.clone().into()),
+        ];
+        Some(AskpassGrant {
+            state: self.clone(),
+            token,
+            env,
+        })
+    }
+
+    /// Hands the UI's answer to the request waiting for it.
+    fn deliver(&self, request_id: &str, response: FrontendResponse) -> bool {
+        let sender = self
+            .0
+            .pending
+            .lock()
+            .expect("control pending poisoned")
+            .remove(request_id);
+        sender.is_some_and(|sender| sender.send(response).is_ok())
+    }
+
     pub fn shell_env(&self, pane_id: u32) -> Option<ShellControlEnv> {
         if self.0.shutting_down.load(Ordering::Acquire) {
             return None;
@@ -581,6 +677,18 @@ fn route_request(
     app: &tauri::AppHandle,
     state: &ControlState,
 ) -> ControlResponse {
+    if request.method == METHOD_ASKPASS {
+        return askpass_request(
+            request,
+            state,
+            &TauriAgentHost(app),
+            ASKPASS_WAIT,
+            |target, frontend_request| {
+                app.emit_to(target, CONTROL_EVENT, frontend_request)
+                    .map_err(|error| error.to_string())
+            },
+        );
+    }
     if let Err(response) = authenticate(&request, state, &TauriAgentHost(app)) {
         return response;
     }
@@ -721,7 +829,26 @@ fn forward_to_frontend(
         }
     };
 
-    let id = request.id.clone();
+    let frontend_request = FrontendRequest {
+        id: request.id,
+        method: request.method,
+        params: request.params,
+        caller: request.caller,
+    };
+    await_frontend(state, frontend_request, FRONTEND_TIMEOUT, |frontend_request| {
+        app.emit_to(target.as_str(), CONTROL_EVENT, frontend_request)
+            .map_err(|error| error.to_string())
+    })
+}
+
+/// Sends a request to the UI and waits for `control_respond`.
+fn await_frontend(
+    state: &ControlState,
+    frontend_request: FrontendRequest,
+    timeout: Duration,
+    emit: impl FnOnce(FrontendRequest) -> Result<(), String>,
+) -> ControlResponse {
+    let id = frontend_request.id.clone();
     let (sender, receiver) = mpsc::sync_channel(1);
     {
         let mut pending = state.0.pending.lock().expect("control pending poisoned");
@@ -738,13 +865,7 @@ fn forward_to_frontend(
         pending.insert(id.clone(), sender);
     }
 
-    let frontend_request = FrontendRequest {
-        id: id.clone(),
-        method: request.method,
-        params: request.params,
-        caller: request.caller,
-    };
-    if let Err(error) = app.emit_to(target.as_str(), CONTROL_EVENT, frontend_request) {
+    if let Err(error) = emit(frontend_request) {
         state
             .0
             .pending
@@ -758,7 +879,7 @@ fn forward_to_frontend(
         );
     }
 
-    match receiver.recv_timeout(FRONTEND_TIMEOUT) {
+    match receiver.recv_timeout(timeout) {
         Ok(response) if response.ok => {
             ControlResponse::success(id, response.result.unwrap_or(Value::Null))
         }
@@ -788,6 +909,107 @@ fn forward_to_frontend(
     }
 }
 
+/// The grant's token (as stored) and its host.
+fn askpass_host(
+    request: &ControlRequest,
+    state: &ControlState,
+) -> Result<(String, String), ControlResponse> {
+    if !valid_request_id(&request.id) {
+        return Err(ControlResponse::failure(
+            SERVER_RESPONSE_ID,
+            "invalid_request",
+            "request id must be 1-128 safe ASCII characters",
+        ));
+    }
+    let unauthorized = || {
+        ControlResponse::failure(
+            request.id.clone(),
+            "unauthorized",
+            "invalid or expired askpass credential",
+        )
+    };
+    if request.protocol != PROTOCOL_VERSION
+        || state.0.runtime.get().is_none()
+        || state.0.shutting_down.load(Ordering::Acquire)
+    {
+        return Err(unauthorized());
+    }
+    let entries = state.0.askpass.lock().unwrap_or_else(|e| e.into_inner());
+    entries
+        .iter()
+        .find(|(token, _)| constant_time_eq(token.as_bytes(), request.token.as_bytes()))
+        .map(|(token, entry)| (token.clone(), entry.host.clone()))
+        .ok_or_else(unauthorized)
+}
+
+/// OpenSSH's question for the user, from the `ssh` its grant was made for.
+/// The answer passes through to the CLI and is never logged.
+fn askpass_request(
+    request: ControlRequest,
+    state: &ControlState,
+    host: &dyn AgentHost,
+    timeout: Duration,
+    emit: impl FnOnce(&str, FrontendRequest) -> Result<(), String>,
+) -> ControlResponse {
+    let (grant, host_name) = match askpass_host(&request, state) {
+        Ok(found) => found,
+        Err(response) => return response,
+    };
+    let params: AskpassParams = match serde_json::from_value(request.params) {
+        Ok(params) => params,
+        Err(error) => {
+            return ControlResponse::failure(
+                request.id,
+                "invalid_params",
+                format!("invalid askpass parameters: {error}"),
+            )
+        }
+    };
+    if params.prompt.len() > MAX_ASKPASS_PROMPT {
+        return ControlResponse::failure(request.id, "invalid_params", "askpass prompt is too long");
+    }
+    let target = match state.frontend_target(None, host) {
+        Ok(target) => target,
+        Err(code) => {
+            return ControlResponse::failure(request.id, code, "Terax has no window to ask in")
+        }
+    };
+    let question = AskpassQuestion {
+        host: host_name,
+        kind: classify(&params.prompt, params.hint.as_deref()),
+        prompt: params.prompt,
+    };
+    let id = request.id;
+    {
+        let mut entries = state.0.askpass.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(entry) = entries.get_mut(&grant) else {
+            return ControlResponse::failure(id, "unauthorized", "invalid or expired askpass credential");
+        };
+        if !entry.pending.insert(id.clone()) {
+            return ControlResponse::failure(id, "duplicate_id", "request id is already pending");
+        }
+    }
+    let frontend_request = FrontendRequest {
+        id: id.clone(),
+        method: METHOD_ASKPASS.to_string(),
+        params: serde_json::to_value(question).expect("askpass question serializes"),
+        caller: Default::default(),
+    };
+    let response = await_frontend(state, frontend_request, timeout, |frontend_request| {
+        emit(&target, frontend_request)
+    });
+    if let Some(entry) = state
+        .0
+        .askpass
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_mut(&grant)
+    {
+        entry.pending.remove(&id);
+    }
+    response
+}
+
 #[tauri::command]
 pub fn control_frontend_ready(
     webview: tauri::Webview,
@@ -803,13 +1025,7 @@ pub fn control_respond(
     request_id: String,
     response: FrontendResponse,
 ) -> bool {
-    let sender = state
-        .0
-        .pending
-        .lock()
-        .expect("control pending poisoned")
-        .remove(&request_id);
-    sender.is_some_and(|sender| sender.send(response).is_ok())
+    state.deliver(&request_id, response)
 }
 
 fn write_response(stream: &mut TcpStream, response: &ControlResponse) -> std::io::Result<()> {
@@ -1052,6 +1268,212 @@ mod tests {
     use crate::modules::agent_events::test_host::FakeHost;
     use crate::modules::pty::PaneTarget;
     use std::io::Cursor;
+
+    mod askpass {
+        use super::*;
+        use std::sync::mpsc::channel;
+
+        const APP_TOKEN: &str = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
+
+        fn state(cli: Option<&str>) -> ControlState {
+            let state = ControlState::default();
+            assert!(state
+                .0
+                .runtime
+                .set(RuntimeInfo {
+                    address: "127.0.0.1:4242".into(),
+                    token: APP_TOKEN.into(),
+                    descriptor_path: PathBuf::from("unused-control.json"),
+                    cli_path: cli.map(PathBuf::from),
+                    launcher_dir: None,
+                })
+                .is_ok());
+            state.control_frontend_ready("main", true);
+            state
+        }
+
+        fn env_value(grant: &AskpassGrant, key: &str) -> String {
+            grant
+                .env()
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.to_string_lossy().into_owned())
+                .unwrap_or_else(|| panic!("{key} missing"))
+        }
+
+        fn question(token: &str, id: &str, prompt: &str) -> ControlRequest {
+            ControlRequest {
+                protocol: PROTOCOL_VERSION,
+                id: id.into(),
+                token: token.into(),
+                method: METHOD_ASKPASS.into(),
+                params: json!({ "prompt": prompt }),
+                caller: Default::default(),
+            }
+        }
+
+        /// Asks with an `emit` that hands the request to `ui`.
+        fn ask(
+            state: &ControlState,
+            request: ControlRequest,
+            timeout: Duration,
+            ui: impl FnOnce(String, FrontendRequest) + Send + 'static,
+        ) -> ControlResponse {
+            let host = FakeHost::new(true);
+            askpass_request(request, state, host.as_ref(), timeout, |target, frontend| {
+                let target = target.to_string();
+                thread::spawn(move || ui(target, frontend));
+                Ok(())
+            })
+        }
+
+        #[test]
+        fn a_grant_gives_ssh_the_cli_and_a_token_of_its_own() {
+            assert!(state(None).askpass_grant("dypod").is_none(), "no CLI, no askpass");
+            let state = state(Some("C:/Terax/terax-cli.exe"));
+            let grant = state.askpass_grant("dypod").unwrap();
+            assert_eq!(env_value(&grant, "SSH_ASKPASS"), "C:/Terax/terax-cli.exe");
+            assert_eq!(env_value(&grant, "SSH_ASKPASS_REQUIRE"), "force");
+            assert_eq!(env_value(&grant, ENV_ASKPASS), "1");
+            assert_eq!(env_value(&grant, "TERAX_CONTROL_ADDR"), "127.0.0.1:4242");
+            let token = env_value(&grant, "TERAX_CONTROL_TOKEN");
+            assert_eq!(token.len(), 64);
+            assert_ne!(token, APP_TOKEN);
+            assert_ne!(token, env_value(&state.askpass_grant("dypod").unwrap(), "TERAX_CONTROL_TOKEN"));
+        }
+
+        #[test]
+        fn only_a_grants_token_may_ask_and_it_may_do_nothing_else() {
+            let state = state(Some("terax-cli"));
+            let host = FakeHost::new(true);
+            let env = state.shell_env(3).unwrap();
+            state.activate_shell(&env, 9, host.as_ref());
+            // A live grant, so a wrong token has something to be confused with.
+            let grant = state.askpass_grant("dypod").unwrap();
+            for token in [APP_TOKEN, env.token.as_str(), &"0".repeat(64)] {
+                let response = ask(&state, question(token, "q1", "p"), Duration::from_secs(1), |_, _| {
+                    panic!("the UI must not be asked")
+                });
+                assert_eq!(response.error.unwrap().code, "unauthorized");
+            }
+            let token = env_value(&grant, "TERAX_CONTROL_TOKEN");
+            for method in [METHOD_OPEN, METHOD_IDENTIFY, METHOD_PING, METHOD_HOOK] {
+                let mut request = question(&token, "q2", "p");
+                request.method = method.into();
+                assert!(authenticate(&request, &state, host.as_ref()).is_err(), "{method}");
+            }
+        }
+
+        #[test]
+        fn the_question_reaches_the_ui_and_the_answer_comes_back() {
+            let state = state(Some("terax-cli"));
+            let grant = state.askpass_grant("dypod").unwrap();
+            let token = env_value(&grant, "TERAX_CONTROL_TOKEN");
+            let (seen_tx, seen) = channel();
+            let ui_state = state.clone();
+            let response = ask(
+                &state,
+                question(&token, "q1", "me@dypod's password: "),
+                Duration::from_secs(10),
+                move |target, request| {
+                    seen_tx.send((target, request.clone())).unwrap();
+                    assert!(ui_state.deliver(
+                        &request.id,
+                        FrontendResponse {
+                            ok: true,
+                            result: Some(json!({ "answer": "hunter2" })),
+                            error: None,
+                        }
+                    ));
+                },
+            );
+            let (target, request) = seen.recv().unwrap();
+            assert_eq!(target, "main");
+            assert_eq!(request.method, METHOD_ASKPASS);
+            assert_eq!(
+                request.params,
+                json!({ "host": "dypod", "prompt": "me@dypod's password: ", "kind": "secret" })
+            );
+            assert!(response.ok);
+            assert_eq!(response.result, Some(json!({ "answer": "hunter2" })));
+            assert!(state.0.pending.lock().unwrap().is_empty());
+        }
+
+        #[test]
+        fn a_dismissed_or_unanswered_question_answers_nothing() {
+            let state = state(Some("terax-cli"));
+            let grant = state.askpass_grant("dypod").unwrap();
+            let token = env_value(&grant, "TERAX_CONTROL_TOKEN");
+            let ui_state = state.clone();
+            let cancelled = ask(&state, question(&token, "q1", "p"), Duration::from_secs(10), move |_, request| {
+                ui_state.deliver(
+                    &request.id,
+                    FrontendResponse {
+                        ok: false,
+                        result: None,
+                        error: Some(terax_control_protocol::ControlError::new("cancelled", "dismissed")),
+                    },
+                );
+            });
+            assert_eq!(cancelled.error.unwrap().code, "cancelled");
+
+            let started = std::time::Instant::now();
+            let unanswered = ask(&state, question(&token, "q2", "p"), Duration::from_millis(100), |_, _| {});
+            assert_eq!(unanswered.error.unwrap().code, "frontend_timeout");
+            assert!(started.elapsed() < Duration::from_secs(5));
+            assert!(state.0.pending.lock().unwrap().is_empty());
+            assert!(state.0.askpass.lock().unwrap().values().all(|entry| entry.pending.is_empty()));
+        }
+
+        #[test]
+        fn ending_the_connection_ends_its_open_question_and_its_token() {
+            let state = state(Some("terax-cli"));
+            let grant = state.askpass_grant("dypod").unwrap();
+            let token = env_value(&grant, "TERAX_CONTROL_TOKEN");
+            let started = std::time::Instant::now();
+            let response = ask(&state, question(&token, "q1", "p"), Duration::from_secs(30), move |_, _| {
+                thread::sleep(Duration::from_millis(100));
+                drop(grant);
+            });
+            assert_eq!(response.error.unwrap().code, "frontend_unavailable");
+            assert!(started.elapsed() < Duration::from_secs(5));
+            let again = ask(&state, question(&token, "q2", "p"), Duration::from_secs(1), |_, _| {
+                panic!("a revoked token must not reach the UI")
+            });
+            assert_eq!(again.error.unwrap().code, "unauthorized");
+        }
+
+        #[test]
+        fn without_a_window_or_with_a_bad_question_nothing_is_shown() {
+            let state = state(Some("terax-cli"));
+            let grant = state.askpass_grant("dypod").unwrap();
+            let token = env_value(&grant, "TERAX_CONTROL_TOKEN");
+            let mut long = question(&token, "q1", &"x".repeat(MAX_ASKPASS_PROMPT + 1));
+            let response = ask(&state, long.clone(), Duration::from_secs(1), |_, _| panic!("shown"));
+            assert_eq!(response.error.unwrap().code, "invalid_params");
+            long.params = json!({ "prompt": 7 });
+            let response = ask(&state, long, Duration::from_secs(1), |_, _| panic!("shown"));
+            assert_eq!(response.error.unwrap().code, "invalid_params");
+            state.control_frontend_ready("main", false);
+            let response = ask(&state, question(&token, "q2", "p"), Duration::from_secs(1), |_, _| panic!("shown"));
+            assert_eq!(response.error.unwrap().code, "frontend_not_ready");
+        }
+
+        #[test]
+        fn host_key_questions_are_classified_for_the_ui() {
+            let state = state(Some("terax-cli"));
+            let grant = state.askpass_grant("dypod").unwrap();
+            let token = env_value(&grant, "TERAX_CONTROL_TOKEN");
+            let (seen_tx, seen) = channel();
+            let ui_state = state.clone();
+            let prompt = "The authenticity of host 'dypod (203.0.113.7)' can't be established.\nAre you sure you want to continue connecting (yes/no/[fingerprint])? ";
+            ask(&state, question(&token, "q1", prompt), Duration::from_secs(10), move |_, request| {
+                seen_tx.send(request.params.clone()).unwrap();
+                ui_state.deliver(&request.id, FrontendResponse { ok: true, result: Some(json!({ "answer": "yes" })), error: None });
+            });
+            assert_eq!(seen.recv().unwrap()["kind"], json!({ "yes_no": { "host_key": true } }));
+        }
+    }
 
     fn open_params(path: String) -> OpenParams {
         OpenParams {

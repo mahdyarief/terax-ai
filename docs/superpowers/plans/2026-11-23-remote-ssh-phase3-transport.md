@@ -73,10 +73,17 @@ From the app, connect to a host named in `~/.ssh/config` (or `user@host`), insta
 
 ### Task 5: Askpass
 
-- [ ] `terax-cli`: with `TERAX_SSH_ASKPASS=1`, send `askpass { connection, prompt }` and print the answer (exit 1 when cancelled, which OpenSSH reads as "no answer").
-- [ ] Control server: the `askpass` method, routed to the frontend like `hook`, with a 300 s wait; classify the prompt (secret, yes/no, new host key, changed host key) in a pure function.
-- [ ] Frontend: the dialog (host, prompt text, a masked field or yes/no), cancel on Escape.
-- [ ] Tests: CLI argument and env handling; the classifier on real OpenSSH prompt texts; the control method's routing and timeout; the answer never appears in a log line.
+- [x] `terax-cli`: with `TERAX_SSH_ASKPASS=1`, send `askpass { connection, prompt }` and print the answer (exit 1 when cancelled, which OpenSSH reads as "no answer").
+- [x] Control server: the `askpass` method, routed to the frontend like `hook`, with a 300 s wait; classify the prompt (secret, yes/no, new host key, changed host key) in a pure function.
+- [x] Frontend: the dialog (host, prompt text, a masked field or yes/no), cancel on Escape.
+- [x] Tests: CLI argument and env handling; the classifier on real OpenSSH prompt texts; the control method's routing and timeout; the answer never appears in a log line.
+  - Credentials: `ControlState::askpass_grant(host)` makes a token for one `ssh` process and gives its environment (`SSH_ASKPASS=<bundled terax-cli>`, `SSH_ASKPASS_REQUIRE=force`, `TERAX_SSH_ASKPASS=1`, `TERAX_CONTROL_ADDR`, `TERAX_CONTROL_TOKEN`). The `askpass` method accepts only such a token (not the app's, not a terminal's), and such a token is good for nothing else; the host comes from the grant, never from the caller. Dropping the grant revokes the token and ends any question still open. `askpass` is not in `METHODS`, the catalog terminals may call. `None` without a bundled CLI (Task 6 decides what then).
+  - The CLI reads only the endpoint in its environment (never the descriptor file), sends the prompt and `SSH_ASKPASS_PROMPT`, prints the answer to stdout and nothing else; `confirm` answers by exit status, `none` (a notice) succeeds at once; a dismissed dialog or any failure exits 1 with nothing on stdout.
+  - `classify` (control protocol, pure): `secret`, `yes_no { host_key }`, `changed_host_key` (shown with a warning and only a Close button), `confirm`, `notice`, from OpenSSH 9.x texts. `AskpassAnswer`'s `Debug` redacts the answer; the server and bridge log no params or results.
+  - `forward_to_frontend`'s wait became `await_frontend(state, request, timeout, emit)`, so routing and timeouts are tested without Tauri; askpass waits `ASKPASS_WAIT` (300 s).
+  - Frontend: `modules/remote` (a queue store, `AskpassDialog`: OpenSSH's text verbatim in monospace, a masked field, Escape cancels; the body is keyed by question so nothing typed outlives it). Notices become a toast.
+  - Tests: protocol 6, CLI 6, server 7, frontend 3. Mutation: 9 mutants killed; the token check first survived because the test tried wrong tokens before any grant existed.
+  - Real OpenSSH (`crates/terax-cli/tests/askpass_over_ssh.rs`, ignored): Windows' OpenSSH 9.5 ran `terax-cli` as askpass with no console, and dypod's new host key reached the endpoint verbatim, classified `yes_no { host_key: true }`; "yes" was accepted. The passphrase half is not yet confirmed: dypod takes keys only, and a throwaway key's passphrase is asked only once the server accepts the key. Runs that answered wrong got this machine banned by dypod's fail2ban; the test now authorizes the throwaway key for its run (restricted to `true`, removed on drop) and answers the right passphrase, so the server sees no failed login. To run once the ban lifts.
 
 ### Task 6: Connections and state
 

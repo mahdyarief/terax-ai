@@ -1,8 +1,14 @@
+import {
+  AskpassParamsError,
+  parseAskpassQuestion,
+  useAskpassStore,
+} from "@/modules/remote";
 import { DEFAULT_SPACE_ID, type Tab } from "@/modules/tabs/lib/useTabs";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { type RefObject, useEffect } from "react";
+import { toast } from "sonner";
 import { resolveControlContext } from "./lib/context";
 import { createReadinessQueue } from "./lib/readiness";
 
@@ -96,6 +102,35 @@ async function respond(
   }
 }
 
+/** OpenSSH's question: shown in the askpass dialog, answered to the CLI. */
+async function answerAskpass(request: ControlRequest): Promise<void> {
+  let question: ReturnType<typeof parseAskpassQuestion>;
+  try {
+    question = parseAskpassQuestion(request.id, request.params);
+  } catch (error) {
+    if (error instanceof AskpassParamsError) {
+      throw new RequestError("invalid_params", error.message);
+    }
+    throw error;
+  }
+  if (question.kind === "notice") {
+    // Information only (touch a security key): ssh ends it by itself.
+    toast(`SSH: ${question.host}`, { description: question.prompt.trim() });
+    await respond(request.id, {
+      ok: true,
+      result: { answer: "", confirmed: false },
+    });
+    return;
+  }
+  const answer = await useAskpassStore.getState().ask(question);
+  await respond(
+    request.id,
+    answer
+      ? { ok: true, result: answer }
+      : { ok: false, error: { code: "cancelled", message: "dismissed" } },
+  );
+}
+
 export function useControlBridge({
   ready,
   tabsRef,
@@ -111,6 +146,10 @@ export function useControlBridge({
 
     const handleRequest = async (request: ControlRequest) => {
       try {
+        if (request.method === "askpass") {
+          await answerAskpass(request);
+          return;
+        }
         const context = resolveControlContext(
           tabsRef.current ?? [],
           activeTabIdRef.current ?? 0,
