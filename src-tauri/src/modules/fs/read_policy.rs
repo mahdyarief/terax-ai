@@ -36,12 +36,14 @@ pub(super) fn readable(path: &Path) -> Result<(), String> {
     }
 }
 
-/// Refuses this app's runtime directory (the control credentials), wherever
-/// the cache directory has been relocated to. A host concern: a remote
-/// agent has its own.
+/// Refuses this app's runtime directories (the control credentials of a
+/// release and of a dev build), wherever the cache directory has been
+/// relocated to. A host concern: a remote agent has its own.
 pub(super) fn deny_runtime(path: &Path) -> Result<(), String> {
     if let Some(cache) = dirs::cache_dir() {
-        deny_runtime_directory(path, &cache.join("terax"))?;
+        for name in terax_control_protocol::RUNTIME_DIRS {
+            deny_runtime_directory(path, &cache.join(name))?;
+        }
     }
     Ok(())
 }
@@ -94,6 +96,15 @@ mod tests {
             std::os::unix::fs::symlink(&relocated, &alias).unwrap();
             assert!(deny_runtime_directory(&actual.join("control.json"), &alias).is_err());
         }
+    }
+
+    #[test]
+    fn a_dev_builds_credentials_are_protected_as_well() {
+        let cache = dirs::cache_dir().unwrap();
+        for name in ["terax", "terax-dev"] {
+            assert!(deny_runtime(&cache.join(name).join("control.json")).is_err());
+        }
+        assert!(deny_runtime(&cache.join("terax-devtools").join("a")).is_ok());
     }
 
     #[test]

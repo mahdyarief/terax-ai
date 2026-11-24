@@ -5,6 +5,17 @@ pub mod askpass;
 pub mod hook;
 
 pub const PROTOCOL_VERSION: u16 = 1;
+/// The folder under the user's cache directory that holds the control
+/// descriptor (`control.json`). A debug build has its own, so a dev build run
+/// beside the installed app, even from one of its terminals, never replaces
+/// that app's descriptor.
+pub const RUNTIME_DIR: &str = if cfg!(debug_assertions) {
+    "terax-dev"
+} else {
+    "terax"
+};
+/// Every name `RUNTIME_DIR` can have, for refusing them all.
+pub const RUNTIME_DIRS: [&str; 2] = ["terax", "terax-dev"];
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024;
 pub const METHOD_PING: &str = "ping";
 pub const METHOD_CAPABILITIES: &str = "capabilities";
