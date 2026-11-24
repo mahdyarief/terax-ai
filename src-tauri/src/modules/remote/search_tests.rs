@@ -173,3 +173,64 @@ fn grep_and_glob_run_on_the_server() {
     let glob = run_glob("**/*.rs".into(), r.root.clone(), None, Some(r.env.clone())).unwrap();
     assert_eq!(glob.hits.len(), 2);
 }
+
+#[test]
+fn the_ai_tools_search_and_read_on_the_server_without_its_secrets() {
+    use crate::modules::fs::ai::{read_file_in, run_glob, run_grep, run_read_dir};
+    use crate::modules::fs::file::ReadResult;
+
+    let env = WorkspaceEnv::Ssh {
+        host: connected("search-ai"),
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().to_string_lossy().replace('\\', "/");
+    std::fs::create_dir_all(format!("{base}/root/src")).unwrap();
+    for (name, text) in [
+        ("src/lib.rs", "pub fn needle() {}\n"),
+        ("server.key", "needle\n"),
+        ("id_ed25519", "needle\n"),
+        (".env", "NEEDLE=1\n"),
+        ("notes.md", "a needle\n"),
+    ] {
+        std::fs::write(format!("{base}/root/{name}"), text).unwrap();
+    }
+    let registry = WorkspaceRegistry::default();
+    let root = registry
+        .authorize_in(&env, &format!("{base}/root"))
+        .unwrap();
+
+    let grep = run_grep(
+        &registry,
+        "needle".into(),
+        root.clone(),
+        None,
+        Some(true),
+        None,
+        &env,
+    )
+    .unwrap();
+    let mut rels: Vec<_> = grep.hits.iter().map(|hit| hit.rel.as_str()).collect();
+    rels.sort();
+    assert_eq!(rels, ["notes.md", "src/lib.rs"]);
+    assert!(grep.hits.iter().all(|hit| hit.path.starts_with(&root)));
+
+    let glob = run_glob(&registry, "**/*".into(), root.clone(), None, &env).unwrap();
+    let mut rels: Vec<_> = glob.hits.iter().map(|hit| hit.rel.as_str()).collect();
+    rels.sort();
+    assert_eq!(rels, ["notes.md", "src/lib.rs"]);
+
+    let mut names: Vec<_> = run_read_dir(&registry, &env, &root)
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    names.sort();
+    assert_eq!(names, ["notes.md", "src"]);
+
+    let read = read_file_in(&registry, &env, &format!("{root}/src/lib.rs"), 1024).unwrap();
+    assert!(matches!(read, ReadResult::Text { ref content, .. } if content.contains("needle")));
+    let secret = read_file_in(&registry, &env, &format!("{root}/server.key"), 1024);
+    assert_eq!(secret.err().as_deref(), Some("refused sensitive AI file"));
+    // Outside the authorized folder.
+    assert!(run_glob(&registry, "*".into(), base.clone(), None, &env).is_err());
+}

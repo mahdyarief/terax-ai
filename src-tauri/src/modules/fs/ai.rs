@@ -13,6 +13,7 @@ use crate::modules::workspace::{
     backend_for, resolve_path, Location, WorkspaceEnv, WorkspaceRegistry,
 };
 use terax_workspace_core::confined::{Confine, ConfinedError, ConfinedRead};
+use terax_workspace_core::grep::{GlobRequest, GrepPattern, GrepRequest};
 use terax_workspace_core::paths::join;
 
 fn path_error(error: std::io::Error) -> String {
@@ -147,19 +148,36 @@ pub async fn ai_read_dir(
     workspace: Option<WorkspaceEnv>,
 ) -> Result<Vec<DirEntry>, String> {
     super::blocking(move || {
-        let registry = app.state::<WorkspaceRegistry>();
-        let workspace = WorkspaceEnv::from_option(workspace);
-        let path = authorized_in(&registry, &workspace, &path)?;
-        let entries =
-            super::tree::read_dir_entries(path.clone(), false, None, Some(workspace.clone()))?;
-        Ok(entries
-            .into_iter()
-            .filter(|entry| {
-                authorized_in(&registry, &workspace, &join(&path, &entry.name)).is_ok()
-            })
-            .collect())
+        run_read_dir(
+            &app.state::<WorkspaceRegistry>(),
+            &WorkspaceEnv::from_option(workspace),
+            &path,
+        )
     })
     .await
+}
+
+pub(crate) fn run_read_dir(
+    registry: &WorkspaceRegistry,
+    workspace: &WorkspaceEnv,
+    path: &str,
+) -> Result<Vec<DirEntry>, String> {
+    let path = authorized_in(registry, workspace, path)?;
+    let entries =
+        super::tree::read_dir_entries(path.clone(), false, None, Some(workspace.clone()))?;
+    Ok(entries
+        .into_iter()
+        .filter(|entry| {
+            let child = join(&path, &entry.name);
+            // On a server every canonicalize is a round trip: a plain name in
+            // a canonical folder is already canonical, only a link can lead
+            // elsewhere.
+            if workspace.is_ssh() && !matches!(entry.kind, super::tree::EntryKind::Symlink) {
+                return readable_in(&child, workspace).is_ok();
+            }
+            authorized_in(registry, workspace, &child).is_ok()
+        })
+        .collect())
 }
 
 fn walk(registry: &WorkspaceRegistry, root: &Path) -> Result<ignore::Walk, String> {
@@ -183,37 +201,67 @@ pub async fn ai_glob(
     workspace: Option<WorkspaceEnv>,
 ) -> Result<GlobResponse, String> {
     super::blocking(move || {
-        let registry = app.state::<WorkspaceRegistry>();
-        let workspace = WorkspaceEnv::from_option(workspace);
-        let root_path = authorized(&registry, &resolve_path(&root, &workspace))?;
-        let matcher = Glob::new(&pattern)
-            .map_err(|e| e.to_string())?
-            .compile_matcher();
-        let cap = max_results.unwrap_or(500).clamp(1, 2000);
-        let mut hits = Vec::new();
-        let mut truncated = false;
-        for entry in walk(&registry, &root_path)?.flatten() {
-            if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-                continue;
-            }
-            let Ok(rel) = entry.path().strip_prefix(&root_path) else {
-                continue;
-            };
-            if !matcher.is_match(rel) || authorized(&registry, entry.path()).is_err() {
-                continue;
-            }
-            if hits.len() == cap {
-                truncated = true;
-                break;
-            }
-            hits.push(GlobHit {
-                path: super::display_path(entry.path(), &root_path, &root, &workspace),
-                rel: super::to_canon(rel),
-            });
-        }
-        Ok(GlobResponse { hits, truncated })
+        run_glob(
+            &app.state::<WorkspaceRegistry>(),
+            pattern,
+            root,
+            max_results,
+            &WorkspaceEnv::from_option(workspace),
+        )
     })
     .await
+}
+
+/// A hit the model may see: on a server, where the walk ran without the
+/// app's secret-path policy, one the policy refuses is left out.
+fn shareable(path: &str, workspace: &WorkspaceEnv) -> bool {
+    readable_in(path, workspace).is_ok()
+}
+
+pub(crate) fn run_glob(
+    registry: &WorkspaceRegistry,
+    pattern: String,
+    root: String,
+    max_results: Option<usize>,
+    workspace: &WorkspaceEnv,
+) -> Result<GlobResponse, String> {
+    if workspace.is_ssh() {
+        let root = authorized_in(registry, workspace, &root)?;
+        let mut response = backend_for(workspace).glob(&GlobRequest {
+            root,
+            pattern,
+            max_results: Some(max_results.unwrap_or(500).clamp(1, 2000)),
+        })?;
+        response.hits.retain(|hit| shareable(&hit.path, workspace));
+        return Ok(response);
+    }
+    let root_path = authorized(registry, &resolve_path(&root, workspace))?;
+    let matcher = Glob::new(&pattern)
+        .map_err(|e| e.to_string())?
+        .compile_matcher();
+    let cap = max_results.unwrap_or(500).clamp(1, 2000);
+    let mut hits = Vec::new();
+    let mut truncated = false;
+    for entry in walk(registry, &root_path)?.flatten() {
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let Ok(rel) = entry.path().strip_prefix(&root_path) else {
+            continue;
+        };
+        if !matcher.is_match(rel) || authorized(registry, entry.path()).is_err() {
+            continue;
+        }
+        if hits.len() == cap {
+            truncated = true;
+            break;
+        }
+        hits.push(GlobHit {
+            path: super::display_path(entry.path(), &root_path, &root, workspace),
+            rel: super::to_canon(rel),
+        });
+    }
+    Ok(GlobResponse { hits, truncated })
 }
 
 fn matching_lines<'a>(
@@ -248,59 +296,97 @@ pub async fn ai_grep(
     workspace: Option<WorkspaceEnv>,
 ) -> Result<GrepResponse, String> {
     super::blocking(move || {
-        let registry = app.state::<WorkspaceRegistry>();
-        let workspace = WorkspaceEnv::from_option(workspace);
-        let root_path = authorized(&registry, &resolve_path(&root, &workspace))?;
-        let matcher = RegexBuilder::new(&pattern)
-            .case_insensitive(case_insensitive.unwrap_or(false))
-            .build()
-            .map_err(|e| e.to_string())?;
-        let mut globs = GlobSetBuilder::new();
-        for pattern in glob.unwrap_or_default() {
-            globs.add(Glob::new(&pattern).map_err(|e| e.to_string())?);
-        }
-        let globs = globs.build().map_err(|e| e.to_string())?;
-        let cap = max_results.unwrap_or(200).clamp(1, 2000);
-        let mut hits = Vec::new();
-        let mut files_scanned = 0;
-        let mut truncated = false;
-        'files: for entry in walk(&registry, &root_path)?.flatten() {
-            if !entry.file_type().is_some_and(|kind| kind.is_file()) {
-                continue;
-            }
-            let Ok(rel) = entry.path().strip_prefix(&root_path) else {
-                continue;
-            };
-            if !globs.is_empty() && !globs.is_match(rel) {
-                continue;
-            }
-            let Ok(ReadResult::Text { content, .. }) =
-                read_file(&registry, entry.path(), 5 * 1024 * 1024)
-            else {
-                continue;
-            };
-            files_scanned += 1;
-            for (line, text) in matching_lines(&content, &matcher) {
-                if hits.len() == cap {
-                    truncated = true;
-                    break 'files;
-                }
-                hits.push(GrepHit {
-                    path: super::display_path(entry.path(), &root_path, &root, &workspace),
-                    rel: super::to_canon(rel),
-                    line: (line + 1) as u64,
-                    text: clip_line(text),
-                });
-            }
-        }
-        Ok(GrepResponse {
-            hits,
-            truncated,
-            files_scanned,
-            cancelled: false,
-        })
+        run_grep(
+            &app.state::<WorkspaceRegistry>(),
+            pattern,
+            root,
+            glob,
+            case_insensitive,
+            max_results,
+            &WorkspaceEnv::from_option(workspace),
+        )
     })
     .await
+}
+
+pub(crate) fn run_grep(
+    registry: &WorkspaceRegistry,
+    pattern: String,
+    root: String,
+    glob: Option<Vec<String>>,
+    case_insensitive: Option<bool>,
+    max_results: Option<usize>,
+    workspace: &WorkspaceEnv,
+) -> Result<GrepResponse, String> {
+    if workspace.is_ssh() {
+        let root = authorized_in(registry, workspace, &root)?;
+        let mut response = backend_for(workspace).grep(
+            &GrepRequest {
+                root,
+                pattern: GrepPattern::Regex {
+                    pattern,
+                    case_insensitive: case_insensitive.unwrap_or(false),
+                },
+                globs: glob.unwrap_or_default(),
+                max_results: Some(max_results.unwrap_or(200).clamp(1, 2000)),
+            },
+            &|| false,
+        )?;
+        response.hits.retain(|hit| shareable(&hit.path, workspace));
+        for hit in &mut response.hits {
+            hit.text = clip_line(&hit.text);
+        }
+        return Ok(response);
+    }
+    let root_path = authorized(registry, &resolve_path(&root, workspace))?;
+    let matcher = RegexBuilder::new(&pattern)
+        .case_insensitive(case_insensitive.unwrap_or(false))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut globs = GlobSetBuilder::new();
+    for pattern in glob.unwrap_or_default() {
+        globs.add(Glob::new(&pattern).map_err(|e| e.to_string())?);
+    }
+    let globs = globs.build().map_err(|e| e.to_string())?;
+    let cap = max_results.unwrap_or(200).clamp(1, 2000);
+    let mut hits = Vec::new();
+    let mut files_scanned = 0;
+    let mut truncated = false;
+    'files: for entry in walk(registry, &root_path)?.flatten() {
+        if !entry.file_type().is_some_and(|kind| kind.is_file()) {
+            continue;
+        }
+        let Ok(rel) = entry.path().strip_prefix(&root_path) else {
+            continue;
+        };
+        if !globs.is_empty() && !globs.is_match(rel) {
+            continue;
+        }
+        let Ok(ReadResult::Text { content, .. }) =
+            read_file(registry, entry.path(), 5 * 1024 * 1024)
+        else {
+            continue;
+        };
+        files_scanned += 1;
+        for (line, text) in matching_lines(&content, &matcher) {
+            if hits.len() == cap {
+                truncated = true;
+                break 'files;
+            }
+            hits.push(GrepHit {
+                path: super::display_path(entry.path(), &root_path, &root, workspace),
+                rel: super::to_canon(rel),
+                line: (line + 1) as u64,
+                text: clip_line(text),
+            });
+        }
+    }
+    Ok(GrepResponse {
+        hits,
+        truncated,
+        files_scanned,
+        cancelled: false,
+    })
 }
 
 #[cfg(test)]

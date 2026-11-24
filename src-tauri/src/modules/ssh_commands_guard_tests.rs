@@ -32,10 +32,26 @@ const PHASE6: Ssh = Pending("Phase 6: AI tools on a server");
 
 /// (file under `src/modules`, command, what it does on a server)
 const COMMANDS: &[(&str, &str, Ssh)] = &[
-    ("fs/ai.rs", "ai_glob", PHASE6),
-    ("fs/ai.rs", "ai_grep", PHASE6),
-    ("fs/ai.rs", "ai_read_dir", PHASE6),
-    ("fs/ai.rs", "ai_read_file", PHASE6),
+    (
+        "fs/ai.rs",
+        "ai_glob",
+        Works("the_ai_tools_search_and_read_on_the_server_without_its_secrets"),
+    ),
+    (
+        "fs/ai.rs",
+        "ai_grep",
+        Works("the_ai_tools_search_and_read_on_the_server_without_its_secrets"),
+    ),
+    (
+        "fs/ai.rs",
+        "ai_read_dir",
+        Works("the_ai_tools_search_and_read_on_the_server_without_its_secrets"),
+    ),
+    (
+        "fs/ai.rs",
+        "ai_read_file",
+        Works("the_ai_tools_search_and_read_on_the_server_without_its_secrets"),
+    ),
     (
         "fs/assets.rs",
         "asset_grant",
