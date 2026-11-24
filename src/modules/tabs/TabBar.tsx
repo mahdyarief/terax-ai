@@ -55,6 +55,7 @@ import {
   useState,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
+import { shouldCloseTabOnMiddleMouse } from "./lib/middleClickClose";
 import { selectTabAgentStatus } from "./lib/tabAgentStatus";
 import { labelFor } from "./lib/tabLabel";
 import { tabWheelPixels } from "./lib/tabWheel";
@@ -363,18 +364,18 @@ export function TabBar({
                     }
                   }}
                   onDoubleClick={() => isPreview && onPin(t.id)}
-                  onAuxClick={(e) => {
-                    if (e.button === 1 && tabs.length > 1) {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      onClose(t.id);
-                    }
-                  }}
+                  // Middle-click close must run on mousedown: preventDefault
+                  // here (autoscroll suppress) cancels auxclick per the DOM
+                  // spec, so an onAuxClick handler never fires (#609 / #400).
                   // Suppress Radix's switch-on-mousedown so a tab grabbed to
                   // drag (or a plain click) only activates on release.
                   onMouseDown={(e) => {
                     if (e.button === 1) {
                       e.preventDefault();
+                      e.stopPropagation();
+                      if (shouldCloseTabOnMiddleMouse(e.button, tabs.length)) {
+                        onClose(t.id);
+                      }
                       return;
                     }
                     if (
