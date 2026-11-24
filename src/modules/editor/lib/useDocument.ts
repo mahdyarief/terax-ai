@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { detectEol, type Eol, normalizeToLf, restoreEol } from "./eol";
+import { saveFailure } from "./saveFailure";
 
 type ReadResult =
   | { kind: "text"; content: string; size: number; mtime: number }
@@ -27,6 +28,10 @@ type Options = {
   path: string;
   onDirtyChange?: (dirty: boolean) => void;
 };
+
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
 
 export function useDocument({ path, onDirtyChange }: Options) {
   const [doc, setDoc] = useState<DocumentState>({ status: "loading" });
@@ -83,7 +88,7 @@ export function useDocument({ path, onDirtyChange }: Options) {
         workspace: currentWorkspaceEnv(),
       }).catch(() => null);
       if (stat && stat.mtime !== known) {
-        const name = path.split(/[\\/]/).pop() ?? path;
+        const name = fileName(path);
         toast.warning("File changed on disk", {
           id: `save-conflict:${path}`,
           description: `${name} was modified by another program while you had unsaved changes. Overwrite to keep your version.`,
@@ -92,7 +97,18 @@ export function useDocument({ path, onDirtyChange }: Options) {
         return false;
       }
     }
-    await writeToDisk();
+    try {
+      await writeToDisk();
+    } catch (e) {
+      // The buffer stays dirty. One toast per file, so an autosave against a
+      // server that is reconnecting does not stack them.
+      toast.error(`Couldn't save ${fileName(path)}`, {
+        id: `save-failed:${path}`,
+        description: saveFailure(e),
+      });
+      return false;
+    }
+    toast.dismiss(`save-failed:${path}`);
     return true;
   }, [path, writeToDisk]);
 

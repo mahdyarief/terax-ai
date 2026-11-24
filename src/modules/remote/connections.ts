@@ -283,6 +283,39 @@ export function ensureConnected(host: string): Promise<void> {
   });
 }
 
+/**
+ * Resolves once `host` is ready, without starting an attempt: for work that
+ * a space's own connection serves (a terminal opened while its server is
+ * still connecting or reconnecting). Rejects when there is no attempt to
+ * wait for: disconnected, or failed with ssh's reason.
+ */
+export function whenServerReady(host: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    // Unknown means the state has not arrived yet; a restored space is
+    // connecting.
+    const settle = (state: RemoteState | undefined): boolean => {
+      if (state?.state === "ready") {
+        resolve();
+        return true;
+      }
+      if (state?.state === "idle") {
+        reject(new Error(`${host} is not connected`));
+        return true;
+      }
+      if (state?.state === "failed") {
+        reject(new Error(state.reason));
+        return true;
+      }
+      return false;
+    };
+    if (settle(useRemoteStore.getState().hosts[host])) return;
+    const stop = useRemoteStore.subscribe((s, previous) => {
+      if (s.hosts[host] === previous.hosts[host]) return;
+      if (settle(s.hosts[host])) stop();
+    });
+  });
+}
+
 export async function fetchRemoteHome(host: string): Promise<string> {
   return invoke<string>("remote_home", { host });
 }

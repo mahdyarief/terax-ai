@@ -26,6 +26,7 @@ import {
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
+import { whenServerReady } from "@/modules/remote/connections";
 
 const textEncoder = new TextEncoder();
 const receivers = new Map<number, PtyOutputReceiver>();
@@ -217,11 +218,15 @@ export async function openPty(
       attachToken = attached.attachToken;
       attachEpoch = attached.leaseEpoch;
     } else {
+      const workspace = currentWorkspaceEnv();
+      // A server's terminal opened while its space is still connecting (a
+      // restored tab, Retry after a drop) starts once the server is back.
+      if (workspace.kind === "ssh") await whenServerReady(workspace.host);
       const opened = await invoke<{ id: number; token: string }>("pty_open", {
         cols,
         rows,
         cwd: cwd ?? null,
-        workspace: currentWorkspaceEnv(),
+        workspace,
         blocks: blocks ?? false,
         shell: shell ?? null,
         paneId: paneId ?? null,

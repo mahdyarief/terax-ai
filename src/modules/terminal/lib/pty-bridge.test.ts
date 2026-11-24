@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
         payload: { id: number; kind: string; agent?: string };
       }) => void),
   listen: vi.fn(),
+  workspace: { kind: "local" } as { kind: string; host?: string },
 }));
 
 vi.mock("@tauri-apps/api/core", () => ({
@@ -33,7 +34,7 @@ vi.mock("@tauri-apps/api/event", () => ({
 }));
 
 vi.mock("@/modules/workspace", () => ({
-  currentWorkspaceEnv: () => null,
+  currentWorkspaceEnv: () => mocks.workspace,
 }));
 
 // The bridge owns a process-wide hub, so every test gets a fresh module graph.
@@ -167,6 +168,32 @@ describe("PTY bridge over the multiplexed stream", () => {
     await first.close();
     await flush();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("starts a server's terminal once its server is back", async () => {
+    const { openPty } = await load();
+    const { useRemoteStore } = await import("@/modules/remote/connections");
+    nativeInvoke();
+    mocks.workspace = { kind: "ssh", host: "srv" };
+    try {
+      const apply = useRemoteStore.getState().apply;
+      apply({
+        host: "srv",
+        state: { state: "reconnecting", retry: 1, reason: "dropped" },
+      });
+      const opening = openPty(80, 24, { onData: vi.fn() });
+      await flush();
+      const commands = () =>
+        mocks.invoke.mock.calls.map(([command]) => command);
+      expect(commands()).not.toContain("pty_open");
+      apply({ host: "srv", state: { state: "ready" } });
+      await opening;
+      expect(openArguments()).toMatchObject({
+        workspace: { kind: "ssh", host: "srv" },
+      });
+    } finally {
+      mocks.workspace = { kind: "local" };
+    }
   });
 
   it("opens the stream before pty_open and no longer passes output channels", async () => {

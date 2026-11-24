@@ -23,9 +23,11 @@ Done. `shell::run_command_in` and `authorize_server_cwd` (a server has no defaul
 
 ### Task 3: UX polish
 
-- [ ] A terminal opened while its server is still connecting waits for `ready` instead of failing, and a disconnected terminal's Retry is offered as soon as the server is back.
-- [ ] Saving while the server is not connected says so ("<host> is not connected") instead of a raw error, and the buffer stays dirty.
-- [ ] The space switcher and tab strip mark a server's space with its host.
+- [x] A terminal opened while its server is still connecting waits for `ready` instead of failing, and a disconnected terminal's Retry is offered as soon as the server is back.
+- [x] Saving while the server is not connected says so ("<host> is not connected") instead of a raw error, and the buffer stays dirty.
+- [x] The space switcher marks a server's space with its host.
+
+Done. `whenServerReady(host)` (`remote/connections.ts`) waits without starting an attempt; `openPty` awaits it for an SSH workspace, so a restored tab or Retry after a drop starts once the server is back, and an idle or failed host fails with its reason. A failed save (any workspace; it used to reject unseen) toasts once per file, `saveFailure` naming a disconnected host, and returns false with the buffer dirty. `SpaceAvatar` carries a server badge for an SSH space (its name already ends in `(host)`).
 
 ### Task 4: Packaging
 

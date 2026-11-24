@@ -10,6 +10,7 @@ import {
   type RemoteState,
   touchRecentHost,
   useRemoteStore,
+  whenServerReady,
 } from "./connections";
 import { RemoteLogLines } from "./RemoteLogDialog";
 import { RemoteStatusLabel } from "./RemoteStatusItems";
@@ -161,5 +162,51 @@ describe("the log", () => {
     expect(log(null, "remote connections are not available")).toContain(
       "remote connections are not available",
     );
+  });
+});
+
+describe("waiting for a server", () => {
+  const set = (host: string, state: RemoteState) =>
+    useRemoteStore.getState().apply({ host, state });
+  const outcome = (p: Promise<void>) =>
+    p.then(
+      () => "ready",
+      (e: Error) => `rejected: ${e.message}`,
+    );
+
+  it("resolves at once for a ready server", async () => {
+    set("w-ready", { state: "ready" });
+    expect(await outcome(whenServerReady("w-ready"))).toBe("ready");
+  });
+
+  it("waits through connecting and reconnecting", async () => {
+    set("w-wait", { state: "reconnecting", retry: 1, reason: "dropped" });
+    let settled = false;
+    const waiting = outcome(whenServerReady("w-wait")).finally(() => {
+      settled = true;
+    });
+    set("w-wait", { state: "connecting" });
+    set("w-wait", { state: "handshaking" });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    set("w-wait", { state: "ready" });
+    expect(await waiting).toBe("ready");
+  });
+
+  it("waits for a state that has not arrived yet", async () => {
+    const waiting = outcome(whenServerReady("w-unknown"));
+    set("w-unknown", { state: "ready" });
+    expect(await waiting).toBe("ready");
+  });
+
+  it("gives up when there is no attempt to wait for", async () => {
+    set("w-idle", { state: "idle" });
+    expect(await outcome(whenServerReady("w-idle"))).toBe(
+      "rejected: w-idle is not connected",
+    );
+    const waiting = outcome(whenServerReady("w-fail"));
+    set("w-fail", { state: "connecting" });
+    set("w-fail", { state: "failed", reason: "Permission denied" });
+    expect(await waiting).toBe("rejected: Permission denied");
   });
 });
