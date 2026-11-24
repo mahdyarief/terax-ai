@@ -353,6 +353,13 @@ fn reviews_and_remotes_run_on_the_server() {
 }
 
 #[test]
+// The agent ships for Linux servers. Its watcher (notify) is inotify there
+// and ReadDirectoryChangesW in the Windows tests; on macOS notify uses
+// FSEvents, which missed this change in CI, and no macOS agent exists.
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the agent's watcher is not built for macOS"
+)]
 fn a_commit_made_on_the_server_reaches_source_control() {
     use std::sync::{mpsc, Arc, Mutex};
     use std::time::Duration;

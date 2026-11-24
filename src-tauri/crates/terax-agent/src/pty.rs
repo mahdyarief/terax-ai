@@ -33,13 +33,15 @@ struct Window {
 }
 
 impl Window {
-    /// Waits for room in the window; false once the terminal has ended.
-    fn wait_for_room(&self) -> bool {
+    /// Waits for room in the window and returns how much there is (a
+    /// read may take no more, so the window is never exceeded); `None` once
+    /// the terminal has ended. A credit that lands later only adds room.
+    fn wait_for_room(&self) -> Option<u64> {
         let mut state = self.state.lock().unwrap();
         while state.0 >= PTY_WINDOW && !state.1 {
             state = self.changed.wait(state).unwrap();
         }
-        !state.1
+        (!state.1).then(|| PTY_WINDOW - state.0)
     }
 
     fn credit(&self, bytes: u64) {
@@ -222,8 +224,9 @@ impl Ptys {
 /// ends or the reader does.
 fn pump(mut reader: impl Read, window: &Window, ended: &Mutex<bool>, id: PtyId, emit: &Emit) {
     let mut buffer = vec![0u8; PTY_CHUNK];
-    while window.wait_for_room() {
-        let read = match reader.read(&mut buffer) {
+    while let Some(room) = window.wait_for_room() {
+        let room = (room as usize).min(PTY_CHUNK);
+        let read = match reader.read(&mut buffer[..room]) {
             Ok(0) | Err(_) => return,
             Ok(read) => read,
         };
@@ -359,6 +362,47 @@ mod tests {
             last = now;
         }
         panic!("the reader never stopped");
+    }
+
+    /// Output in reads of an odd size, as a Unix terminal gives it (never a
+    /// multiple of the chunk).
+    struct OddFlood;
+
+    impl Read for OddFlood {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let n = buffer.len().min(4095);
+            buffer[..n].fill(b'y');
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn reads_of_any_size_never_go_past_the_window() {
+        let window = Arc::new(Window::default());
+        let ended = Arc::new(Mutex::new(false));
+        let sent = Arc::new(AtomicU64::new(0));
+        let emit: Emit = {
+            let sent = sent.clone();
+            Arc::new(move |envelope| {
+                let Envelope::PtyData { bytes, .. } = envelope else {
+                    panic!("only data");
+                };
+                sent.fetch_add(bytes.len() as u64, Ordering::SeqCst);
+            })
+        };
+        let pumping = {
+            let (window, ended) = (window.clone(), ended.clone());
+            thread::spawn(move || pump(OddFlood, &window, &ended, 7, &emit))
+        };
+        assert_eq!(
+            settle(&sent),
+            PTY_WINDOW,
+            "exactly the window, never past it"
+        );
+        window.credit(10_000);
+        assert_eq!(settle(&sent), PTY_WINDOW + 10_000);
+        window.end();
+        pumping.join().unwrap();
     }
 
     #[test]
