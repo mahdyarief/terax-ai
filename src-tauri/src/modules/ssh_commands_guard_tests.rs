@@ -365,6 +365,11 @@ const COMMANDS: &[(&str, &str, Ssh)] = &[
         Refused("remote LSP is a non-goal of v1: \"lsp: SSH workspaces are not supported\""),
     ),
     (
+        "pty/paste_image.rs",
+        "pty_paste_image",
+        Works("a_pasted_image_is_uploaded_to_the_server"),
+    ),
+    (
         "pty/mod.rs",
         "pty_open",
         Works("a_server_terminal_runs_through_the_apps_session"),

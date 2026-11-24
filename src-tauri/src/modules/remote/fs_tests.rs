@@ -325,3 +325,20 @@ fn previews_canonical_paths_and_project_memory_come_from_the_server() {
     .unwrap();
     assert_eq!(hits.hits.len(), 1);
 }
+
+#[test]
+fn a_pasted_image_is_uploaded_to_the_server() {
+    use crate::modules::pty::paste_image::{save_on_server, FOLDER};
+
+    let r = remote("paste-image");
+    // The server user's home stands in as the authorized folder here.
+    let path = save_on_server(&r.env, &r.root, b"png!", 1_795_534_212_042).unwrap();
+    assert_eq!(
+        path,
+        format!("{}/.cache/{FOLDER}/image-20261124-153012-042.png", r.root)
+    );
+    // On the server, in its spelling, with the bytes pasted.
+    assert_eq!(r.ws().metadata(&path).unwrap().len, 4);
+    let again = save_on_server(&r.env, &r.root, b"next", 1_795_534_212_042).unwrap();
+    assert_ne!(again, path);
+}

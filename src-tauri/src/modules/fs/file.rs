@@ -341,6 +341,11 @@ pub async fn fs_canonicalize(
     validate_link_path(&path, local_only)?;
     blocking(move || {
         let workspace = WorkspaceEnv::from_option(workspace);
+        // A link the user clicked must be a file on this machine: on every
+        // platform, not only where the local branch below is compiled.
+        if local_only == Some(true) && matches!(workspace, WorkspaceEnv::Ssh { .. }) {
+            return Err(terax_workspace_core::env::not_on_this_machine().to_string());
+        }
         #[cfg(windows)]
         if local_only == Some(true) {
             let canon =

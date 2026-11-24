@@ -376,7 +376,15 @@ mod tests {
             dir.path().join(std::ffi::OsString::from_wide(&[0x72, 0x65, 0x70, 0x6f, 0xD800]))
         };
         std::fs::create_dir(&granted).unwrap();
-        std::fs::create_dir(&lossy).unwrap();
+        if let Err(e) = std::fs::create_dir(&lossy) {
+            // APFS refuses a name that is not valid UTF-8 (EILSEQ), so no
+            // such sibling can exist on macOS to be confused with the grant.
+            if cfg!(target_os = "macos") && e.raw_os_error() == Some(92) {
+                eprintln!("skipped: the file system refuses non-UTF-8 names");
+                return;
+            }
+            panic!("create {}: {e}", lossy.display());
+        }
         std::fs::write(lossy.join("private.png"), "SYNTHETIC_PRIVATE_MEDIA").unwrap();
         std::fs::write(granted.join("safe.png"), "SAFE").unwrap();
         let link = granted.join("link");

@@ -151,6 +151,17 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Uploads `png` to `~/.cache/terax-image` under the server user's `home`.
+pub(crate) fn save_on_server(
+    workspace: &WorkspaceEnv,
+    home: &str,
+    png: &[u8],
+    now: u64,
+) -> Result<String, String> {
+    let dir = format!("{}/.cache/{FOLDER}", home.trim_end_matches('/'));
+    save(&*backend_for(workspace), &dir, '/', png, now).map_err(|e| e.to_string())
+}
+
 fn save_for(workspace: &WorkspaceEnv, png: &[u8]) -> Result<String, String> {
     let now = now_ms();
     match workspace {
@@ -159,8 +170,7 @@ fn save_for(workspace: &WorkspaceEnv, png: &[u8]) -> Result<String, String> {
                 .and_then(|registry| registry.workspace(host))
                 .ok_or_else(|| format!("{host} is not connected"))?;
             let home = remote.home().map_err(|e| e.to_string())?;
-            let dir = format!("{}/.cache/{FOLDER}", home.trim_end_matches('/'));
-            save(&*backend_for(workspace), &dir, '/', png, now).map_err(|e| e.to_string())
+            save_on_server(workspace, &home, png, now)
         }
         _ => {
             let dir = std::env::temp_dir().join(FOLDER);
