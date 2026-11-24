@@ -8,6 +8,26 @@ Installers are on the
 [Releases page](https://github.com/mahdyarief/terax-ai/releases). They are not
 code-signed; see the release notes for how to open them.
 
+## 0.9.6-dy — unreleased
+
+### From upstream pull requests
+
+Open pull requests from upstream Terax, taken ahead of their merge. See
+[docs/contributing/upstream-prs.md](docs/contributing/upstream-prs.md) for
+the full review, including those dy already covers.
+
+- Explorer: Rename in the context menu, and F2 (#1508).
+- Explorer: a file at a drive's root (`C:/`) is renamed, moved, pasted and
+  watched in that root, not in the drive's current folder (#1464).
+- Terminal: double-click selects a word and triple-click a line again
+  (#1520); selection autoscroll stays steady while dragging (#1515); the
+  WebGL view stays fitted to the grid (#1514); TUI apps no longer get bursts
+  of mouse wheel reports (#1500); the prompt keeps its original presentation
+  deadline (#1521).
+- PowerShell terminals no longer fail to start their integration for users
+  with `Set-StrictMode` in their profile (#1263).
+- The tab strip scrolls by the wheel's real distance (#1466).
+
 ## 0.9.5-dy — 2026-11-24
 
 ### SSH remote workspaces
