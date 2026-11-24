@@ -7,7 +7,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
   return (
     <Sonner
       theme={resolvedMode}
-      className="toaster group"
+      // Errors in toasts can be selected and copied.
+      className="toaster group select-text"
       style={
         {
           "--normal-bg": "var(--popover)",

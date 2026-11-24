@@ -14,6 +14,7 @@ import {
   whenServerReady,
 } from "./connections";
 import { RemoteLogLines } from "./RemoteLogDialog";
+import { RemoteGateNotice } from "./RemoteGate";
 import { RemoteStatusLabel } from "./RemoteStatusItems";
 
 describe("remote state events", () => {
@@ -241,5 +242,22 @@ describe("the next connection to a server", () => {
     stop();
     set("n-stop", { state: "ready" });
     expect(runs).toBe(0);
+  });
+});
+
+describe("a server's failure on screen", () => {
+  it("can be copied, with the log one click away", () => {
+    const html = renderToStaticMarkup(
+      createElement(RemoteGateNotice, {
+        host: "dypod",
+        state: { state: "failed", reason: "Permission denied (publickey)" },
+        error: null,
+        onConnect: () => {},
+      }),
+    );
+    expect(html).toContain("Permission denied (publickey)");
+    expect(html).toContain("select-text");
+    expect(html).toContain(">Copy<");
+    expect(html).toContain(">Show log<");
   });
 });

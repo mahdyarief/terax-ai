@@ -152,10 +152,11 @@ describe("the explorer while a server is not usable", () => {
     expect(notice(undefined)).toContain("Connect");
   });
 
-  it("shows progress without a button while connecting", () => {
+  it("shows progress without Connect while connecting, and its log", () => {
     const busy = notice({ state: "connecting" });
     expect(busy).toContain("Connecting…");
-    expect(busy).not.toContain("<button");
+    expect(busy).not.toContain(">Connect<");
+    expect(busy).toContain(">Show log<");
   });
 
   it("shows an authorization error once connected", () => {

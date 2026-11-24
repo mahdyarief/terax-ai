@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
 import type { WorkspaceEnv } from "@/modules/workspace";
 import { invoke } from "@tauri-apps/api/core";
 import { Fragment, type ReactNode, useEffect, useState } from "react";
@@ -102,18 +103,29 @@ export function RemoteGateNotice({
     ? describeState(state)
     : { label: "Not connected", detail: undefined };
   const reason = error ?? detail;
+  const showLog = useRemoteStore((s) => s.showLog);
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center text-[12px]">
       <div className="font-medium">SSH: {host}</div>
       <div className="text-muted-foreground">{state?.state === "ready" ? "Opening folder…" : label}</div>
       {reason ? (
-        <div className="max-w-full break-words text-red-600 dark:text-red-400">{reason}</div>
+        <div className="select-text max-w-full break-words text-red-600 dark:text-red-400">
+          {reason}
+        </div>
       ) : null}
-      {busy || state?.state === "ready" ? null : (
-        <Button size="sm" onClick={onConnect}>
-          Connect
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        {busy || state?.state === "ready" ? null : (
+          <Button size="sm" onClick={onConnect}>
+            Connect
+          </Button>
+        )}
+        {reason ? (
+          <CopyButton text={`SSH: ${host}\n${label}\n${reason}`} />
+        ) : null}
+        <Button size="sm" variant="outline" onClick={() => showLog(host)}>
+          Show log
         </Button>
-      )}
+      </div>
     </div>
   );
 }

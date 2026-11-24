@@ -123,7 +123,7 @@ function Question({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription asChild>
             {/* OpenSSH's own text, verbatim: fingerprints must be exact. */}
-            <pre className="whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground">
+            <pre className="select-text whitespace-pre-wrap break-words font-mono text-xs text-muted-foreground">
               {prompt.trim()}
             </pre>
           </DialogDescription>

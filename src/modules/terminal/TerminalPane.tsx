@@ -1,3 +1,4 @@
+import { CopyButton } from "@/components/ui/copy-button";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { TerminalSearchController } from "@/modules/terminal/search/TerminalSearchController";
 import { useTheme } from "@/modules/theme";
@@ -213,14 +214,8 @@ const GhosttyTerminalPane = memo(
             role="alert"
             className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-3 bg-background p-6 text-center text-sm"
           >
-            <strong>
-              {session.error.kind === "renderer"
-                ? "Unable to display terminal"
-                : session.error.kind === "disconnected"
-                  ? "Terminal disconnected"
-                  : "Unable to start terminal"}
-            </strong>
-            <p className="max-w-md break-words text-muted-foreground">
+            <strong>{terminalErrorTitle(session.error.kind)}</strong>
+            <p className="select-text max-w-md break-words text-muted-foreground">
               {session.error.message}
             </p>
             {session.error.kind === "renderer" && (
@@ -229,13 +224,18 @@ const GhosttyTerminalPane = memo(
                 display.
               </p>
             )}
-            <button
-              type="button"
-              className="rounded-md border px-3 py-1.5 hover:bg-accent focus-visible:outline-2"
-              onClick={session.retry}
-            >
-              {session.error.kind === "renderer" ? "Retry display" : "Retry"}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                className="rounded-md border px-3 py-1.5 hover:bg-accent focus-visible:outline-2"
+                onClick={session.retry}
+              >
+                {session.error.kind === "renderer" ? "Retry display" : "Retry"}
+              </button>
+              <CopyButton
+                text={`${terminalErrorTitle(session.error.kind)}\n${session.error.message}`}
+              />
+            </div>
           </div>
         )}
       </div>
@@ -253,3 +253,9 @@ export const TerminalPane = memo(
     },
   ),
 );
+
+function terminalErrorTitle(kind: "startup" | "renderer" | "disconnected") {
+  if (kind === "renderer") return "Unable to display terminal";
+  if (kind === "disconnected") return "Terminal disconnected";
+  return "Unable to start terminal";
+}

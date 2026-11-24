@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { CopyButton } from "@/components/ui/copy-button";
 import {
   Dialog,
   DialogContent,
@@ -43,6 +44,11 @@ function Log({ host, onClose }: { host: string; onClose: () => void }) {
         </DialogHeader>
         <RemoteLogLines lines={lines} error={error} />
         <DialogFooter>
+          <CopyButton
+            label="Copy log"
+            size="default"
+            text={error ?? `SSH log: ${host}\n${(lines ?? []).join("\n")}`}
+          />
           <Button variant="outline" onClick={refresh}>
             Refresh
           </Button>
@@ -68,7 +74,7 @@ export function RemoteLogLines({
         ? "Nothing logged yet."
         : lines.join("\n");
   return (
-    <pre className="max-h-[50vh] overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 font-mono text-[11px] leading-relaxed">
+    <pre className="select-text max-h-[50vh] overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted p-3 font-mono text-[11px] leading-relaxed">
       {text}
     </pre>
   );
