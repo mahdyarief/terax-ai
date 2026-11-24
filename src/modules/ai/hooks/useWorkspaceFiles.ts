@@ -17,11 +17,18 @@ type CacheEntry = {
 };
 
 const CACHE_TTL_MS = 60_000;
+/** A server's folder is watched only where the explorer is open; its list is
+ * cheap to fetch again (the app's index walks it at most every 10 s). */
+const SERVER_CACHE_TTL_MS = 10_000;
 const cache = new Map<string, CacheEntry>();
 const inflight = new Map<string, Promise<CacheEntry>>();
 
-function isFresh(entry: CacheEntry): boolean {
-  return Date.now() - entry.fetchedAt < CACHE_TTL_MS;
+export function isFresh(
+  entry: Pick<CacheEntry, "fetchedAt">,
+  server = currentWorkspaceEnv().kind === "ssh",
+  now = Date.now(),
+): boolean {
+  return now - entry.fetchedAt < (server ? SERVER_CACHE_TTL_MS : CACHE_TTL_MS);
 }
 
 function fetchFiles(root: string): Promise<CacheEntry> {

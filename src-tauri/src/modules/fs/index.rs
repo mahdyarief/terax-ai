@@ -25,6 +25,18 @@ const MAX_SLOTS: usize = 2;
 const MAX_BUILDS: usize = 2;
 const CANCEL_POLL: Duration = Duration::from_millis(25);
 const TTL: Duration = Duration::from_secs(45);
+/// A server's folder is watched only where the explorer is open, so a file
+/// made there anywhere else reaches the finder only when the index is
+/// walked again; the agent walks it in one call.
+const SERVER_TTL: Duration = Duration::from_secs(10);
+
+fn ttl(key: &IndexKey) -> Duration {
+    if key.env.is_ssh() {
+        SERVER_TTL
+    } else {
+        TTL
+    }
+}
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct IndexKey {
     pub env: WorkspaceEnv,
@@ -303,7 +315,7 @@ impl FileIndexState {
         let mut table = self.0.table.lock().unwrap_or_else(|e| e.into_inner());
         table
             .slots
-            .retain(|slot| now.saturating_duration_since(slot.built_at) < TTL);
+            .retain(|slot| now.saturating_duration_since(slot.built_at) < ttl(&slot.key));
         let slot = table.slots.iter_mut().find(|slot| slot.key == *key)?;
         slot.last_used = now;
         Some(slot.index.clone())
@@ -793,6 +805,35 @@ mod tests {
         get(now + TTL - Duration::from_secs(1));
         assert_eq!(builds.load(Ordering::SeqCst), 1);
         get(now + TTL + Duration::from_secs(1));
+        assert_eq!(builds.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn a_servers_index_is_walked_again_sooner() {
+        let state = FileIndexState::default();
+        let builds = AtomicUsize::new(0);
+        let k = IndexKey {
+            env: WorkspaceEnv::Ssh {
+                host: SshHost::try_from("srv".to_string()).unwrap(),
+            },
+            root: PathBuf::from("/srv/app"),
+            show_hidden: false,
+            max_depth: None,
+        };
+        let now = Instant::now();
+        let get = |at: Instant| {
+            state.get_or_build_with(&k, at, || {
+                builds.fetch_add(1, Ordering::SeqCst);
+                FileIndex {
+                    entries: Packed::default(),
+                    truncated: false,
+                }
+            })
+        };
+        get(now);
+        get(now + SERVER_TTL - Duration::from_secs(1));
+        assert_eq!(builds.load(Ordering::SeqCst), 1);
+        get(now + SERVER_TTL + Duration::from_secs(1));
         assert_eq!(builds.load(Ordering::SeqCst), 2);
     }
 

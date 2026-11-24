@@ -15,7 +15,7 @@ Done. `onNextReady(host, then)` waits for a later ready epoch than the current o
 
 ### Task 3: New files on a server reach the file finder
 
-- [ ] The finder's index of a server's folder is refreshed when the finder opens and the index is older than a short interval, so files made on the server in folders nobody watches show up.
+- [x] The index already expired after 45 s everywhere (a folder nobody watches is the same locally); a server's now lives 10 s (`SERVER_TTL`), since only the explorer's open folders are watched there and the agent walks the tree in one call. The AI's `@` file list follows (10 s for a server, 60 s locally).
 
 ### Task 4: A server's space in the tab strip
 
