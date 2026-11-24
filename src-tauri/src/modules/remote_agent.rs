@@ -30,17 +30,17 @@ pub fn cargo_target(platform: &str) -> String {
     platform.replacen("-linux-", "-unknown-linux-", 1)
 }
 
-/// Where to look, in order: the installed resource, then (in a debug build,
-/// `dev_root` being `src-tauri`) the prepared copy and cargo's own output.
+/// Where to look, in order: in a debug build (`dev_root` being `src-tauri`)
+/// the prepared copy and cargo's own output, then the installed resource.
+/// A debug build's resource directory is `target/debug`, where an earlier
+/// bundling build may have left an agent of an older protocol; the dev tree
+/// is what `pnpm build:agent` just made.
 pub fn candidates(
     platform: &str,
     resource_dir: Option<&Path>,
     dev_root: Option<&Path>,
 ) -> Vec<PathBuf> {
     let mut paths = Vec::new();
-    if let Some(dir) = resource_dir {
-        paths.push(dir.join(RESOURCE_SUBDIR).join(file_name(platform)));
-    }
     if let Some(dev) = dev_root {
         paths.push(dev.join("binaries").join(file_name(platform)));
         paths.push(
@@ -49,6 +49,9 @@ pub fn candidates(
                 .join("release")
                 .join("terax-agent"),
         );
+    }
+    if let Some(dir) = resource_dir {
+        paths.push(dir.join(RESOURCE_SUBDIR).join(file_name(platform)));
     }
     paths
 }
@@ -177,7 +180,7 @@ mod tests {
     }
 
     #[test]
-    fn the_installed_resource_comes_first_then_the_dev_copies() {
+    fn a_debug_build_prefers_the_dev_copies_to_a_left_over_resource() {
         let resources = tempfile::tempdir().unwrap();
         let dev = tempfile::tempdir().unwrap();
         let resource = resources.path().join("agents").join(file_name(X86));
@@ -191,12 +194,17 @@ mod tests {
         let find = || find(X86, Some(resources.path()), Some(dev.path()));
 
         assert_eq!(find(), None);
+        put(&resource, b"resource");
+        assert_eq!(find(), Some(resource.clone()));
         put(&built, b"built");
         assert_eq!(find(), Some(built.clone()));
         put(&prepared, b"prepared");
         assert_eq!(find(), Some(prepared.clone()));
-        put(&resource, b"resource");
-        assert_eq!(find(), Some(resource));
+        // An installer has no dev root: its resource is the agent.
+        assert_eq!(
+            super::find(X86, Some(resources.path()), None),
+            Some(resource)
+        );
         // Without a dev root (a release build), only the resource counts.
         assert_eq!(super::find(X86, None, Some(dev.path())), Some(prepared));
         assert_eq!(super::find(X86, Some(dev.path()), None), None);
