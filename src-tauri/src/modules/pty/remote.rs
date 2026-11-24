@@ -307,14 +307,129 @@ impl Drop for RemoteChild {
     }
 }
 
+/// A server's terminal through the app's session, driven as the frontend
+/// drives it (poll, acknowledge, write, resize). For the tests below and
+/// the end-to-end test on a real server (`remote/e2e_tests.rs`).
 #[cfg(test)]
-mod tests {
+pub(crate) mod probe {
     use std::time::{Duration, Instant};
 
     use super::*;
     use crate::modules::pty::hub::Hub;
     use crate::modules::pty::session::testing::{host, Frontend};
     use crate::modules::pty::wire::Ack;
+
+    pub(crate) struct Probe {
+        _hub: Hub,
+        pub(crate) session: Arc<Session>,
+        frontend: Frontend,
+        id: u32,
+        acks: Vec<Ack>,
+    }
+
+    impl Probe {
+        /// Opens a terminal on `server` (connected in the app-wide
+        /// registry) in `cwd`, at 80x24.
+        pub(crate) fn open(server: &SshHost, cwd: Option<String>, id: u32) -> Self {
+            let ws = crate::modules::remote::registry::global()
+                .and_then(|registry| registry.workspace(server))
+                .expect("the server is connected");
+            Self::open_on(ws, server, cwd, id)
+        }
+
+        pub(crate) fn open_on(
+            ws: Arc<RemoteWorkspace>,
+            server: &SshHost,
+            cwd: Option<String>,
+            id: u32,
+        ) -> Self {
+            let hub = Hub::new();
+            let frontend = Frontend::open(&hub, "main");
+            let (host, _reaped) = host(id, &hub);
+            let size = PtySize {
+                rows: 24,
+                cols: 80,
+                pixel_width: 0,
+                pixel_height: 0,
+            };
+            let session = spawn_on(host, size, ws, server, cwd, false).unwrap();
+            Self {
+                _hub: hub,
+                session,
+                frontend,
+                id,
+                acks: vec![Ack { id, bytes: 0 }],
+            }
+        }
+
+        pub(crate) fn write(&self, text: &str) {
+            let bytes = text.as_bytes().to_vec();
+            tauri::async_runtime::block_on(self.session.write(bytes)).unwrap();
+        }
+
+        pub(crate) fn resize(&self, cols: u16, rows: u16) {
+            self.session
+                .resize(PtySize {
+                    rows,
+                    cols,
+                    pixel_width: 0,
+                    pixel_height: 0,
+                })
+                .unwrap();
+        }
+
+        /// Everything the terminal has shown.
+        pub(crate) fn output(&self) -> String {
+            String::from_utf8_lossy(&self.frontend.received).into_owned()
+        }
+
+        /// Polls, acknowledging what arrived, until `done` sees the output.
+        pub(crate) fn read_until(&mut self, done: impl Fn(&str) -> bool) -> String {
+            let until = Instant::now() + Duration::from_secs(60);
+            loop {
+                let out = self.output();
+                if done(&out) {
+                    return out;
+                }
+                assert!(Instant::now() < until, "timed out; so far: {out:?}");
+                assert!(self.frontend.exit.is_none(), "exited; so far: {out:?}");
+                self.poll();
+            }
+        }
+
+        /// Polls until the terminal exits; its exit code.
+        pub(crate) fn wait_exit(&mut self) -> i32 {
+            let until = Instant::now() + Duration::from_secs(60);
+            while self.frontend.exit.is_none() {
+                assert!(
+                    Instant::now() < until,
+                    "no exit; so far: {:?}",
+                    self.output()
+                );
+                self.poll();
+            }
+            self.frontend.exit.unwrap()
+        }
+
+        fn poll(&mut self) {
+            self.frontend
+                .poll_once(self.id, std::mem::take(&mut self.acks));
+            let end = self.frontend.received.len() as u64;
+            if end > self.frontend.acked {
+                self.frontend.acked = end;
+                self.acks.push(Ack {
+                    id: self.id,
+                    bytes: end,
+                });
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::probe::Probe;
+    use super::*;
     use crate::modules::remote::testing::{connected, global_connector};
     use crate::modules::workspace::{WorkspaceEnv, WorkspaceRegistry};
     use terax_workspace_core::workspace::Workspace;
@@ -354,107 +469,57 @@ mod tests {
         }
     }
 
-    /// Polls, acknowledging what arrived, until `done` sees the output.
-    fn poll_until(frontend: &mut Frontend, id: u32, done: impl Fn(&str) -> bool) {
-        let until = Instant::now() + Duration::from_secs(30);
-        let mut acks = vec![Ack { id, bytes: 0 }];
-        loop {
-            let out = String::from_utf8_lossy(&frontend.received).into_owned();
-            if done(&out) {
-                return;
-            }
-            assert!(Instant::now() < until, "timed out; so far: {out:?}");
-            assert!(frontend.exit.is_none(), "exited; so far: {out:?}");
-            frontend.poll_once(id, std::mem::take(&mut acks));
-            let end = frontend.received.len() as u64;
-            if end > frontend.acked {
-                frontend.acked = end;
-                acks.push(Ack { id, bytes: end });
-            }
-        }
-    }
-
-    fn open(server: &Server, id: u32) -> (Hub, Arc<Session>, Frontend) {
-        let hub = Hub::new();
-        let frontend = Frontend::open(&hub, "main");
-        let (host, _reaped) = host(id, &hub);
-        let size = PtySize {
-            rows: 24,
-            cols: 80,
-            pixel_width: 0,
-            pixel_height: 0,
-        };
-        let session = spawn_on(
-            host,
-            size,
+    fn open(server: &Server, id: u32) -> Probe {
+        Probe::open_on(
             server.ws.clone(),
             &server.name,
             Some(server.root.clone()),
-            false,
+            id,
         )
-        .unwrap();
-        (hub, session, frontend)
-    }
-
-    fn write(session: &Session, bytes: &str) {
-        tauri::async_runtime::block_on(session.write(bytes.as_bytes().to_vec())).unwrap();
     }
 
     #[test]
     fn a_server_terminal_runs_through_the_apps_session() {
         let server = server("pty-session");
-        let (_hub, session, mut frontend) = open(&server, 1);
-        assert_eq!(session.shell_pid, 0, "no process on this machine");
+        let mut terminal = open(&server, 1);
+        assert_eq!(terminal.session.shell_pid, 0, "no process on this machine");
         let leaf = server.root.rsplit('/').next().unwrap().to_string();
-        write(&session, MARKER);
-        poll_until(&mut frontend, 1, |out| {
-            out.contains("marker-1") && out.contains(&leaf)
-        });
+        terminal.write(MARKER);
+        terminal.read_until(|out| out.contains("marker-1") && out.contains(&leaf));
 
-        session
-            .resize(PtySize {
-                rows: 41,
-                cols: 133,
-                pixel_width: 0,
-                pixel_height: 0,
-            })
-            .unwrap();
-        write(&session, SIZE.0);
-        poll_until(&mut frontend, 1, |out| {
-            SIZE.1.iter().all(|s| out.contains(s))
-        });
+        terminal.resize(133, 41);
+        terminal.write(SIZE.0);
+        terminal.read_until(|out| SIZE.1.iter().all(|s| out.contains(s)));
 
-        write(&session, "exit 6\r");
-        frontend.run_until_exit(1, &session);
-        assert_eq!(frontend.exit, Some(6));
+        terminal.write("exit 6\r");
+        assert_eq!(terminal.wait_exit(), 6);
     }
 
     #[test]
     fn a_dropped_connection_ends_the_terminal_and_says_so() {
         let server = server("pty-drop");
-        let (_hub, session, mut frontend) = open(&server, 2);
-        write(&session, MARKER);
-        poll_until(&mut frontend, 2, |out| out.contains("marker-1"));
+        let mut terminal = open(&server, 2);
+        terminal.write(MARKER);
+        terminal.read_until(|out| out.contains("marker-1"));
 
         global_connector().cut(&server.name);
-        frontend.run_until_exit(2, &session);
-        let out = String::from_utf8_lossy(&frontend.received);
+        assert_eq!(terminal.wait_exit(), CONNECTION_ENDED_EXIT);
+        let out = terminal.output();
         assert!(
             out.contains("[the connection to pty-drop ended]"),
             "{out:?}"
         );
-        assert_eq!(frontend.exit, Some(CONNECTION_ENDED_EXIT));
     }
 
     #[test]
     fn closing_the_session_ends_the_terminal_on_the_server() {
         let server = server("pty-close");
-        let (_hub, session, mut frontend) = open(&server, 3);
-        write(&session, MARKER);
-        poll_until(&mut frontend, 3, |out| out.contains("marker-1"));
-        session.killer.lock().unwrap().kill().unwrap();
-        frontend.run_until_exit(3, &session);
-        let out = String::from_utf8_lossy(&frontend.received);
+        let mut terminal = open(&server, 3);
+        terminal.write(MARKER);
+        terminal.read_until(|out| out.contains("marker-1"));
+        terminal.session.killer.lock().unwrap().kill().unwrap();
+        assert_ne!(terminal.wait_exit(), CONNECTION_ENDED_EXIT);
+        let out = terminal.output();
         assert!(
             !out.contains("connection"),
             "a close is not a drop: {out:?}"

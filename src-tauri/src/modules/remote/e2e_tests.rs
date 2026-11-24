@@ -287,6 +287,9 @@ fn a_folder_on_a_real_server_through_the_app_commands() {
     use crate::modules::fs::mutate::{create_dir, create_file, remove_path, rename};
     use crate::modules::fs::search::{run_search, SearchOptions};
     use crate::modules::fs::tree::read_dir_entries;
+    use crate::modules::git::operations;
+    use crate::modules::pty::remote::probe::Probe;
+    use crate::modules::pty::remote::CONNECTION_ENDED_EXIT;
     use crate::modules::workspace::{backend_for, WorkspaceRegistry};
 
     let name = std::env::var("TERAX_AGENT_SSH_HOST").expect("set TERAX_AGENT_SSH_HOST");
@@ -431,7 +434,86 @@ fn a_folder_on_a_real_server_through_the_app_commands() {
     let served = respond(&grants, "main", &asset_request(&logo, &token)).unwrap();
     assert_eq!(served.body(), b"PNG_BYTES");
 
-    // The connection drops: it comes back on its own, the explorer lists
+    // Source control: git on the server, the explorer's dimming from it.
+    server(
+        &name,
+        &format!(
+            "cd {folder} && git init -q -b main && git config user.name e2e \
+             && git config user.email e2e@example.invalid && git add . \
+             && git commit -q -m initial"
+        ),
+    );
+    let git_registry = WorkspaceRegistry::default();
+    git_registry.authorize_in(&env, &folder).unwrap();
+    ws.write_atomic(&format!("{root}/notes.md"), b"notes\n")
+        .unwrap();
+    ws.write_atomic(&format!("{root}/.gitignore"), b"*.log\n")
+        .unwrap();
+    ws.write_atomic(&format!("{root}/debug.log"), b"").unwrap();
+    let status = operations::status(&git_registry, &root, &env).unwrap();
+    let mut changed: Vec<_> = status
+        .changed_files
+        .iter()
+        .map(|f| (f.path.clone(), f.untracked))
+        .collect();
+    changed.sort();
+    assert_eq!(
+        changed,
+        [
+            (".gitignore".to_string(), true),
+            ("notes.md".to_string(), true)
+        ]
+    );
+    operations::stage(
+        &git_registry,
+        &root,
+        &["notes.md".into(), ".gitignore".into()],
+        &env,
+    )
+    .unwrap();
+    operations::commit(&git_registry, &root, "from the app", &env).unwrap();
+    let log = operations::log(&git_registry, &root, 5, None, &env).unwrap();
+    assert_eq!(
+        log.iter().map(|e| e.subject.as_str()).collect::<Vec<_>>(),
+        ["from the app", "initial"]
+    );
+    let dimmed: Vec<String> = read_dir_entries(root.clone(), true, Some(true), Some(env.clone()))
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.gitignored)
+        .map(|e| e.name)
+        .collect();
+    assert_eq!(dimmed, ["debug.log"]);
+
+    // A terminal on the server, through the app's session: its folder, a
+    // resize, and a flood while the explorer keeps answering.
+    let mut terminal = Probe::open(&host, Some(root.clone()), 1);
+    terminal.write("pwd\r");
+    // The prompt names the folder too, but only `pwd` ends a line with it.
+    terminal.read_until(|out| out.contains(&format!("{root}\r\n")));
+    terminal.resize(133, 41);
+    terminal.write("tput cols; tput lines\r");
+    terminal.read_until(|out| out.contains("133\r\n41"));
+    let started = Instant::now();
+    terminal.write("seq 1 300000; echo flood-$((6*7))\r");
+    let listing = thread::scope(|scope| {
+        let listing = scope.spawn(|| {
+            thread::sleep(Duration::from_millis(300));
+            let started = Instant::now();
+            names(&root);
+            started.elapsed()
+        });
+        terminal.read_until(|out| out.contains("flood-42"));
+        listing.join().unwrap()
+    });
+    println!(
+        "terminal flood in {:?}; a listing beside it took {listing:?}",
+        started.elapsed()
+    );
+    assert!(listing < Duration::from_secs(3), "{listing:?}");
+
+    // The connection drops: the terminal ends and says so (its pane offers a
+    // new one), the connection comes back on its own, the explorer lists
     // again, and the watch is resumed with one catch-up.
     server(
         &name,
@@ -440,9 +522,18 @@ fn a_folder_on_a_real_server_through_the_app_commands() {
     wait(reg, &host, "reconnecting", |s| {
         matches!(s, State::Reconnecting { .. })
     });
+    assert_eq!(terminal.wait_exit(), CONNECTION_ENDED_EXIT);
+    assert!(terminal
+        .output()
+        .contains(&format!("[the connection to {name} ended]")));
     let started = Instant::now();
     wait(reg, &host, "ready after the drop", |s| s == &State::Ready);
     println!("reconnect after a drop: {:?}", started.elapsed());
+    // Retry: a new terminal on the reconnected server.
+    let mut again = Probe::open(&host, Some(root.clone()), 2);
+    again.write("echo again-$((1+1)); exit 3\r");
+    assert_eq!(again.wait_exit(), 3);
+    assert!(again.output().contains("again-2"));
     assert_eq!(names(&src), ["added.rs", "main.rs"]);
     index.forget_host(&host);
     let remote = reg.workspace(&host).unwrap();

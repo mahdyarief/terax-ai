@@ -9,7 +9,7 @@ mod output;
 mod presentation;
 mod protocol;
 mod queue;
-mod remote;
+pub(crate) mod remote;
 mod replay;
 mod session;
 pub(crate) mod shell_init;

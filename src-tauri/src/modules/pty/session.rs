@@ -713,6 +713,8 @@ pub(super) mod testing {
         pub received: Vec<u8>,
         pub acked: u64,
         pub exit: Option<i32>,
+        // Read by the Unix tests (they run this machine's PTY).
+        #[cfg_attr(not(unix), allow(dead_code))]
         pub max_in_flight: u64,
         pub frames_after_exit: usize,
     }
@@ -783,6 +785,7 @@ pub(super) mod testing {
         }
 
         /// Polls (acknowledging everything received so far) until exit.
+        #[cfg_attr(not(unix), allow(dead_code))]
         pub fn run_until_exit(&mut self, id: u32, session: &Session) {
             let mut acks = vec![Ack { id, bytes: 0 }];
             while self.exit.is_none() {

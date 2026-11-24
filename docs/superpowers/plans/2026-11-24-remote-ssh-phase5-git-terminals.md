@@ -1,4 +1,4 @@
-# Plan: Remote SSH, Phase 5 — git and terminals on a server
+# Plan: Remote SSH, Phase 5 — git and terminals on a server (complete)
 
 **Date:** 2026-11-24
 **Spec:** `docs/superpowers/specs/2026-11-22-remote-ssh-workspace-design.md` (sections 2, 3, 5; Phases step 5)
@@ -65,8 +65,10 @@ Done. `session::spawn_with` is split: opening this machine's PTY, and `session::
 
 ### Task 5: End to end, guards and docs
 
-- [ ] On dypod (every login must succeed): git status/commit/log in a folder, a terminal running `pwd`, `tput cols` after a resize, a flood with the explorer still answering, a drop and a new terminal.
-- [ ] Guard: git and pty entries updated; TERAX.md; a learning for anything non-obvious; this plan marked complete.
+- [x] On dypod (every login must succeed): git status/commit/log in a folder, a terminal running `pwd`, `tput cols` after a resize, a flood with the explorer still answering, a drop and a new terminal.
+- [x] Guard: git and pty entries updated; TERAX.md; a learning for anything non-obvious; this plan marked complete.
+
+Done. `remote::e2e_tests::a_folder_on_a_real_server_through_the_app_commands` on dypod now also runs git (status, stage, commit, log) and the explorer's dimming, a terminal through the app's session (`pty::remote::probe::Probe`: `pwd`, `tput` after a resize, a 300000-line flood with a listing beside it in 213 ms), the drop that ends it with the reason and `-1001`, the reconnect in 1.7 s and a new terminal. The agent's `over_ssh` has the terminal at the client level. TERAX.md: source control and terminals on a server. Learnings: a folder watch never sees a git commit; scripts built into the agent need Unix line ends; a dropped connection must not look like a shell exit.
 
 ## Risks
 
