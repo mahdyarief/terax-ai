@@ -84,6 +84,8 @@ export class GhosttyInputController {
     { released: boolean; mods?: KeyEvent["mods"] }
   >();
   private readonly wheel = new WheelAccumulator();
+  /** The last paste's delivery; the next one waits for it, so pastes keep key press order. */
+  private pasteDelivery: Promise<void> = Promise.resolve();
   private composing = false;
   private optionKeys = 0;
   private lastData = "";
@@ -327,31 +329,36 @@ export class GhosttyInputController {
       });
       if (release.byteLength > 0) this.options.onData(release);
     };
-    void readTerminalClipboard().then((text) => {
+    // Start each read immediately, but deliver its result (an image's path
+    // included) in key press order.
+    const read = readTerminalClipboard();
+    const delivery = Promise.all([this.pasteDelivery, read]).then(
+      async ([, text]) => {
+        if (this.pasteKeys.get(code) === waiting) this.pasteKeys.delete(code);
+        if (this.disposed) return;
+        if (text) {
+          this.paste(text);
+          return;
+        }
+        // An agent reads the clipboard's image itself when Ctrl+V reaches it.
+        if (data && this.options.agentActive?.()) {
+          forwardKey();
+          return;
+        }
+        const image = this.options.onPasteImage?.();
+        if (!image) {
+          forwardKey();
+          return;
+        }
+        const pasted = await image.catch(() => null);
+        if (this.disposed) return;
+        if (pasted) this.paste(pasted);
+        else forwardKey();
+      },
+    );
+    this.pasteDelivery = delivery.catch((error: unknown) => {
       if (this.pasteKeys.get(code) === waiting) this.pasteKeys.delete(code);
-      if (this.disposed) return;
-      if (text) {
-        this.paste(text);
-        return;
-      }
-      // An agent reads the clipboard's image itself when Ctrl+V reaches it.
-      if (data && this.options.agentActive?.()) {
-        forwardKey();
-        return;
-      }
-      const image = this.options.onPasteImage?.();
-      if (!image) {
-        forwardKey();
-        return;
-      }
-      void image.then(
-        (pasted) => {
-          if (this.disposed) return;
-          if (pasted) this.paste(pasted);
-          else forwardKey();
-        },
-        () => {},
-      );
+      console.error("[terax] terminal paste failed:", error);
     });
   }
 
