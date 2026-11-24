@@ -79,7 +79,10 @@ export class GhosttyInputController {
   private readonly keyContext: KeyContext;
   private readonly pressedKeys = new Map<string, KeyEvent>();
   /** Ctrl+V presses waiting on the clipboard: the key may be released before the read ends. */
-  private readonly pasteKeys = new Map<string, { released: boolean }>();
+  private readonly pasteKeys = new Map<
+    string,
+    { released: boolean; mods?: KeyEvent["mods"] }
+  >();
   private readonly wheel = new WheelAccumulator();
   private composing = false;
   private optionKeys = 0;
@@ -299,7 +302,9 @@ export class GhosttyInputController {
       ? buildKeyEvent(event, Key.V, KeyAction.PRESS, flags)
       : null;
     const encoded = data ? this.options.model.encodeKey(data) : null;
-    const waiting = { released: false };
+    const waiting: { released: boolean; mods?: KeyEvent["mods"] } = {
+      released: false,
+    };
     if (data) this.pasteKeys.set(code, waiting);
     const forwardKey = () => {
       if (this.disposed) return;
@@ -318,6 +323,7 @@ export class GhosttyInputController {
       const release = this.options.model.encodeKey({
         ...data,
         action: KeyAction.RELEASE,
+        mods: waiting.mods ?? data.mods,
       });
       if (release.byteLength > 0) this.options.onData(release);
     };
@@ -369,7 +375,10 @@ export class GhosttyInputController {
   private readonly handleKeyUp = (event: KeyboardEvent): void => {
     this.trackOptionKeys(event, false);
     const waiting = this.pasteKeys.get(event.code);
-    if (waiting) waiting.released = true;
+    if (waiting && !waiting.released) {
+      waiting.released = true;
+      waiting.mods = keyModifiers(event, this.kittyFlags());
+    }
     const pressed = this.pressedKeys.get(event.code);
     if (!pressed) return;
     this.pressedKeys.delete(event.code);
