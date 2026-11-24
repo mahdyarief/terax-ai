@@ -544,12 +544,8 @@ export default function App() {
   useEditorFileSync({ tabs, tabsRef, editorRefs });
   useThemeFileEditing({ tabsRef, openFileTab });
 
-  const { explorerRoot, inheritedCwdForNewTab } = useWorkspaceCwd(
-    activeTab,
-    tabs,
-    launchCwd ?? home,
-    activeSpaceRoot,
-  );
+  const { explorerRoot, explorerViewRoot, inheritedCwdForNewTab } =
+    useWorkspaceCwd(activeTab, tabs, launchCwd ?? home, activeSpaceRoot);
 
   useWindowTitle(
     activeTab,
@@ -2596,7 +2592,7 @@ export default function App() {
                         <RemoteGate env={workspaceEnv} root={explorerRoot}>
                         <FileExplorer
                           ref={explorerRef}
-                          rootPath={explorerRoot}
+                          rootPath={explorerViewRoot}
                           onOpenFolder={() => void handleOpenFolder()}
                           gitStatus={
                             explorerGitDecorations ? sourceControl.status : null
