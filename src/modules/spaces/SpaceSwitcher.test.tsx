@@ -11,6 +11,7 @@ vi.mock("@/modules/shortcuts", () => ({ useShortcutLabel: () => null }));
 let currentWindowLabel = "main";
 let currentHostWindowLabel = "main";
 let extraSpaces: Array<Record<string, unknown>> = [];
+let mainEnv: Record<string, unknown> = { kind: "local" };
 // Server rendering reads a zustand store's initial state, so the transfer
 // store is driven through this variable instead.
 let pendingTransfers: Record<string, "opening" | "returning"> = {};
@@ -28,7 +29,7 @@ vi.mock("./lib/useSpaces", () => ({
           id: "space-1",
           name: "Main",
           root: null,
-          env: { kind: "local" },
+          env: mainEnv,
           createdAt: 0,
           updatedAt: 0,
           hostWindowLabel: currentHostWindowLabel,
@@ -165,4 +166,16 @@ it("says a space lives in its focus window instead of 'No tabs'", () => {
   } finally {
     currentHostWindowLabel = "main";
   }
+});
+
+it("names a server's space's host where the tab strip starts", () => {
+  mainEnv = { kind: "ssh", host: "dypod" };
+  try {
+    const html = renderSwitcher();
+    expect(html).toContain('data-space-server-host="dypod"');
+    expect(html).toContain('title="Main on dypod · Spaces"');
+  } finally {
+    mainEnv = { kind: "local" };
+  }
+  expect(renderSwitcher()).not.toContain("data-space-server-host");
 });

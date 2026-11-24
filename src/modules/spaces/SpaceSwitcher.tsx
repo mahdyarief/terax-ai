@@ -20,6 +20,7 @@ import {
   FolderAddIcon,
   PencilEdit02Icon,
   PlusSignIcon,
+  ServerStack03Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -273,15 +274,28 @@ export function SpaceSwitcher({
   };
 
   if (!current) return null;
+  // The tab strip starts here: a server's space says which server, since its
+  // name ("folder (host)") is often cut.
+  const server = current.env.kind === "ssh" ? current.env.host : null;
+  const label = shortcut ? `Spaces · ${shortcut}` : "Spaces";
 
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <button
           type="button"
-          title={shortcut ? `Spaces · ${shortcut}` : "Spaces"}
+          title={server ? `${current.name} on ${server} · ${label}` : label}
           className="flex h-7 shrink-0 items-center gap-2 rounded-md px-2 text-muted-foreground/90 outline-none transition-colors hover:bg-accent hover:text-foreground data-[state=open]:bg-accent data-[state=open]:text-foreground"
         >
+          {server && (
+            <span data-space-server-host={server} className="shrink-0">
+              <HugeiconsIcon
+                icon={ServerStack03Icon}
+                size={13}
+                strokeWidth={1.75}
+              />
+            </span>
+          )}
           <span className="max-w-36 truncate text-xs font-medium">
             {current.name}
           </span>

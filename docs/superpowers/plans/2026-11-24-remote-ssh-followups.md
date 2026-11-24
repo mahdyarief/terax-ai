@@ -19,7 +19,7 @@ Done. `onNextReady(host, then)` waits for a later ready epoch than the current o
 
 ### Task 4: A server's space in the tab strip
 
-- [ ] The tab strip shows the host of a server's space.
+- [x] The space switcher's trigger, where the tab strip starts, carries a server icon and names the host in its title ("<space> on <host>"), since the name is truncated. Tabs themselves have no per-tab env: every tab of a space is in that space's workspace.
 
 ### Task 5: On a real server, docs
 
