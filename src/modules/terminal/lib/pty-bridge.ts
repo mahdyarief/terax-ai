@@ -91,6 +91,18 @@ export function ptyTransportDiagnostics() {
   };
 }
 
+/**
+ * The exit code of a server's terminal whose connection ended (no process
+ * exits with it; `CONNECTION_ENDED_EXIT` in `pty/remote.rs`). The pane stays,
+ * offering a new terminal, instead of closing as after a shell's own exit.
+ */
+export const PTY_EXIT_CONNECTION_ENDED = -1001;
+
+/** What a pane does when its terminal exits with `code`. */
+export function afterPtyExit(code: number): "close" | "offer-new-terminal" {
+  return code === PTY_EXIT_CONNECTION_ENDED ? "offer-new-terminal" : "close";
+}
+
 export type PtyHandlers = {
   onData: (bytes: Uint8Array) => void | Promise<void>;
   onExit?: (code: number) => void;

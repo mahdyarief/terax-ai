@@ -2,10 +2,25 @@ import { IS_WINDOWS } from "@/lib/platform";
 
 const MAX_OSC52_CLIPBOARD_BYTES = 1024 * 1024;
 
-export function parseOsc7(data: string): string | null {
+/**
+ * The directory an OSC 7 report names. `remote`: the shell runs on a server,
+ * so its path is the server's own and none of this machine's Windows
+ * spellings (cmd.exe's literal paths, MSYS drives) apply.
+ */
+export function parseOsc7(
+  data: string,
+  { remote = false }: { remote?: boolean } = {},
+): string | null {
   const m = data.match(/^file:\/\/[^/]*(\/.*)$/);
   if (!m) return null;
   let path = m[1];
+  if (remote) {
+    try {
+      return decodeURIComponent(path);
+    } catch {
+      return path;
+    }
+  }
   // cmd.exe's PROMPT cannot escape or convert `$P`: its paths arrive literal,
   // with backslashes, so a folder named `a%20b` must not be percent-decoded.
   if (/^\/(?:[A-Za-z]:\\|\\\\)/.test(path)) {

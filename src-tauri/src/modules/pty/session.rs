@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
+use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{mpsc, oneshot};
 
@@ -50,8 +50,9 @@ pub(super) struct OutputDiagnostics {
 }
 
 pub struct Session {
+    /// This machine's PTY reader; a server's terminal has none.
     #[cfg(unix)]
-    reader_control: Arc<super::unix_reader::ReaderControl>,
+    reader_control: Option<Arc<super::unix_reader::ReaderControl>>,
     // Drop the Windows job before pipe handles. The waiter retains the master
     // and closes ConPTY while the reader drains the final output through EOF.
     #[cfg(windows)]
@@ -115,7 +116,9 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.output.close();
         #[cfg(unix)]
-        self.reader_control.cancel();
+        if let Some(control) = &self.reader_control {
+            control.cancel();
+        }
         // If the session Arc is dropped without an explicit pty_close (e.g.
         // frontend disconnected, window crashed, dev HMR), the reader/waiter
         // threads would otherwise stay alive forever holding the child. Kill
@@ -142,7 +145,9 @@ impl Session {
     pub(super) fn close_output(&self) {
         self.output.close();
         #[cfg(unix)]
-        self.reader_control.cancel();
+        if let Some(control) = &self.reader_control {
+            control.cancel();
+        }
     }
 
     /// Installs the theme colour queries are answered from. A program that
@@ -324,38 +329,60 @@ pub fn spawn(
 ) -> Result<Arc<Session>, String> {
     let emitter = app.clone();
     let notifier = app.clone();
-    spawn_with(
-        Host {
-            id,
-            token,
-            owner,
-            hub,
-            class,
-            signal: Arc::new(move |signal| {
-                let _ = emitter.emit(AGENT_EVENT, signal);
-            }),
-            notify: Arc::new(move |notification| {
-                let _ = notifier.emit(NOTIFICATION_EVENT, notification);
-            }),
-            pane_id,
-            link: AgentLink::new(),
-            reap: Box::new(move || {
-                if let Some(state) = app.try_state::<super::PtyState>() {
-                    if let Some(s) = state.take(id) {
-                        drop_session(s);
-                    }
+    let host = Host {
+        id,
+        token,
+        owner,
+        hub,
+        class,
+        signal: Arc::new(move |signal| {
+            let _ = emitter.emit(AGENT_EVENT, signal);
+        }),
+        notify: Arc::new(move |notification| {
+            let _ = notifier.emit(NOTIFICATION_EVENT, notification);
+        }),
+        pane_id,
+        link: AgentLink::new(),
+        reap: Box::new(move || {
+            if let Some(state) = app.try_state::<super::PtyState>() {
+                if let Some(s) = state.take(id) {
+                    drop_session(s);
                 }
-            }),
-            colors,
-        },
-        PtySize {
-            rows,
-            cols,
-            pixel_width: 0,
-            pixel_height: 0,
-        },
-        move || shell_init::build_command(cwd, workspace, blocks, shell, control),
-    )
+            }
+        }),
+        colors,
+    };
+    let size = PtySize {
+        rows,
+        cols,
+        pixel_width: 0,
+        pixel_height: 0,
+    };
+    // A server's terminal is its agent's; the shell and its integration are
+    // the server's own.
+    if let WorkspaceEnv::Ssh { host: server } = &workspace {
+        return super::remote::spawn(host, size, server, cwd, blocks);
+    }
+    spawn_with(host, size, move || {
+        shell_init::build_command(cwd, workspace, blocks, shell, control)
+    })
+}
+
+/// A terminal's pieces, from this machine's PTY or a server's
+/// (`remote.rs`), run by the same pipeline.
+pub(super) struct Parts {
+    pub master: Box<dyn MasterPty + Send>,
+    pub child: Box<dyn Child + Send + Sync>,
+    pub reader: Box<dyn Read + Send>,
+    pub writer: Box<dyn Write + Send>,
+    pub shell_program: String,
+    /// What only this machine's PTY has; `None` for a server's.
+    pub native: Option<Native>,
+}
+
+pub(super) struct Native {
+    #[cfg(unix)]
+    reader_control: Arc<super::unix_reader::ReaderControl>,
 }
 
 pub(super) fn spawn_with(
@@ -366,6 +393,48 @@ pub(super) fn spawn_with(
     #[cfg(windows)]
     let _spawn_guard = lock_lifecycle(&CONPTY_LIFECYCLE_LOCK);
 
+    let pty_system = native_pty_system();
+    let pair = pty_system.openpty(size).map_err(|e| e.to_string())?;
+
+    let mut cmd = build_command()?;
+    let shell_program = super::shell_init::launched_shell(&mut cmd);
+    let child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
+    drop(pair.slave);
+
+    // Kill the child if any of the pipe setup below fails so the spawned shell
+    // can't outlive an aborted pty_open.
+    let mut guard = ChildKillGuard::new(child.clone_killer());
+    #[cfg(windows)]
+    let reader: Box<dyn Read + Send> = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
+    #[cfg(unix)]
+    let (reader, reader_control) =
+        super::unix_reader::UnixPtyReader::new(pair.master.as_ref()).map_err(|e| e.to_string())?;
+    let writer = pair.master.take_writer().map_err(|e| e.to_string())?;
+    guard.disarm();
+
+    run(
+        host,
+        size,
+        Parts {
+            master: pair.master,
+            child,
+            #[cfg(windows)]
+            reader,
+            #[cfg(unix)]
+            reader: Box::new(reader),
+            writer,
+            shell_program,
+            native: Some(Native {
+                #[cfg(unix)]
+                reader_control,
+            }),
+        },
+    )
+}
+
+/// Runs a terminal's pieces: the output queue and replay, and the writer,
+/// reader and waiter threads.
+pub(super) fn run(host: Host, size: PtySize, parts: Parts) -> Result<Arc<Session>, String> {
     let Host {
         id,
         token,
@@ -379,30 +448,21 @@ pub(super) fn spawn_with(
         reap,
         colors,
     } = host;
-    let pty_system = native_pty_system();
-    let pair = pty_system.openpty(size).map_err(|e| e.to_string())?;
-
-    let mut cmd = build_command()?;
-    let shell_program = super::shell_init::launched_shell(&mut cmd);
-    let mut child = pair.slave.spawn_command(cmd).map_err(|e| e.to_string())?;
-    drop(pair.slave);
-
-    // Kill the child if any of the pipe setup below fails so the spawned shell
-    // can't outlive an aborted pty_open.
-    let mut guard = ChildKillGuard::new(child.clone_killer());
+    let Parts {
+        master,
+        mut child,
+        mut reader,
+        mut writer,
+        shell_program,
+        native,
+    } = parts;
     let killer = child.clone_killer();
-    #[cfg(windows)]
-    let mut reader = pair.master.try_clone_reader().map_err(|e| e.to_string())?;
     #[cfg(unix)]
-    let (mut reader, reader_control) =
-        super::unix_reader::UnixPtyReader::new(pair.master.as_ref()).map_err(|e| e.to_string())?;
-    let mut writer = pair.master.take_writer().map_err(|e| e.to_string())?;
-    guard.disarm();
-
+    let reader_control = native.as_ref().map(|n| n.reader_control.clone());
     let shell_pid = child.process_id().unwrap_or(0);
 
     #[cfg(windows)]
-    let job = match child.process_id() {
+    let job = match child.process_id().filter(|_| native.is_some()) {
         Some(pid) => match crate::modules::proc::job::ProcessJob::create_for(pid) {
             Ok(j) => Some(j),
             Err(e) => {
@@ -445,7 +505,7 @@ pub(super) fn spawn_with(
         replay: Arc::new(Mutex::new(ReplayLog::new(size.cols, size.rows))),
         killer: Mutex::new(killer),
         input: input.clone(),
-        master: Arc::new(Mutex::new(Some(pair.master))),
+        master: Arc::new(Mutex::new(Some(master))),
         output: output.clone(),
         colors: color_state.clone(),
         finished: finished.clone(),
@@ -575,12 +635,18 @@ pub(super) fn spawn_with(
             // Arm before ConPTY close and the join: both can depend on credit.
             output_e.begin_exit(EXIT_ACK_TIMEOUT);
             #[cfg(unix)]
-            reader_control.finish();
+            if let Some(control) = &reader_control {
+                control.finish();
+            }
             #[cfg(windows)]
             {
                 // Closing ConPTY can emit a final frame. Keep the reader alive until EOF.
                 let master = master_e.lock().unwrap().take();
-                close_pseudoconsole(&output_e, &CONPTY_LIFECYCLE_LOCK, move || drop(master));
+                if native.is_some() {
+                    close_pseudoconsole(&output_e, &CONPTY_LIFECYCLE_LOCK, move || drop(master));
+                } else {
+                    drop(master);
+                }
             }
             if let Err(e) = reader_thread.join() {
                 log::error!("pty reader thread panicked: {e:?}");
@@ -621,14 +687,16 @@ impl Drop for Registration {
     }
 }
 
-#[cfg(all(test, unix))]
-mod tests {
+/// A stand-in for the frontend and the host, for tests of the session
+/// pipeline with this machine's PTY or a server's (`remote.rs`).
+#[cfg(test)]
+pub(super) mod testing {
     use super::*;
     use crate::modules::pty::hub::{Endpoint, Reply};
     use crate::modules::pty::wire::{decode_frames, Ack, Frame, StreamRequest};
     use std::sync::mpsc as std_mpsc;
 
-    struct ChannelReply(std_mpsc::Sender<(u16, Vec<u8>)>);
+    pub struct ChannelReply(pub std_mpsc::Sender<(u16, Vec<u8>)>);
 
     impl Reply for ChannelReply {
         fn send(self: Box<Self>, status: u16, body: Vec<u8>) {
@@ -638,19 +706,19 @@ mod tests {
 
     /// A stand-in for the frontend: opens a stream, polls, acknowledges what
     /// it received after every response, and records what arrived.
-    struct Frontend {
-        hub: Hub,
-        label: Arc<str>,
-        token: u64,
-        received: Vec<u8>,
-        acked: u64,
-        exit: Option<i32>,
-        max_in_flight: u64,
-        frames_after_exit: usize,
+    pub struct Frontend {
+        pub hub: Hub,
+        pub label: Arc<str>,
+        pub token: u64,
+        pub received: Vec<u8>,
+        pub acked: u64,
+        pub exit: Option<i32>,
+        pub max_in_flight: u64,
+        pub frames_after_exit: usize,
     }
 
     impl Frontend {
-        fn open(hub: &Hub, label: &str) -> Self {
+        pub fn open(hub: &Hub, label: &str) -> Self {
             let (tx, rx) = std_mpsc::channel();
             let label: Arc<str> = Arc::from(label);
             // The page mints its own stream token; any non-zero value works.
@@ -674,7 +742,7 @@ mod tests {
             }
         }
 
-        fn poll_once(&mut self, id: u32, acks: Vec<Ack>) -> Vec<Vec<u8>> {
+        pub fn poll_once(&mut self, id: u32, acks: Vec<Ack>) -> Vec<Vec<u8>> {
             let (tx, rx) = std_mpsc::channel();
             self.hub.submit(Command::Request {
                 label: self.label.clone(),
@@ -715,7 +783,7 @@ mod tests {
         }
 
         /// Polls (acknowledging everything received so far) until exit.
-        fn run_until_exit(&mut self, id: u32, session: &Session) {
+        pub fn run_until_exit(&mut self, id: u32, session: &Session) {
             let mut acks = vec![Ack { id, bytes: 0 }];
             while self.exit.is_none() {
                 self.poll_once(id, std::mem::take(&mut acks));
@@ -730,7 +798,7 @@ mod tests {
         }
     }
 
-    fn host(id: u32, hub: &Hub) -> (Host, std_mpsc::Receiver<()>) {
+    pub fn host(id: u32, hub: &Hub) -> (Host, std_mpsc::Receiver<()>) {
         let (reaped, reaped_rx) = std_mpsc::channel();
         (
             Host {
@@ -751,6 +819,14 @@ mod tests {
             reaped_rx,
         )
     }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::testing::{host, Frontend};
+    use super::*;
+    use crate::modules::pty::wire::Ack;
+    use std::sync::mpsc as std_mpsc;
 
     fn sh(script: &str) -> CommandBuilder {
         let mut command = CommandBuilder::new("/bin/sh");

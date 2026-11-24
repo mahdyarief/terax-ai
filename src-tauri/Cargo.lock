@@ -5022,6 +5022,7 @@ dependencies = [
 name = "terax"
 version = "0.9.4-dy"
 dependencies = [
+ "anyhow",
  "base64 0.21.7",
  "block2",
  "bytes",

@@ -216,7 +216,9 @@ const GhosttyTerminalPane = memo(
             <strong>
               {session.error.kind === "renderer"
                 ? "Unable to display terminal"
-                : "Unable to start terminal"}
+                : session.error.kind === "disconnected"
+                  ? "Terminal disconnected"
+                  : "Unable to start terminal"}
             </strong>
             <p className="max-w-md break-words text-muted-foreground">
               {session.error.message}

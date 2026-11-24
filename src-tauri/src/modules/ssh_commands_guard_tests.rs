@@ -8,7 +8,9 @@
 use std::path::{Path, PathBuf};
 
 enum Ssh {
-    /// Works on a server; the test (a function in `remote/*_tests.rs`).
+    /// Works on a server; the test (a function in `remote/*_tests.rs`, or in
+    /// `pty/remote.rs` for a server's terminal, which needs the pty
+    /// module's own test stand-ins).
     Works(&'static str),
     /// Refused on a server with a message; why.
     Refused(&'static str),
@@ -19,7 +21,6 @@ enum Ssh {
 
 use Ssh::*;
 
-const PHASE5: Ssh = Pending("Phase 5: git and terminals on a server");
 /// Worktrees and checkpoints made on this machine's file system (hard
 /// links, a copied index, host paths).
 const HOST_ONLY_GIT: Ssh =
@@ -344,7 +345,7 @@ const COMMANDS: &[(&str, &str, Ssh)] = &[
     (
         "git/commands_tasks.rs",
         "task_worktree_prepare_archive",
-        PHASE5,
+        TASKS,
     ),
     ("git/commands_tasks.rs", "task_worktree_restore", TASKS),
     (
@@ -352,7 +353,11 @@ const COMMANDS: &[(&str, &str, Ssh)] = &[
         "lsp_spawn",
         Refused("remote LSP is a non-goal of v1: \"lsp: SSH workspaces are not supported\""),
     ),
-    ("pty/mod.rs", "pty_open", PHASE5),
+    (
+        "pty/mod.rs",
+        "pty_open",
+        Works("a_server_terminal_runs_through_the_apps_session"),
+    ),
     ("shell/mod.rs", "shell_bg_spawn", PHASE6),
     ("shell/mod.rs", "shell_run_command", PHASE6),
     ("shell/mod.rs", "shell_session_open", PHASE6),
@@ -439,6 +444,7 @@ fn remote_tests() -> String {
     files
         .into_iter()
         .filter(|p| p.to_string_lossy().ends_with("_tests.rs"))
+        .chain([modules_dir().join("pty").join("remote.rs")])
         .map(|p| std::fs::read_to_string(p).unwrap())
         .collect()
 }
@@ -462,9 +468,9 @@ fn every_command_taking_a_workspace_says_what_it_does_on_a_server() {
             ));
         }
         match ssh {
-            Works(test) if !tests.contains(&format!("fn {test}(")) => {
-                problems.push(format!("{command}: no test `{test}` in remote/*_tests.rs"))
-            }
+            Works(test) if !tests.contains(&format!("fn {test}(")) => problems.push(format!(
+                "{command}: no test `{test}` among the server tests"
+            )),
             Refused(why) | Pending(why) if why.len() < 20 => {
                 problems.push(format!("{command}: say why"))
             }

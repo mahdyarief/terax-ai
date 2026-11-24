@@ -45,6 +45,8 @@ async function load() {
     import("./ptyPresentation"),
   ]);
   return {
+    afterPtyExit: bridge.afterPtyExit,
+    PTY_EXIT_CONNECTION_ENDED: bridge.PTY_EXIT_CONNECTION_ENDED,
     openPty: bridge.openPty,
     tabAgentStatus: activity.tabAgentStatus,
     useAgentActivityStore: activity.useAgentActivityStore,
@@ -272,6 +274,22 @@ describe("PTY bridge over the multiplexed stream", () => {
     expect(polls().filter((poll) => !poll.signal?.aborted)).toHaveLength(1);
     await session.close();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("passes a server's dropped connection on as its own exit, which keeps the pane", async () => {
+    const { afterPtyExit, openPty, PTY_EXIT_CONNECTION_ENDED } = await load();
+    nativeInvoke(61);
+    const onExit = vi.fn();
+    const session = await openPty(80, 24, { onData: vi.fn(), onExit });
+    heldPoll().reply([
+      { kind: "exit", id: session.id, code: PTY_EXIT_CONNECTION_ENDED },
+    ]);
+    await flush();
+    expect(onExit).toHaveBeenCalledWith(-1001);
+    expect(afterPtyExit(-1001)).toBe("offer-new-terminal");
+    // A shell's own exit, whatever its code, still closes the pane.
+    for (const code of [0, 1, 130, -1]) expect(afterPtyExit(code)).toBe("close");
+    await session.close();
   });
 
   it("starts a terminal in the class its pane is in and reports later changes", async () => {

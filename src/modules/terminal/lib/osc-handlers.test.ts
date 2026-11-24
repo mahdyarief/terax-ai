@@ -22,6 +22,22 @@ describe("terminal semantic boundaries", () => {
     expect(parseOsc7(uri)).toBe(expected),
   );
 
+  it.each([
+    // A server's folder named like an MSYS drive stays the server's.
+    ["file://srv/c/data", "/c/data"],
+    ["file://srv/home/me/a%20b", "/home/me/a b"],
+    ["file://srv/srv/100%", "/srv/100%"],
+  ])("keeps a server's cwd %s as the server spells it", (uri, expected) =>
+    expect(parseOsc7(uri, { remote: true })).toBe(expected),
+  );
+
+  it("routes a server terminal's cwd without this machine's mappings", () => {
+    const onCwd = vi.fn();
+    const router = new GhosttySemanticEventRouter({ onCwd }, { remote: true });
+    router.handle({ type: "pwd", uri: "file://srv/d/work" });
+    expect(onCwd.mock.calls).toEqual([["/d/work"]]);
+  });
+
   it("rejects cwd during command input and output, then accepts the local prompt", () => {
     const onCwd = vi.fn();
     const router = new GhosttySemanticEventRouter({ onCwd });

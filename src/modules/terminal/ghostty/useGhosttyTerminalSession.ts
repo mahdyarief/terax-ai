@@ -29,11 +29,8 @@ import {
   useSyncExternalStore,
 } from "react";
 import { isAgentActivePty } from "../lib/agentActivity";
-import { openPty, type PtySession } from "../lib/pty-bridge";
-import {
-  applyReplayEvents,
-  type PtyReplayPayload,
-} from "../lib/ptyHandoff";
+import { afterPtyExit, openPty, type PtySession } from "../lib/pty-bridge";
+import { applyReplayEvents, type PtyReplayPayload } from "../lib/ptyHandoff";
 import { takeHandoffReplay } from "../lib/handoffSession";
 import { writeTerminalClipboard } from "../lib/terminalClipboard";
 import { LatestClipboardWrite } from "@/modules/terminal/lib/LatestClipboardWrite";
@@ -63,7 +60,7 @@ type GhosttyBackend = Extract<TerminalBackendKind, `ghostty-${string}`>;
 type GhosttySurface = WebGpuTerminalSurface | WebGlTerminalSurface;
 type GhosttySurfaceBaseOptions = Omit<WebGlTerminalSurfaceOptions, "onError">;
 type GhosttySessionFailure = {
-  kind: "startup" | "renderer";
+  kind: "startup" | "renderer" | "disconnected";
   message: string;
 };
 
@@ -98,6 +95,8 @@ type GhosttySession = {
   visible: boolean;
   focused: boolean;
   startupError: string | null;
+  /** The server's connection ended under the terminal; Retry opens a new one. */
+  disconnected: boolean;
   rendererError: string | null;
   shellExited: boolean;
   /** OSC 133 has been seen, so `commandRunning` can be trusted. */
@@ -505,6 +504,7 @@ export async function attachGhosttyView(
   session.replay = replay;
   session.shellExited = false;
   session.startupError = null;
+  session.disconnected = false;
   session.callbacks.onError?.(null);
   await initializeSession(session);
   return !!session.pty;
@@ -568,6 +568,7 @@ async function respawnGhosttySession(
   session.lastCwd = null;
   session.initialCwd = cwd ?? session.initialCwd;
   session.startupError = null;
+  session.disconnected = false;
   session.rendererError = null;
   session.callbacks.onError?.(null);
   session.initializing = null;
@@ -621,6 +622,7 @@ function ensureSession(
     visible: false,
     focused: false,
     startupError: null,
+    disconnected: false,
     rendererError: null,
     shellExited: false,
     promptIntegrated: false,
@@ -714,30 +716,35 @@ async function initializeSessionGeneration(
   ]);
   if (!alive()) return;
 
-  const semanticEvents = new GhosttySemanticEventRouter({
-    onCwd: (cwd) => {
-      if (session.lastCwd === cwd) return;
-      session.lastCwd = cwd;
-      session.callbacks.onCwd?.(cwd);
+  // The space the terminal opens in (`openPty` below reads the same).
+  const remote = currentWorkspaceEnv().kind === "ssh";
+  const semanticEvents = new GhosttySemanticEventRouter(
+    {
+      onCwd: (cwd) => {
+        if (session.lastCwd === cwd) return;
+        session.lastCwd = cwd;
+        session.callbacks.onCwd?.(cwd);
+      },
+      onClipboard: (text) => {
+        oscClipboard.enqueue(text);
+      },
+      onOverflow: (dropped) => {
+        console.warn(
+          `[terax] Ghostty semantic event queue dropped ${dropped} event(s)`,
+        );
+      },
+      onPromptEnd: (reportsCommandStart) => {
+        session.commandTracked = reportsCommandStart;
+      },
+      onCommandState: (running) => {
+        session.promptIntegrated = true;
+        session.commandRunning = running;
+        session.commandTracked = false;
+        if (!running) mark("firstPromptMs");
+      },
     },
-    onClipboard: (text) => {
-      oscClipboard.enqueue(text);
-    },
-    onOverflow: (dropped) => {
-      console.warn(
-        `[terax] Ghostty semantic event queue dropped ${dropped} event(s)`,
-      );
-    },
-    onPromptEnd: (reportsCommandStart) => {
-      session.commandTracked = reportsCommandStart;
-    },
-    onCommandState: (running) => {
-      session.promptIntegrated = true;
-      session.commandRunning = running;
-      session.commandTracked = false;
-      if (!running) mark("firstPromptMs");
-    },
-  });
+    { remote },
+  );
   const model = await coreRuntime.createModel({
     leafId: session.leafId,
     backend: session.backend,
@@ -918,6 +925,11 @@ async function initializeSessionGeneration(
         session.cancelFocusRetry?.();
         session.writer.detach();
         session.pty = null;
+        if (afterPtyExit(code) === "offer-new-terminal") {
+          session.disconnected = true;
+          session.callbacks.onError?.(sessionFailure(session));
+          return;
+        }
         session.callbacks.onExit?.(code);
       },
     },
@@ -1224,6 +1236,12 @@ async function retryGhosttyRenderer(session: GhosttySession): Promise<void> {
 }
 
 function sessionFailure(session: GhosttySession): GhosttySessionFailure | null {
+  if (session.disconnected)
+    return {
+      kind: "disconnected",
+      message:
+        "The connection to the server ended. Retry opens a new terminal once it is connected again.",
+    };
   if (session.startupError)
     return { kind: "startup", message: session.startupError };
   if (session.rendererError)

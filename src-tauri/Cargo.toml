@@ -52,6 +52,8 @@ terax-remote-protocol = { path = "crates/terax-remote-protocol" }
 terax-workspace-core = { path = "crates/terax-workspace-core" }
 sha2 = "0.10"
 portable-pty = "0.9"
+# The error type of portable-pty's traits, which a server's terminal implements.
+anyhow = "1"
 rfd = "0.15"
 dirs = "7"
 log = "0.4"

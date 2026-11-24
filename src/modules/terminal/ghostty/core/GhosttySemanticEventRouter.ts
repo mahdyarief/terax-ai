@@ -22,7 +22,11 @@ export type GhosttySemanticEventCallbacks = {
 export class GhosttySemanticEventRouter {
   private inCommand = false;
 
-  constructor(private readonly callbacks: GhosttySemanticEventCallbacks) {}
+  /** `remote`: the terminal's shell runs on a server (see `parseOsc7`). */
+  constructor(
+    private readonly callbacks: GhosttySemanticEventCallbacks,
+    private readonly options: { readonly remote?: boolean } = {},
+  ) {}
 
   handle(event: GhosttyTerminalEvent): void {
     switch (event.type) {
@@ -34,7 +38,7 @@ export class GhosttySemanticEventRouter {
         break;
       case "pwd": {
         if (this.inCommand) break;
-        const cwd = parseOsc7(event.uri);
+        const cwd = parseOsc7(event.uri, this.options);
         if (cwd) this.callbacks.onCwd?.(cwd);
         break;
       }

@@ -56,10 +56,12 @@ Done. `PROTOCOL_VERSION` 4 and capability `pty.v1`. Only `PtyOpen` is a request 
 
 ### Task 4: Terminals in a server's space
 
-- [ ] `RemotePty` (portable-pty traits over the client); `pty_open` for SSH: cwd authorized by `covers` in server spelling, `spawn_with` with the remote system; no local pid.
-- [ ] A drop exits every server terminal with the reason; Retry after reconnect.
-- [ ] Frontend: OSC 7 without the MSYS mapping on SSH; the first tab of a server space opens on the server.
-- [ ] Tests: a terminal through the app's session on the in-process agent (output, input, resize, exit, a cut connection).
+- [x] `RemotePty` (portable-pty traits over the client); `pty_open` for SSH: cwd authorized by `covers` in server spelling, `spawn_with` with the remote system; no local pid.
+- [x] A drop exits every server terminal with the reason; Retry after reconnect.
+- [x] Frontend: OSC 7 without the MSYS mapping on SSH; the first tab of a server space opens on the server.
+- [x] Tests: a terminal through the app's session on the in-process agent (output, input, resize, exit, a cut connection).
+
+Done. `session::spawn_with` is split: opening this machine's PTY, and `session::run(host, size, Parts)`, the pipeline both kinds share (output queue, replay, hub, writer/reader/waiter threads); `Native` carries what only a local PTY has (the Unix reader control, the Windows job and ConPTY close). `pty/remote.rs` implements `MasterPty`, `Child` and `ChildKiller` over the client; its reader credits each chunk as it hands it on. `pty_open` on a server: no control endpoint, the cwd kept only when the space covers it (the agent otherwise starts in the space's folder), no local shell override. Found while wiring it: any exit closes the pane, and the window when it was the last tab, so a drop must not look like a shell exit. A dropped connection ends the terminal with `[the connection to <host> ended]` in its output and exit code `-1001` (`CONNECTION_ENDED_EXIT` / `PTY_EXIT_CONNECTION_ENDED`), which keeps the pane and shows "Terminal disconnected" with Retry (a new terminal, once the server is back). OSC 7 in a server's terminal keeps the server's path (no cmd.exe or MSYS mapping). Tests: `pty/remote.rs` (output and cwd through the app's session, resize, exit code, a cut connection, a close), `osc-handlers.test.ts`, `pty-bridge.test.ts`. Guard: `pty_open` Works; `task_worktree_prepare_archive` is a task worktree (Refused), so no Phase 5 entries are left. Not here: opening a terminal while the server is still connecting shows "Unable to start terminal" with Retry (Phase 6 UX may retry on ready).
 
 ### Task 5: End to end, guards and docs
 

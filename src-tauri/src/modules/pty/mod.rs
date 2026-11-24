@@ -9,6 +9,7 @@ mod output;
 mod presentation;
 mod protocol;
 mod queue;
+mod remote;
 mod replay;
 mod session;
 pub(crate) mod shell_init;
@@ -316,7 +317,7 @@ pub async fn pty_open(
     let blocks = blocks.unwrap_or(false);
     // A Windows helper cannot execute inside WSL without explicit path and
     // network translation. Do not inject credentials for a broken command.
-    let control_env = if workspace.is_wsl() {
+    let control_env = if workspace.is_wsl() || workspace.is_ssh() {
         None
     } else {
         pane_id.and_then(|pane_id| control.shell_env(pane_id))
@@ -332,11 +333,16 @@ pub async fn pty_open(
     let session = tauri::async_runtime::spawn_blocking(move || {
         // Authorizing the directory canonicalizes it, which touches the disk
         // (a network volume, or wsl.exe for a WSL workspace): never on a worker.
-        let cwd = user_spawn_cwd_or_home(
-            &app.state::<WorkspaceRegistry>(),
-            cwd.as_deref(),
-            &workspace,
-        );
+        let registry = app.state::<WorkspaceRegistry>();
+        let cwd = if workspace.is_ssh() {
+            // A server path, as the server spells it: it must be inside a
+            // folder of the space; otherwise the terminal opens in the
+            // space's folder.
+            cwd.map(|cwd| cwd.trim().to_string())
+                .filter(|cwd| !cwd.is_empty() && registry.covers(&workspace, cwd))
+        } else {
+            user_spawn_cwd_or_home(&registry, cwd.as_deref(), &workspace)
+        };
         session::spawn(
             id,
             token,
