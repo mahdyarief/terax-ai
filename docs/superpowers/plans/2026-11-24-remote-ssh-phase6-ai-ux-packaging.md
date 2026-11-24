@@ -1,4 +1,4 @@
-# Plan: Remote SSH, Phase 6 — AI tools, UX polish, packaging
+# Plan: Remote SSH, Phase 6 — AI tools, UX polish, packaging (complete)
 
 Spec: `docs/superpowers/specs/2026-11-22-remote-ssh-workspace-design.md`, phase 6. Branch `dydev`; each task is verified (cargo test, clippy, vitest, tsc, lint at baseline), committed and pushed on its own. No release, no version bump, no CI in this phase: the 0.9.5-dy bump comes after the owner's walkthrough.
 
@@ -36,5 +36,7 @@ Done. `whenServerReady(host)` (`remote/connections.ts`) waits without starting a
 
 ### Task 5: On a real server, docs
 
-- [ ] dypod e2e: `ai_glob`, `ai_grep` (a secret file left out), `ai_read_file`, `shell_run_command`, a shell session's `cd`.
-- [ ] TERAX.md, the guard has no `PHASE6`, plan marked complete.
+- [x] dypod e2e: `ai_glob`, `ai_grep` (a secret file left out), `ai_read_file`, `shell_run_command`, a shell session's `cd`.
+- [x] TERAX.md, the guard has no `PHASE6`, plan marked complete.
+
+Done. The dypod e2e (`a_folder_on_a_real_server_through_the_app_commands`) runs `ai::run_glob`, `run_grep` (a `server.key` left out), `read_file_in` (that key refused), `run_command_in` (`uname -s; pwd`) and a shell session's `cd`. TERAX.md: AI tools on a server and what happens while it is away.

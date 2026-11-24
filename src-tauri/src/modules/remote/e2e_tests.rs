@@ -280,6 +280,7 @@ fn a_folder_on_a_real_server_through_the_app_commands() {
     use terax_workspace_core::env::WorkspaceEnv;
 
     use super::watch::{push, resume, Deliver, RemoteWatches, WatchSet};
+    use crate::modules::fs::ai;
     use crate::modules::fs::assets::{respond, AssetGrants};
     use crate::modules::fs::file::{read_file_sync, ReadResult};
     use crate::modules::fs::grep::run_grep;
@@ -290,6 +291,8 @@ fn a_folder_on_a_real_server_through_the_app_commands() {
     use crate::modules::git::operations;
     use crate::modules::pty::remote::probe::Probe;
     use crate::modules::pty::remote::CONNECTION_ENDED_EXIT;
+    use crate::modules::shell::run_command_in;
+    use crate::modules::shell::session::ShellSession;
     use crate::modules::workspace::{backend_for, WorkspaceRegistry};
 
     let name = std::env::var("TERAX_AGENT_SSH_HOST").expect("set TERAX_AGENT_SSH_HOST");
@@ -484,6 +487,51 @@ fn a_folder_on_a_real_server_through_the_app_commands() {
         .map(|e| e.name)
         .collect();
     assert_eq!(dimmed, ["debug.log"]);
+
+    // The AI's tools: search and read on the server, its secrets left out,
+    // and commands run there.
+    ws.write_atomic(&format!("{root}/server.key"), b"notes\n")
+        .unwrap();
+    let glob = ai::run_glob(&git_registry, "**/*.md".into(), root.clone(), None, &env).unwrap();
+    assert!(
+        glob.hits.iter().any(|hit| hit.rel == "notes.md"),
+        "{:?}",
+        glob.hits.len()
+    );
+    let grep = ai::run_grep(
+        &git_registry,
+        "^notes$".into(),
+        root.clone(),
+        None,
+        None,
+        None,
+        &env,
+    )
+    .unwrap();
+    let rels: Vec<_> = grep.hits.iter().map(|hit| hit.rel.as_str()).collect();
+    assert_eq!(rels, ["notes.md"]);
+    let read = ai::read_file_in(&git_registry, &env, &format!("{root}/notes.md"), 1024).unwrap();
+    assert!(matches!(read, ReadResult::Text { ref content, .. } if content == "notes\n"));
+    assert!(ai::read_file_in(&git_registry, &env, &format!("{root}/server.key"), 1024).is_err());
+    let out = run_command_in(
+        &git_registry,
+        "uname -s; pwd".into(),
+        Some(root.clone()),
+        env.clone(),
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    assert_eq!(out.stdout, format!("Linux\n{root}\n"));
+    ws.create_dir_all(&format!("{root}/sub")).unwrap();
+    let session = ShellSession::new(root.clone(), env.clone());
+    let moved = session
+        .run("cd sub".into(), None, None, Duration::from_secs(30))
+        .unwrap();
+    assert_eq!(moved.cwd_after, format!("{root}/sub"));
+    let here = session
+        .run("pwd".into(), None, None, Duration::from_secs(30))
+        .unwrap();
+    assert_eq!(here.stdout.trim(), format!("{root}/sub"));
 
     // A terminal on the server, through the app's session: its folder, a
     // resize, and a flood while the explorer keeps answering.
