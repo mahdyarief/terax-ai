@@ -5020,7 +5020,7 @@ dependencies = [
 
 [[package]]
 name = "terax"
-version = "0.9.5-dy"
+version = "0.9.6-dy"
 dependencies = [
  "anyhow",
  "base64 0.21.7",
@@ -5082,7 +5082,7 @@ dependencies = [
 
 [[package]]
 name = "terax-agent"
-version = "0.9.5-dy"
+version = "0.9.6-dy"
 dependencies = [
  "log",
  "portable-pty",

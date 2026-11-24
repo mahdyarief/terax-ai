@@ -8,7 +8,7 @@ Installers are on the
 [Releases page](https://github.com/mahdyarief/terax-ai/releases). They are not
 code-signed; see the release notes for how to open them.
 
-## 0.9.6-dy — unreleased
+## 0.9.6-dy — 2026-11-24
 
 ### From upstream pull requests
 
