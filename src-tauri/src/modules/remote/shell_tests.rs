@@ -7,7 +7,7 @@ use terax_workspace_core::env::WorkspaceEnv;
 
 use super::testing::connected;
 use crate::modules::shell::session::ShellSession;
-use crate::modules::shell::{authorize_server_cwd, run_command_in};
+use crate::modules::shell::{authorize_server_cwd, run_command_in, spawn_background};
 use crate::modules::workspace::WorkspaceRegistry;
 
 struct Remote {
@@ -113,4 +113,86 @@ fn a_shell_session_on_the_server_keeps_its_folder() {
     }
     #[cfg(windows)]
     assert_eq!(first.cwd_after, r.root);
+}
+
+/// A pause in `sh` itself: MSYS's `sh`, which runs the agent's commands in
+/// these tests on Windows, finds no `sleep` on its `PATH` there.
+fn wait(secs: u32) -> String {
+    if cfg!(windows) {
+        format!("read -t {secs} x || true")
+    } else {
+        format!("sleep {secs}")
+    }
+}
+
+/// Polls a background process's log until it has exited.
+fn finished(proc: &crate::modules::shell::background::BackgroundProc) -> (String, Option<i32>) {
+    let until = std::time::Instant::now() + Duration::from_secs(30);
+    let mut text = String::new();
+    let mut offset = 0;
+    loop {
+        let logs = proc.read_logs(offset);
+        text.push_str(&logs.bytes);
+        offset = logs.next_offset;
+        if logs.exited {
+            return (text, logs.exit_code);
+        }
+        assert!(std::time::Instant::now() < until, "still running: {text:?}");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[test]
+fn a_background_process_on_the_server_streams_its_output() {
+    let r = remote("shell-bg");
+    let proc = spawn_background(
+        &r.registry,
+        format!(
+            "echo started; {}; for f in src/*; do echo \"$f\"; done; exit 4",
+            wait(1)
+        ),
+        Some(r.root.clone()),
+        r.env.clone(),
+    )
+    .unwrap();
+    // Output arrives while the process still runs.
+    let until = std::time::Instant::now() + Duration::from_secs(30);
+    while !proc.read_logs(0).bytes.contains("started") {
+        assert!(std::time::Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert!(!proc.read_logs(0).exited);
+    let (text, code) = finished(&proc);
+    assert!(text.contains("src/lib.rs"), "{text:?}");
+    assert!(!text.contains("\r\n"), "{text:?}");
+    assert_eq!(code, Some(4));
+
+    let outside = spawn_background(
+        &r.registry,
+        "true".into(),
+        Some(r.base.clone()),
+        r.env.clone(),
+    );
+    assert!(outside.err().unwrap_or_default().contains("outside"));
+}
+
+#[test]
+fn a_background_process_on_the_server_can_be_stopped() {
+    let r = remote("shell-bg-kill");
+    let proc = spawn_background(
+        &r.registry,
+        format!("echo up; {}", wait(60)),
+        Some(r.root.clone()),
+        r.env.clone(),
+    )
+    .unwrap();
+    let until = std::time::Instant::now() + Duration::from_secs(30);
+    while !proc.read_logs(0).bytes.contains("up") {
+        assert!(std::time::Instant::now() < until);
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let started = std::time::Instant::now();
+    proc.kill();
+    finished(&proc);
+    assert!(started.elapsed() < Duration::from_secs(10));
 }

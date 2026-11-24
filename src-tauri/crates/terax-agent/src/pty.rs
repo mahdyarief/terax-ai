@@ -240,6 +240,28 @@ fn pump(mut reader: impl Read, window: &Window, ended: &Mutex<bool>, id: PtyId, 
     }
 }
 
+/// A bare program name found on `PATH`. ConPTY's `CreateProcessW` does not
+/// search it (the agent runs on Windows only in tests); on Unix the command
+/// builder does.
+#[cfg(windows)]
+fn on_path(program: &str) -> std::ffi::OsString {
+    if program.contains(['/', '\\']) {
+        return program.into();
+    }
+    std::env::var_os("PATH")
+        .and_then(|path| {
+            std::env::split_paths(&path)
+                .map(|dir| dir.join(format!("{program}.exe")))
+                .find(|candidate| candidate.is_file())
+        })
+        .map_or_else(|| program.into(), Into::into)
+}
+
+#[cfg(not(windows))]
+fn on_path(program: &str) -> std::ffi::OsString {
+    program.into()
+}
+
 /// The command a terminal runs, with the environment the app gives its own
 /// terminals (no control endpoint: the app is not on this machine).
 fn command(spec: &PtySpec, cwd: &str, home: Option<&str>) -> io::Result<(CommandBuilder, String)> {
@@ -248,7 +270,7 @@ fn command(spec: &PtySpec, cwd: &str, home: Option<&str>) -> io::Result<(Command
             let program = argv.first().cloned().ok_or_else(|| {
                 io::Error::new(io::ErrorKind::InvalidInput, "an empty terminal command")
             })?;
-            let mut cmd = CommandBuilder::new(&program);
+            let mut cmd = CommandBuilder::new(on_path(&program));
             cmd.args(&argv[1..]);
             (cmd, program)
         }

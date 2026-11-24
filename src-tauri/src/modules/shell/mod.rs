@@ -27,9 +27,6 @@ use session::{SessionRunOutput, ShellSession};
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const MAX_TIMEOUT_SECS: u64 = 300;
 const MAX_OUTPUT_BYTES: usize = 256 * 1024;
-/// Background output is streamed from a local process; a server's command
-/// output only comes back whole, when it ends.
-pub(crate) const BG_ON_A_SERVER: &str = "Background processes run only in local and WSL workspaces for now. On a server, run it in a terminal, or run a command that ends.";
 
 #[derive(Serialize)]
 pub struct CommandOutput {
@@ -131,6 +128,25 @@ fn authorize_cwd(
     } else {
         authorize_spawn_cwd(registry, cwd, workspace).map(drop)
     }
+}
+
+/// `shell_bg_spawn` after its argument checks; on a server, the process runs
+/// in a terminal there, so its output streams as it would locally.
+pub(crate) fn spawn_background(
+    registry: &WorkspaceRegistry,
+    command: String,
+    cwd: Option<String>,
+    workspace: WorkspaceEnv,
+) -> Result<Arc<BackgroundProc>, String> {
+    if let WorkspaceEnv::Ssh { host } = &workspace {
+        let cwd = authorize_server_cwd(registry, cwd.as_deref(), &workspace)?;
+        let ws = crate::modules::remote::registry::global()
+            .and_then(|registry| registry.workspace(host))
+            .ok_or_else(|| crate::modules::remote::registry::not_connected(host).to_string())?;
+        return background::spawn_on_server(command, cwd, ws);
+    }
+    authorize_spawn_cwd(registry, cwd.as_deref(), &workspace)?;
+    background::spawn(command, cwd, workspace)
 }
 
 fn clamp_timeout(timeout_secs: Option<u64>) -> Duration {
@@ -326,16 +342,8 @@ pub async fn shell_bg_spawn(
     workspace: Option<WorkspaceEnv>,
 ) -> Result<u32, String> {
     let workspace = WorkspaceEnv::from_option(workspace);
-    if workspace.is_ssh() {
-        return Err(BG_ON_A_SERVER.into());
-    }
     tauri::async_runtime::spawn_blocking(move || {
-        authorize_spawn_cwd(
-            &app.state::<WorkspaceRegistry>(),
-            cwd.as_deref(),
-            &workspace,
-        )?;
-        let proc = background::spawn(command, cwd, workspace)?;
+        let proc = spawn_background(&app.state::<WorkspaceRegistry>(), command, cwd, workspace)?;
         let state = app.state::<ShellState>();
         let id = state.next_bg_id.fetch_add(1, Ordering::Relaxed);
         state.bg.write().unwrap().insert(id, proc);

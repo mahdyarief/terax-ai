@@ -372,7 +372,7 @@ const COMMANDS: &[(&str, &str, Ssh)] = &[
     (
         "shell/mod.rs",
         "shell_bg_spawn",
-        Refused("streamed output from a server is not in the protocol: \"Background processes run only in local and WSL workspaces for now\""),
+        Works("a_background_process_on_the_server_streams_its_output"),
     ),
     (
         "shell/mod.rs",
