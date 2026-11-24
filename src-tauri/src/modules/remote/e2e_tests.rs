@@ -291,8 +291,8 @@ fn a_folder_on_a_real_server_through_the_app_commands() {
     use crate::modules::git::operations;
     use crate::modules::pty::remote::probe::Probe;
     use crate::modules::pty::remote::CONNECTION_ENDED_EXIT;
-    use crate::modules::shell::run_command_in;
     use crate::modules::shell::session::ShellSession;
+    use crate::modules::shell::{run_command_in, spawn_background};
     use crate::modules::workspace::{backend_for, WorkspaceRegistry};
 
     let name = std::env::var("TERAX_AGENT_SSH_HOST").expect("set TERAX_AGENT_SSH_HOST");
@@ -532,6 +532,60 @@ fn a_folder_on_a_real_server_through_the_app_commands() {
         .run("pwd".into(), None, None, Duration::from_secs(30))
         .unwrap();
     assert_eq!(here.stdout.trim(), format!("{root}/sub"));
+
+    // A background process on the server: output while it runs, its exit
+    // code, and a stop.
+    let bg = spawn_background(
+        &git_registry,
+        "echo started; sleep 2; echo answer-$((6*7)); exit 5".into(),
+        Some(root.clone()),
+        env.clone(),
+    )
+    .unwrap();
+    let logs = |proc: &crate::modules::shell::background::BackgroundProc, until: &str| {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let read = proc.read_logs(0);
+            if read.bytes.contains(until) || read.exited {
+                return read;
+            }
+            assert!(Instant::now() < deadline, "{:?}", read.bytes);
+            thread::sleep(Duration::from_millis(50));
+        }
+    };
+    let early = logs(&bg, "started");
+    assert!(!early.exited, "{:?}", early.bytes);
+    let mut done = logs(&bg, "answer-42");
+    while !done.exited {
+        thread::sleep(Duration::from_millis(50));
+        done = bg.read_logs(0);
+    }
+    assert_eq!(done.bytes, "started\nanswer-42\n");
+    assert_eq!(done.exit_code, Some(5));
+    let long = spawn_background(
+        &git_registry,
+        "echo up; sleep 60".into(),
+        Some(root.clone()),
+        env.clone(),
+    )
+    .unwrap();
+    logs(&long, "up");
+    let started = Instant::now();
+    long.kill();
+    while !long.read_logs(0).exited {
+        assert!(started.elapsed() < Duration::from_secs(10));
+        thread::sleep(Duration::from_millis(50));
+    }
+    // Nothing of it is left on the server.
+    let left = run_command_in(
+        &git_registry,
+        "pgrep -f '[s]leep 60' >/dev/null && echo left || echo gone".into(),
+        Some(root.clone()),
+        env.clone(),
+        Duration::from_secs(30),
+    )
+    .unwrap();
+    assert_eq!(left.stdout.trim(), "gone");
 
     // A terminal on the server, through the app's session: its folder, a
     // resize, and a flood while the explorer keeps answering.

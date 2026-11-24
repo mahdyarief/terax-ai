@@ -1,4 +1,4 @@
-# Plan: Remote SSH, follow-ups before 0.9.5-dy
+# Plan: Remote SSH, follow-ups before 0.9.5-dy (complete)
 
 The limits Phase 6 left (see its plan), done before the walkthrough. Branch `dydev`, each task verified, committed and pushed on its own.
 
@@ -23,4 +23,8 @@ Done. `onNextReady(host, then)` waits for a later ready epoch than the current o
 
 ### Task 5: On a real server, docs
 
-- [ ] dypod e2e: a background process (output while running, exit code, kill); TERAX.md; plan marked complete.
+- [x] dypod e2e: a background process (output while running, exit code, kill); TERAX.md; plan marked complete.
+
+Done. The dypod e2e runs a background process (output while it runs, `started
+answer-42
+` with no ``, exit 5) and stops another, then checks with `pgrep -f '[s]leep 60'` (the bracket keeps pgrep from matching its own `sh -c`) that nothing is left on the server.
