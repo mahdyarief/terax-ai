@@ -68,6 +68,11 @@ export type TerminalTab = TabBase & {
   private?: boolean;
   /** User-set label that overrides the cwd-derived name. Survives cd. */
   customTitle?: string;
+  /**
+   * The shell this tab was opened with (a path `pty_list_shells` lists), for
+   * every pane in it; unset follows Settings > Integrated terminal shell.
+   */
+  shell?: string;
 };
 
 /** How a markdown file's editor tab is laid out. */
@@ -901,7 +906,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
   );
 
   const newTab = useCallback(
-    (cwd?: string) => {
+    (cwd?: string, shell?: string) => {
       const tabId = nextIdRef.current++;
       const leafId = nextIdRef.current++;
       setTabs((t) => [
@@ -914,6 +919,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
           cwd,
           paneTree: { kind: "leaf", id: leafId, cwd },
           activeLeafId: leafId,
+          ...(shell && { shell }),
         },
       ]);
       setActiveId(tabId);

@@ -786,6 +786,13 @@ export default function App() {
     newTab(inheritedCwdForNewTab());
   }, [newTab, inheritedCwdForNewTab]);
 
+  const openNewTabWithShell = useCallback(
+    (shell: string) => {
+      newTab(inheritedCwdForNewTab(), shell);
+    },
+    [newTab, inheritedCwdForNewTab],
+  );
+
   const openNewPrivateTab = useCallback(() => {
     newPrivateTab(inheritedCwdForNewTab());
   }, [newPrivateTab, inheritedCwdForNewTab]);
@@ -2531,6 +2538,7 @@ export default function App() {
               onNew={openNewTab}
               onNewBlock={openNewBlockTab}
               onNewPrivate={openNewPrivateTab}
+              onNewWithShell={openNewTabWithShell}
               onNewPreview={() => openPreviewTab("")}
               onNewEditor={() => setNewEditorOpen(true)}
               onNewGitGraph={openGitGraphFromContext}

@@ -33,6 +33,8 @@ export type SerializedTab =
       tree: SerializedNode;
       blocks?: boolean;
       customTitle?: string;
+      /** The tab's own shell; absent follows the setting. */
+      shell?: string;
     }
   | { kind: "editor"; path: string }
   | { kind: "preview"; url: string }
@@ -173,6 +175,7 @@ function serializeTab(tab: Tab, forHandoff: boolean): SerializedTab | null {
         tree: serializeNode(tab.paneTree, tab.activeLeafId),
         ...(tab.blocks && { blocks: true }),
         ...(tab.customTitle !== undefined && { customTitle: tab.customTitle }),
+        ...(tab.shell && { shell: tab.shell }),
       };
     case "editor":
       return { kind: "editor", path: tab.path };
@@ -287,6 +290,7 @@ function hydrateTab(
         activeLeafId,
         ...(s.blocks && { blocks: true }),
         ...(s.customTitle !== undefined && { customTitle: s.customTitle }),
+        ...(typeof s.shell === "string" && s.shell && { shell: s.shell }),
       } satisfies TerminalTab;
     }
     case "editor":

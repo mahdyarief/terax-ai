@@ -17,6 +17,7 @@ import {
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import type { ThemePref } from "@/modules/settings/store";
 import {
+  coerceTerminalRenderer,
   setAgentNotificationSound,
   setAgentNotifications,
   setAutostart,
@@ -31,18 +32,18 @@ import {
   setTerminalFontSize,
   setTerminalFontWeight,
   setTerminalLetterSpacing,
-  setTerminalScrollback,
   setTerminalMacOptionAsAlt,
-  setTerminalScrollSpeed,
-  setTerminalShell,
-  coerceTerminalRenderer,
   setTerminalRenderer,
   setTerminalScreenReader,
+  setTerminalScrollback,
+  setTerminalScrollSpeed,
+  setTerminalShell,
   setZoomLevel,
   TERMINAL_FONT_SIZES,
   TERMINAL_SCROLLBACK_PRESETS,
 } from "@/modules/settings/store";
 import { coerceMacOptionAsAlt } from "@/modules/terminal/ghostty/input/macOptionAsAlt";
+import { listShells, type ShellInfo } from "@/modules/terminal/lib/shells";
 import { useTheme } from "@/modules/theme";
 import {
   ComputerIcon,
@@ -86,7 +87,6 @@ const OPTION_AS_ALT_CHOICES = [
 ] as const;
 const SCROLL_SPEEDS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4] as const;
 
-type ShellInfo = { name: string; path: string; integrated: boolean };
 const SHELL_AUTO = "auto";
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 2.0;
@@ -167,7 +167,7 @@ export function GeneralSection() {
   }, []);
 
   useEffect(() => {
-    void invoke<ShellInfo[]>("pty_list_shells")
+    void listShells()
       .then(setShells)
       .catch(() => {});
     void invoke<{ name: string }[]>("wsl_list_distros")

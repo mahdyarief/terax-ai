@@ -43,6 +43,8 @@ export type TerminalPaneProps = {
   ptyId?: number;
   /** Enable command-block decorations (OSC 133) for this terminal. */
   blocks?: boolean;
+  /** Shell to start; undefined follows Settings > Integrated terminal shell. */
+  shell?: string;
   onSearchReady?: (leafId: number, addon: TerminalSearchController) => void;
   onExit?: (leafId: number, code: number) => void;
   onCwd?: (leafId: number, cwd: string) => void;
@@ -67,6 +69,7 @@ const GhosttyTerminalPane = memo(
       initialCwd,
       ptyId,
       blocks = false,
+      shell,
       onSearchReady,
       onExit,
       onCwd,
@@ -90,6 +93,7 @@ const GhosttyTerminalPane = memo(
       initialCwd,
       ptyId,
       blocks,
+      shell,
       onSearchReady: (search) => onSearchReady?.(leafId, search),
       onExit: (code) => onExit?.(leafId, code),
       onCwd: (cwd) => onCwd?.(leafId, cwd),

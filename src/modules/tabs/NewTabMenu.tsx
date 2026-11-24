@@ -3,6 +3,9 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
@@ -12,7 +15,14 @@ import {
 } from "@/components/ui/popover";
 import { AgentLauncherPanel } from "@/modules/agents/components/AgentLauncherPanel";
 import type { AgentLaunchRequest } from "@/modules/agents/lib/launcher";
+import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useShortcutHint } from "@/modules/shortcuts";
+import {
+  defaultShellPath,
+  type ShellInfo,
+  useShells,
+} from "@/modules/terminal/lib/shells";
+import { useWorkspaceEnvStore } from "@/modules/workspace";
 import {
   AiBrowserIcon,
   ArrowRight01Icon,
@@ -34,6 +44,8 @@ type Props = {
   onNew: () => void;
   onNewBlock: () => void;
   onNewPrivate: () => void;
+  /** Opens a terminal tab with the given shell instead of the default. */
+  onNewWithShell?: (shell: string) => void;
   onNewPreview: () => void;
   onNewEditor: () => void;
   onNewGitGraph: () => void;
@@ -44,6 +56,7 @@ export function NewTabMenu({
   onNew,
   onNewBlock,
   onNewPrivate,
+  onNewWithShell,
   onNewPreview,
   onNewEditor,
   onNewGitGraph,
@@ -54,6 +67,11 @@ export function NewTabMenu({
   const privateHint = useShortcutHint("tab.newPrivate");
   const editorHint = useShortcutHint("tab.newEditor");
   const previewHint = useShortcutHint("tab.newPreview");
+  const shells = useShells();
+  const shellSetting = usePreferencesStore((s) => s.terminalShell);
+  // WSL and SSH spaces start their own login shell; this machine's shells
+  // only apply to a local space.
+  const local = useWorkspaceEnvStore((s) => s.env.kind === "local");
   const [menuOpen, setMenuOpen] = useState(false);
   const [launcherOpen, setLauncherOpen] = useState(false);
   const openLauncherAfterMenuClose = useRef(false);
@@ -112,6 +130,13 @@ export function NewTabMenu({
                 <span className="min-w-0 flex-1 truncate">Terminal</span>
                 <span className={HINT}>{terminalHint}</span>
               </DropdownMenuItem>
+              {onNewWithShell && local && shells.length > 1 ? (
+                <ShellSubmenu
+                  shells={shells}
+                  defaultPath={defaultShellPath(shells, shellSetting)}
+                  onPick={onNewWithShell}
+                />
+              ) : null}
               <DropdownMenuItem onSelect={onNewBlock}>
                 <HugeiconsIcon
                   icon={ComputerTerminal02Icon}
@@ -201,5 +226,47 @@ export function NewTabMenu({
         />
       </PopoverContent>
     </Popover>
+  );
+}
+
+/** Opens a terminal with one of this machine's shells, once; the default
+ * stays as Settings > Integrated terminal shell has it. */
+export function ShellSubmenu({
+  shells,
+  defaultPath,
+  onPick,
+}: {
+  shells: ShellInfo[];
+  defaultPath: string | null;
+  onPick: (shell: string) => void;
+}) {
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <HugeiconsIcon
+          icon={ComputerTerminal02Icon}
+          size={14}
+          strokeWidth={1.75}
+          className="size-3.5 shrink-0 text-muted-foreground"
+        />
+        <span className="min-w-0 flex-1 truncate">Terminal with</span>
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="min-w-56">
+        {shells.map((shell) => (
+          <DropdownMenuItem
+            key={shell.path}
+            title={shell.path}
+            onSelect={() => onPick(shell.path)}
+          >
+            <span className="min-w-0 flex-1 truncate">{shell.name}</span>
+            {shell.path === defaultPath ? (
+              <span className={HINT}>Default</span>
+            ) : !shell.integrated ? (
+              <span className={HINT}>No blocks</span>
+            ) : null}
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
   );
 }

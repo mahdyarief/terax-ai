@@ -82,6 +82,18 @@ describe("serializeTabs", () => {
 });
 
 describe("hydrateTabs", () => {
+  it("keeps the shell a tab was opened with, and nothing for the default", () => {
+    const shell = String.raw`C:\Program Files\Git\bin\bash.exe`;
+    const [own, plain] = hydrateTabs(
+      serializeTabs([term({ shell }), term({})]),
+      "s2",
+      counter(),
+    );
+    expect(own.kind === "terminal" && own.shell).toBe(shell);
+    expect(plain.kind === "terminal" && plain.shell).toBeUndefined();
+    expect(serializeTabs([term({})])[0]).not.toHaveProperty("shell");
+  });
+
   it("round-trips structure, cwd, blocks and active leaf", () => {
     const tree: PaneNode = {
       kind: "split",

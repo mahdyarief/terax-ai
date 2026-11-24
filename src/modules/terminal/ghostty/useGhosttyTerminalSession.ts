@@ -82,6 +82,8 @@ type GhosttySession = {
   readonly leafId: number;
   readonly backend: GhosttyBackend;
   initialCwd: string | undefined;
+  /** The tab's own shell, for this and every later spawn (Retry, reopen). */
+  shell: string | undefined;
   lastCwd: string | null;
   model: GhosttyTerminalModelApi | null;
   surface: GhosttySurface | null;
@@ -143,6 +145,8 @@ type Options = {
   /** PTY adopted from another window; a queued replay is consumed once. */
   ptyId?: number;
   blocks?: boolean;
+  /** Shell to start; undefined follows the setting. Read when spawning. */
+  shell?: string;
   onExit?: (code: number) => void;
   onCwd?: (cwd: string) => void;
   onSearchReady?: (search: TerminalSearchController) => void;
@@ -157,6 +161,7 @@ export function useGhosttyTerminalSession({
   initialCwd,
   ptyId,
   blocks = false,
+  shell,
   onSearchReady,
   onExit,
   onCwd,
@@ -185,6 +190,7 @@ export function useGhosttyTerminalSession({
   const callbackRef = useRef({ onSearchReady, onExit, onCwd });
   callbackRef.current = { onSearchReady, onExit, onCwd };
   const initialCwdRef = useRef(initialCwd);
+  const shellRef = useRef(shell);
   const replayConsumedRef = useRef(false);
 
   useEffect(() => {
@@ -194,6 +200,7 @@ export function useGhosttyTerminalSession({
       initialCwdRef.current,
       fontRef.current,
     );
+    session.shell = shellRef.current;
     if (!replayConsumedRef.current) {
       replayConsumedRef.current = true;
       const replay = ptyId === undefined ? null : takeHandoffReplay(ptyId);
@@ -613,6 +620,7 @@ function ensureSession(
     leafId,
     backend,
     initialCwd,
+    shell: undefined,
     lastCwd: null,
     model: null,
     surface: null,
@@ -946,7 +954,7 @@ async function initializeSessionGeneration(
     },
     session.initialCwd,
     !!ghosttyBlocks(session.leafId),
-    preferences.terminalShell || undefined,
+    session.shell || preferences.terminalShell || undefined,
     session.leafId,
     theme,
     replay ? { attach: { ptyId: replay.ptyId, replay } } : {},

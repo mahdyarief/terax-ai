@@ -67,6 +67,8 @@ type Props = {
   onNew: () => void;
   onNewBlock: () => void;
   onNewPrivate: () => void;
+  /** Opens a terminal tab with the given shell instead of the default. */
+  onNewWithShell?: (shell: string) => void;
   onNewPreview: () => void;
   onNewEditor: () => void;
   onNewGitGraph: () => void;
@@ -99,6 +101,7 @@ export function TabBar({
   onNew,
   onNewBlock,
   onNewPrivate,
+  onNewWithShell,
   onNewPreview,
   onNewEditor,
   onNewGitGraph,
@@ -670,6 +673,7 @@ export function TabBar({
           onNew={onNew}
           onNewBlock={onNewBlock}
           onNewPrivate={onNewPrivate}
+          onNewWithShell={onNewWithShell}
           onNewPreview={onNewPreview}
           onNewEditor={onNewEditor}
           onNewGitGraph={onNewGitGraph}
