@@ -31,7 +31,8 @@ Done. `whenServerReady(host)` (`remote/connections.ts`) waits without starting a
 
 ### Task 4: Packaging
 
-- [ ] The bundled agents (`binaries/terax-agent-*-linux-musl`) are resources of the unsigned build config; a missing agent says how to build it. The release workflow's `build:agent` step is noted for the CI pass later.
+- [x] The bundled agents (`binaries/terax-agent-*-linux-musl`) are resources of the unsigned build config (`tauri.nosign.conf.json`, since Phase 3); `build:nosign` builds them first, and a build without one says "this build of Terax carries no agent for <platform>" when a server needs it.
+- [x] `release-dy.yml` builds them before its macOS and Linux installers (zig through `mlugg/setup-zig`, `cargo-zigbuild` through `taiki-e/install-action`, the musl targets, `pnpm build:agent`): it bundles with that config, which fails without the files. The Windows installers are built locally with `build:nosign`. Not run yet: the CI pass comes with 0.9.5-dy.
 
 ### Task 5: On a real server, docs
 

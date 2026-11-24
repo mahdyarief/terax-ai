@@ -73,6 +73,22 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      # The agents a server's space installs: static musl binaries, built
+      # with zig on every host (the zig version they are built with locally).
+      # tauri.nosign.conf.json bundles them, so a build without them fails.
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.17.1
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-zigbuild
+
+      - name: Build the remote agents
+        run: |
+          rustup target add x86_64-unknown-linux-musl aarch64-unknown-linux-musl
+          pnpm build:agent
+
       # Ad-hoc signed ("-"): without any signature an Apple Silicon Mac
       # refuses to start the app at all. It is still not notarized.
       - name: Build macOS installer
