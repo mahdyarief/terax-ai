@@ -1008,6 +1008,10 @@ mod auth_tests {
     /// A root named `repo\u{FFFD}` must not cover a sibling whose real name only
     /// *displays* the same: grants compare names exactly, as `PathBuf` did.
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "APFS refuses a name that is not valid UTF-8"
+    )]
     fn a_non_unicode_sibling_cannot_alias_an_authorized_root() {
         let parent = tempdir("alias");
         let root = parent.join("repo\u{FFFD}");
@@ -1034,6 +1038,10 @@ mod auth_tests {
 
     /// A look-alike never reaches an authorization check as a string.
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "APFS refuses a name that is not valid UTF-8"
+    )]
     fn a_path_that_cannot_be_spelled_exactly_is_never_covered() {
         let parent = tempdir("alias-canon");
         let outside = parent.join(non_unicode_name());

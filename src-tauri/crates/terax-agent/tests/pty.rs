@@ -118,7 +118,11 @@ fn read_until(
                 remote.pty_credit(id, bytes.len() as u64).unwrap();
                 answer_cursor_query(remote, id, &bytes);
                 out.extend_from_slice(&bytes);
-                if done(&String::from_utf8_lossy(&out)) {
+                // Only the new bytes and what came just before them: what
+                // `done` looks for is short, and a flood of megabytes is
+                // not searched again for every frame.
+                let recent = &out[out.len().saturating_sub(bytes.len() + 64 * 1024)..];
+                if done(&String::from_utf8_lossy(recent)) {
                     return (String::from_utf8_lossy(&out).into_owned(), None);
                 }
             }

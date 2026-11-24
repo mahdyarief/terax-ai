@@ -479,6 +479,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "the agent runs on Linux servers and refuses macOS"
+    )]
     fn a_server_terminal_runs_through_the_apps_session() {
         let server = server("pty-session");
         let mut terminal = open(&server, 1);

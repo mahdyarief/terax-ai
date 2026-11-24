@@ -122,6 +122,10 @@ fn bundled(platform: &str) -> Option<String> {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the agent runs on Linux servers and refuses macOS"
+)]
 fn a_first_connect_installs_and_a_second_reuses_in_every_shell() {
     for shell in shells() {
         let home = tempfile::tempdir().unwrap();

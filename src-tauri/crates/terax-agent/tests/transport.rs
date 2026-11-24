@@ -100,6 +100,10 @@ fn installed_agent(home: &Path) -> PathBuf {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the agent runs on Linux servers and refuses macOS"
+)]
 fn a_first_connect_installs_and_a_second_reuses() {
     let home = tempfile::tempdir().unwrap();
     let agent = agent();
@@ -147,6 +151,10 @@ fn a_first_connect_installs_and_a_second_reuses() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the agent runs on Linux servers and refuses macOS"
+)]
 fn shell_noise_is_skipped_and_stderr_reaches_the_log() {
     let home = tempfile::tempdir().unwrap();
     let noisy = shell(home.path(), "echo 'Welcome!'; echo 'from stderr' >&2;");
@@ -165,6 +173,10 @@ fn shell_noise_is_skipped_and_stderr_reaches_the_log() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the agent runs on Linux servers and refuses macOS"
+)]
 fn a_session_that_dies_mid_install_fails_cleanly() {
     let home = tempfile::tempdir().unwrap();
     let shim = tempfile::tempdir().unwrap();
@@ -237,6 +249,10 @@ fn last_words_after_the_output_closes_are_kept() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the agent runs on Linux servers and refuses macOS"
+)]
 fn a_server_without_an_agent_for_it_is_refused_and_left_alone() {
     let home = tempfile::tempdir().unwrap();
     match run(&shell(home.path(), ""), None, Duration::from_secs(60)).result {

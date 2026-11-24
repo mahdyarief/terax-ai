@@ -29,6 +29,10 @@ fn next(rx: &mpsc::Receiver<(String, Vec<String>)>) -> Vec<String> {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the agent runs on Linux servers and refuses macOS"
+)]
 fn a_watched_server_folder_reports_changes_and_is_watched_again_after_a_reconnect() {
     let host = connected("watch-a");
     let env = WorkspaceEnv::Ssh { host: host.clone() };

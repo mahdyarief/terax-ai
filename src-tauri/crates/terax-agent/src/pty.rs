@@ -6,11 +6,14 @@
 //! reading while `PTY_WINDOW` bytes are uncredited, so a flood waits in the
 //! terminal (as it would locally) instead of filling the stream that file
 //! replies share. `PtyExit` follows the last `PtyData`: the waiter takes the
-//! reader's last word (or gives up on it after `DRAIN`, when a background
-//! process still holds the terminal) before it reports the end.
+//! reader's last word (or gives up on it after `DRAIN` without output, when
+//! a background process still holds the terminal) before it reports the
+//! end. Output waiting only for the client's credit is not given up on.
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{mpsc, Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -22,7 +25,8 @@ use terax_remote_protocol::message::{Envelope, PtyId, PtySpec, PTY_CHUNK, PTY_WI
 /// notices on its own.
 pub type Emit = Arc<dyn Fn(Envelope) + Send + Sync>;
 
-/// How long an ended process's output is still read before `PtyExit`.
+/// How long an ended process's terminal may stay quiet before `PtyExit`
+/// gives up on the rest of its output.
 const DRAIN: Duration = Duration::from_secs(2);
 
 /// Bytes sent and not yet credited, and whether the terminal has ended.
@@ -30,9 +34,22 @@ const DRAIN: Duration = Duration::from_secs(2);
 struct Window {
     state: Mutex<(u64, bool)>,
     changed: Condvar,
+    /// Every byte sent so far, to tell a terminal still draining from one
+    /// that has gone quiet.
+    sent: AtomicU64,
 }
 
 impl Window {
+    fn sent(&self) -> u64 {
+        self.sent.load(Ordering::SeqCst)
+    }
+
+    /// The reader waits only for the client's credit.
+    fn is_full(&self) -> bool {
+        let state = self.state.lock().unwrap();
+        state.0 >= PTY_WINDOW && !state.1
+    }
+
     /// Waits for room in the window and returns how much there is (a
     /// read may take no more, so the window is never exceeded); `None` once
     /// the terminal has ended. A credit that lands later only adds room.
@@ -162,7 +179,7 @@ impl Ptys {
             // Closing the terminal ends the reader on Windows; on Unix the
             // reader holds its own descriptor and reads what is left.
             pty.master.lock().unwrap().take();
-            let _ = reader_done.recv_timeout(DRAIN);
+            wait_for_the_last_output(&reader_done, &pty.window);
             ptys.0.lock().unwrap().remove(&id);
             let mut ended = pty.ended.lock().unwrap();
             *ended = true;
@@ -202,6 +219,8 @@ impl Ptys {
     /// Kills the terminal's process; its `PtyExit` follows.
     pub fn close(&self, id: PtyId) {
         if let Some(pty) = self.get(id) {
+            // Output not yet read is dropped with the terminal.
+            pty.window.end();
             pty.kill("the terminal was closed");
         }
     }
@@ -220,6 +239,22 @@ impl Ptys {
     }
 }
 
+/// Waits for the reader to finish after the process ended: as long as output
+/// still comes, or waits only for the client's credit (a slow client must not
+/// lose the end of a long output); `DRAIN` of quiet gives up on it (a
+/// background process holding the terminal). Ending the window (a close, or
+/// the session ending) ends the reader, so this ends too.
+fn wait_for_the_last_output(reader_done: &mpsc::Receiver<()>, window: &Window) {
+    let mut seen = window.sent();
+    while let Err(RecvTimeoutError::Timeout) = reader_done.recv_timeout(DRAIN) {
+        let now = window.sent();
+        if now == seen && !window.is_full() {
+            return;
+        }
+        seen = now;
+    }
+}
+
 /// Reads output in chunks while the window has room, until the terminal
 /// ends or the reader does.
 fn pump(mut reader: impl Read, window: &Window, ended: &Mutex<bool>, id: PtyId, emit: &Emit) {
@@ -235,6 +270,7 @@ fn pump(mut reader: impl Read, window: &Window, ended: &Mutex<bool>, id: PtyId, 
             return;
         }
         window.state.lock().unwrap().0 += read as u64;
+        window.sent.fetch_add(read as u64, Ordering::SeqCst);
         emit(Envelope::PtyData {
             id,
             bytes: buffer[..read].to_vec(),
@@ -362,6 +398,30 @@ mod tests {
             last = now;
         }
         panic!("the reader never stopped");
+    }
+
+    #[test]
+    fn an_ended_terminal_waits_for_a_slow_client_but_not_for_a_quiet_one() {
+        let (_done, reader_done) = mpsc::channel::<()>();
+        // Quiet, with room: given up on after DRAIN.
+        let started = Instant::now();
+        wait_for_the_last_output(&reader_done, &Window::default());
+        assert!(started.elapsed() < DRAIN * 2);
+
+        // Waiting only for credit: still waited on, until the window ends.
+        let window = Arc::new(Window::default());
+        window.state.lock().unwrap().0 = PTY_WINDOW;
+        let waiting = {
+            let window = window.clone();
+            thread::spawn(move || wait_for_the_last_output(&reader_done, &window))
+        };
+        thread::sleep(DRAIN + Duration::from_millis(700));
+        assert!(
+            !waiting.is_finished(),
+            "gave up on output the client will read"
+        );
+        window.end();
+        waiting.join().unwrap();
     }
 
     /// Output in reads of an odd size, as a Unix terminal gives it (never a

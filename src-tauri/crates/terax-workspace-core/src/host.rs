@@ -560,6 +560,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        target_os = "macos",
+        ignore = "APFS refuses a name that is not valid UTF-8"
+    )]
     fn a_canonical_path_that_is_not_unicode_is_refused() {
         use std::os::unix::ffi::OsStrExt;
         let (_dir, ws, root) = setup();

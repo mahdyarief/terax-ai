@@ -567,6 +567,10 @@ fn browsing_lists_only_directories_and_works_outside_the_roots() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "the agent runs on Linux servers and refuses macOS"
+)]
 fn watched_folders_and_files_report_changes_until_the_set_is_emptied() {
     let tree = tree();
     let mut agent = Agent::ready();
