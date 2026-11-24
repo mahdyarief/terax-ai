@@ -24,6 +24,12 @@ Last reviewed: **2026-11-24**, against `dydev` at 0.9.5-dy, for **0.9.6-dy**. `u
 | [#1514](https://github.com/crynta/terax-ai/pull/1514) | mydd7 | Terminal: the WebGL viewport stays fitted to the grid. |
 | [#1500](https://github.com/crynta/terax-ai/pull/1500) | mydd7 | Terminal: no bursts of mouse wheel reports to TUI apps. |
 | [#1466](https://github.com/crynta/terax-ai/pull/1466) | mydd7 | Tab strip honors the wheel's delta units when scrolling. |
+| [#1504](https://github.com/crynta/terax-ai/pull/1504) | AuricX | macOS: Cmd+click opens terminal links while a program tracks the mouse (Claude Code fullscreen), and the program doesn't get that click. Its TERAX.md line was merged by hand. |
+| [#1478](https://github.com/crynta/terax-ai/pull/1478) | mydd7 | Windows Ctrl+V: a release of V after Ctrl reports the modifiers it was released with. |
+| [#1506](https://github.com/crynta/terax-ai/pull/1506) | mydd7 | Two quick pastes reach the terminal in key press order. **Merged by hand** with dy's image paste: an image's path is delivered in order too. |
+| [#1472](https://github.com/crynta/terax-ai/pull/1472) | craraque | Cmd+V (and Ctrl+Shift+V) without text sends an empty bracketed paste, so Claude Code reads an image from the clipboard itself. **Merged by hand** with dy's image paste: with an agent running, the empty paste goes to the agent; otherwise the image is saved and its path pasted. |
+| [#1484](https://github.com/crynta/terax-ai/pull/1484) | mydd7 | Copies to the native clipboard run in order, and a paste waits for a copy in progress. **Merged by hand:** the ordering lives in dy's shared `writeClipboardText` (`src/lib/clipboard.ts`), so it covers every copy in the app. |
+| [#1265](https://github.com/crynta/terax-ai/pull/1265) | mydd7 | Middle-click closes a tab (on mousedown; `auxclick` never fired). |
 
 ## Already in dy
 
@@ -36,6 +42,9 @@ Last reviewed: **2026-11-24**, against `dydev` at 0.9.5-dy, for **0.9.6-dy**. `u
 | [#1264](https://github.com/crynta/terax-ai/pull/1264) | Answer OSC 10/11 color queries so Claude Code and Codex match the theme. | The Ghostty engine answers them with the theme's colors (`AdaptedGhostty.test.ts`, "answers ... color queries"). The PR targets the xterm-era handlers. |
 | [#1306](https://github.com/crynta/terax-ai/pull/1306) | Don't type `cd` into a terminal running a program. | `sendCd` in `src/app/App.tsx` uses `writeAtPrompt`, and shows "Terminal is busy" otherwise. |
 | [#1250](https://github.com/crynta/terax-ai/pull/1250) | Explorer follows the active space, not another space's last terminal. | `useWorkspaceCwd`: the explorer view is always within the space root (`explorerViewRoot`). |
+| [#1410](https://github.com/crynta/terax-ai/pull/1410) | Shift-only text keys send the shifted character in Kitty keyboard mode. | `buildKeyEvent` in `src/modules/terminal/ghostty/input/keyRouting.ts` gives the base key only with Ctrl, Alt or Super, or when the app asked for every key (upstream #1419). |
+| [#1247](https://github.com/crynta/terax-ai/pull/1247) | No native context menu while a TUI tracks the mouse. | `TerminalNativeSelection` cancels `contextmenu` while mouse tracking is on (Shift still opens it). The PR targets xterm.js. |
+| [#1268](https://github.com/crynta/terax-ai/pull/1268) | Open `file:` OSC 8 hyperlinks (`ls --hyperlink`, eza). | `terminalLinkTargets.ts` resolves `file:` URLs to local files (`file-uri`) and opens existing ones. |
 
 ## Later
 
@@ -44,10 +53,10 @@ Last reviewed: **2026-11-24**, against `dydev` at 0.9.5-dy, for **0.9.6-dy**. `u
 | [#1320](https://github.com/crynta/terax-ai/pull/1320) | Move live terminals between tabs and splits. A good feature but large (19 files, +1316 lines), touching tabs, panes, agents and the palette. Merge it with care in its own release. |
 | [#1226](https://github.com/crynta/terax-ai/pull/1226) | Show the shell name when the OSC title is the user name. Draft upstream. |
 | [#1308](https://github.com/crynta/terax-ai/pull/1308) | Alpha channel in `terminal.background`. Draft upstream. |
+| [#1246](https://github.com/crynta/terax-ai/pull/1246) | Cmd+W in a preview closes the tab, not the window. **Has a flaw:** it closes a tab whenever focus is in the preview's iframe when the window is asked to close. Focus stays there when the window's own close button is clicked, so that button would close a tab instead of the window. It also carries an unrelated redo-shortcut change. Needs a way to tell Cmd+W from the close button, and a Mac to test (WKWebView only). |
+| [#1371](https://github.com/crynta/terax-ai/pull/1371), [#1269](https://github.com/crynta/terax-ai/pull/1269) | Nerd Fonts installed on macOS drawn in the terminal (WKWebView canvas does not resolve them by name). The two overlap; #1371 loads the font through `FontFace` with a new Rust command, #1269 only improves auto-detect. macOS only: take one when a Mac can verify it. |
 
-## Not reviewed yet
-
-These applied to dy cleanly or with a three-way merge on 2026-11-24, but were not looked at in detail: #1506, #1504, #1484, #1478, #1472, #1410, #1371, #1269, #1268, #1265, #1247, #1246.
+## Not reviewed
 
 These did not apply and are older than the move to the Ghostty terminal, so they are probably out of date: #1392, #1376, #1272, #1270, #1252, #1215.
 

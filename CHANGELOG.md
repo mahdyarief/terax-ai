@@ -27,6 +27,15 @@ the full review, including those dy already covers.
 - PowerShell terminals no longer fail to start their integration for users
   with `Set-StrictMode` in their profile (#1263).
 - The tab strip scrolls by the wheel's real distance (#1466).
+- Pasting: two quick pastes arrive in the order they were made, an image's
+  path included (#1506); a paste waits for a copy still in progress, and
+  quick copies land in order (#1484); with Claude Code or another agent
+  running, Cmd+V or Ctrl+Shift+V of an image sends the empty paste the agent
+  reads the image on (#1472); Ctrl released before V is reported correctly
+  (#1478).
+- macOS: Cmd+click opens terminal links while a program tracks the mouse,
+  such as Claude Code in fullscreen (#1504).
+- Middle-click closes a tab (#1265).
 
 ## 0.9.5-dy — 2026-11-24
 
