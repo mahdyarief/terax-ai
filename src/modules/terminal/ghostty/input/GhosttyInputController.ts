@@ -186,6 +186,15 @@ export class GhosttyInputController {
     );
   }
 
+  // A paste with no text still reaches a bracketed-paste application as an
+  // empty paste, as in xterm. TUIs such as Claude Code read the clipboard
+  // themselves on it, which is how Cmd+V pastes an image.
+  private pasteEmpty(): void {
+    if (this.disposed || !this.options.model.modes().bracketedPaste) return;
+    this.nativeSelection?.reset();
+    this.emitText(encodeTerminalPaste("", true), "paste", false);
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
@@ -308,9 +317,15 @@ export class GhosttyInputController {
       released: false,
     };
     if (data) this.pasteKeys.set(code, waiting);
+    // Nothing of ours to paste: Ctrl+V goes on as a key, other paste routes
+    // (Cmd+V, Ctrl+Shift+V) as an empty paste.
     const forwardKey = () => {
       if (this.disposed) return;
-      if (!data || !encoded || encoded.byteLength === 0) return;
+      if (!data) {
+        this.pasteEmpty();
+        return;
+      }
+      if (!encoded || encoded.byteLength === 0) return;
       this.options.onData(
         (flags & KITTY_REPORT_EVENT_TYPES) !== 0
           ? canonicalKittyPress(encoded)
@@ -340,8 +355,9 @@ export class GhosttyInputController {
           this.paste(text);
           return;
         }
-        // An agent reads the clipboard's image itself when Ctrl+V reaches it.
-        if (data && this.options.agentActive?.()) {
+        // An agent reads the clipboard's image itself when Ctrl+V (or an
+        // empty paste) reaches it.
+        if (this.options.agentActive?.()) {
           forwardKey();
           return;
         }
