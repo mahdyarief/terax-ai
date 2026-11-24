@@ -230,6 +230,18 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => ({
     testTimeout: 20_000,
     hookTimeout: 20_000,
   },
+  // Dev only: crawl every source file for dependencies at startup. Without
+  // it Vite finds a lazily imported package (a block tab, an editor
+  // language) mid-session, optimizes again, and the page's pending imports
+  // of the old bundle fail with 504 "Outdated Optimize Dep": a blank window.
+  optimizeDeps: {
+    entries: [
+      "index.html",
+      "settings.html",
+      "src/**/*.{ts,tsx}",
+      "!src/**/*.test.{ts,tsx}",
+    ],
+  },
   clearScreen: false,
   server: {
     headers: { "Content-Security-Policy": "frame-ancestors 'none'" },
