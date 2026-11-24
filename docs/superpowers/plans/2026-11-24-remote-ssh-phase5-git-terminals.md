@@ -48,9 +48,11 @@ Done, with a finding: the core's folder watch reports a folder only when its lis
 
 ### Task 3: The PTY stream in the protocol and the agent
 
-- [ ] Messages and `PROTOCOL_VERSION` 4; client: per-PTY routing of `PtyData`/`PtyExit` from the read loop (hand-off only), `pty_open/write/resize/close/credit`.
-- [ ] Agent: PTY sessions on portable-pty (a thread per PTY, not a worker), credit window, chunking, exit codes, kill on `PtyClose` and when the session ends; shell discovery, integration scripts and env.
-- [ ] Tests over pipes: echo through a shell, resize, exit code, a 4 MiB flood while file calls keep answering promptly, close kills, session end kills.
+- [x] Messages and `PROTOCOL_VERSION` 4; client: per-PTY routing of `PtyData`/`PtyExit` from the read loop (hand-off only), `pty_open/write/resize/close/credit`.
+- [x] Agent: PTY sessions on portable-pty (a thread per PTY, not a worker), credit window, chunking, exit codes, kill on `PtyClose` and when the session ends; shell discovery, integration scripts and env.
+- [x] Tests over pipes: echo through a shell, resize, exit code, a 4 MiB flood while file calls keep answering promptly, close kills, session end kills.
+
+Done. `PROTOCOL_VERSION` 4 and capability `pty.v1`. Only `PtyOpen` is a request (answered `PtyOpened { program }`); keystrokes, resize, close and credit are one-way envelopes, so typing never waits for a round trip and an id that has just ended is ignored. The client picks the id and registers its channel before asking, so no output is missed. Agent (`crates/terax-agent/src/pty.rs`): three threads per terminal (keys, reader, waiter); the reader sends at most 64 KiB a frame and stops while 1 MiB is uncredited; the waiter drops the master when the process ends (which ends ConPTY's reader), waits up to 2 s for the reader's last output, then sends `PtyExit` under the same lock data is sent with, so nothing follows it. Login shell from `$SHELL` (else `/bin/sh`) with the app's integration scripts written under the server's `~/.cache/terax/shell-integration`. Found on dypod: an agent built on Windows carries the scripts with CRLF and bash refuses them; the agent writes them with Unix line ends. Tests: the window with a fake endless reader, the shell setup per shell, six terminal tests over pipes through the real client (command, cwd, env and exit code; keys and resize; a 5 MB flood beside file calls; close; refused cwd; session end kills), and `over_ssh.rs::a_terminal_runs_on_the_server_over_ssh` on dypod (bash with prompt marks and OSC 7, `stty size` after a resize, a 2.7 MB flood with a stat beside it in 24 ms, `exit 4`).
 
 ### Task 4: Terminals in a server's space
 

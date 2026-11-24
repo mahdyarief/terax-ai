@@ -6,6 +6,12 @@
 //! thread routes back to it. A call gives up at its deadline (and tells the
 //! agent to stop). When the stream ends or breaks, every waiting call and
 //! every later one fails with `ConnectionAborted`.
+//!
+//! Terminals (`pty_open`) get their output as `PtyEvent`s on a channel of
+//! their own, which the reader thread only feeds; the agent stops reading a
+//! terminal while `PTY_WINDOW` bytes of it are uncredited (`pty_credit`), so
+//! a channel holds at most that much. When the stream ends, every open
+//! terminal gets an `Exit` with the reason.
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -26,9 +32,10 @@ use terax_workspace_core::workspace::{
 };
 
 use crate::frame::{read_frame, write_frame, FrameError, MAX_FRAME};
-use crate::handshake::{negotiate, Hello, Session, CAP_WORKSPACE};
+use crate::handshake::{negotiate, Hello, Session, CAP_PTY, CAP_WORKSPACE};
 use crate::message::{
-    decode, encode, Browse, Call, CallId, Envelope, Reply, WireError, WireExecSpec,
+    decode, encode, Browse, Call, CallId, Envelope, PtyId, PtySpec, Reply, WireError, WireExecSpec,
+    PTY_CHUNK,
 };
 
 /// The largest file an upload sends: one `WriteAtomic` frame, with room
@@ -65,6 +72,19 @@ impl Default for Options {
 
 type Waiter = mpsc::Sender<Result<Reply, WireError>>;
 
+/// What a terminal on the server sends.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PtyEvent {
+    /// Output; credit it back (`pty_credit`) once it is consumed.
+    Data(Vec<u8>),
+    /// The last event: the process ended (`code`), or the terminal was
+    /// ended (`reason`: closed, the session or the connection ended).
+    Exit {
+        code: Option<u32>,
+        reason: Option<String>,
+    },
+}
+
 /// What the reader thread shares with callers. It holds no writer, so
 /// dropping the `RemoteWorkspace` closes the agent's input.
 #[derive(Default)]
@@ -75,6 +95,8 @@ struct Shared {
     closed: Mutex<Option<String>>,
     /// Gets each `Changed` the agent pushes.
     on_changed: Mutex<Option<OnChanged>>,
+    /// Open terminals' channels.
+    ptys: Mutex<HashMap<PtyId, mpsc::Sender<PtyEvent>>>,
 }
 
 /// Receives the paths of an `Envelope::Changed`, on the reader thread: it
@@ -87,6 +109,13 @@ impl Shared {
         // Dropping the senders wakes every waiter with `Disconnected`.
         self.calls.lock().unwrap().clear();
         self.pings.lock().unwrap().clear();
+        let reason = self.aborted().to_string();
+        for (_, pty) in self.ptys.lock().unwrap().drain() {
+            let _ = pty.send(PtyEvent::Exit {
+                code: None,
+                reason: Some(reason.clone()),
+            });
+        }
     }
 
     fn aborted(&self) -> io::Error {
@@ -120,7 +149,11 @@ impl RemoteWorkspace {
         roots: Vec<String>,
         options: Options,
     ) -> io::Result<Self> {
-        let ours = Hello::local(&options.program, &options.version, &[CAP_WORKSPACE]);
+        let ours = Hello::local(
+            &options.program,
+            &options.version,
+            &[CAP_WORKSPACE, CAP_PTY],
+        );
         let mut writer: Box<dyn Write + Send> = Box::new(writer);
         send_on(&mut writer, &Envelope::Hello(ours.clone()))?;
 
@@ -211,6 +244,58 @@ impl RemoteWorkspace {
     /// Where the agent's `Changed` pushes go from now on.
     pub fn on_changed(&self, callback: OnChanged) {
         *self.shared.on_changed.lock().unwrap() = Some(callback);
+    }
+
+    /// Starts a terminal on the server; returns its id, the program it runs
+    /// and its events. The channel is registered before the agent is asked,
+    /// so no output is missed.
+    pub fn pty_open(&self, spec: PtySpec) -> io::Result<(PtyId, String, mpsc::Receiver<PtyEvent>)> {
+        if !self.session.has(CAP_PTY) {
+            return Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "the agent on this server does not run terminals",
+            ));
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let (tx, rx) = mpsc::channel();
+        self.register(|shared| shared.ptys.lock().unwrap().insert(id, tx))?;
+        match self.op(Call::PtyOpen { id, spec }) {
+            Ok(Reply::PtyOpened { program }) => Ok((id, program, rx)),
+            Ok(other) => {
+                self.shared.ptys.lock().unwrap().remove(&id);
+                let _ = self.send(&Envelope::PtyClose { id });
+                Err(unexpected(&other))
+            }
+            Err(error) => {
+                self.shared.ptys.lock().unwrap().remove(&id);
+                Err(error)
+            }
+        }
+    }
+
+    /// Keystrokes (or a paste, sent in frames of at most `PTY_CHUNK`).
+    pub fn pty_write(&self, id: PtyId, bytes: &[u8]) -> io::Result<()> {
+        for chunk in bytes.chunks(PTY_CHUNK) {
+            self.send(&Envelope::PtyWrite {
+                id,
+                bytes: chunk.to_vec(),
+            })?;
+        }
+        Ok(())
+    }
+
+    pub fn pty_resize(&self, id: PtyId, cols: u16, rows: u16) -> io::Result<()> {
+        self.send(&Envelope::PtyResize { id, cols, rows })
+    }
+
+    /// Gives back `bytes` of the terminal's window once they are consumed.
+    pub fn pty_credit(&self, id: PtyId, bytes: u64) -> io::Result<()> {
+        self.send(&Envelope::PtyCredit { id, bytes })
+    }
+
+    /// Kills the terminal's process; its `Exit` still arrives.
+    pub fn pty_close(&self, id: PtyId) -> io::Result<()> {
+        self.send(&Envelope::PtyClose { id })
     }
 
     /// Whether the stream has ended; every call fails from then on.
@@ -430,6 +515,16 @@ fn read_loop(mut reader: impl Read, shared: &Shared, hello: mpsc::Sender<io::Res
                 let callback = shared.on_changed.lock().unwrap().clone();
                 if let Some(callback) = callback {
                     callback(paths);
+                }
+            }
+            Ok(Some(Envelope::PtyData { id, bytes })) => {
+                if let Some(pty) = shared.ptys.lock().unwrap().get(&id) {
+                    let _ = pty.send(PtyEvent::Data(bytes));
+                }
+            }
+            Ok(Some(Envelope::PtyExit { id, code, reason })) => {
+                if let Some(pty) = shared.ptys.lock().unwrap().remove(&id) {
+                    let _ = pty.send(PtyEvent::Exit { code, reason });
                 }
             }
             Ok(Some(other)) => {

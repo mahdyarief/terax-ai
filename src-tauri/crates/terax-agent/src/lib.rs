@@ -2,6 +2,7 @@
 //! Terax session's workspace operations over stdin and stdout.
 
 pub mod log;
+pub mod pty;
 pub mod roots;
 pub mod serve;
 pub mod watch;

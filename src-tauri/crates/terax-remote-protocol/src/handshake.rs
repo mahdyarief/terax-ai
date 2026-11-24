@@ -9,10 +9,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Raised whenever a message changes incompatibly.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// The `Workspace` operations as `Call` carries them in this protocol.
 pub const CAP_WORKSPACE: &str = "workspace.v1";
+
+/// Terminals on the server (`Call::PtyOpen` and the `Pty*` envelopes).
+pub const CAP_PTY: &str = "pty.v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hello {

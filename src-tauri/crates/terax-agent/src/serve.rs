@@ -5,8 +5,10 @@
 //! `stat`; responses go out as they finish, matched by id. `SetRoots` runs in
 //! order on the reading thread, so every request after it sees the new roots.
 //! `Cancel` raises the flag a search polls; the request is still answered.
-//! When the input ends, in-flight work is cancelled and waited for, and
-//! `serve` returns.
+//! Terminals (`pty.rs`) open in order too, so the keystrokes sent after a
+//! `PtyOpen` find their terminal; they run on threads of their own.
+//! When the input ends, in-flight work is cancelled and waited for, the
+//! terminals are killed, and `serve` returns.
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -16,7 +18,7 @@ use std::sync::{mpsc, Arc, Mutex, RwLock};
 use std::thread;
 
 use terax_remote_protocol::frame::{read_frame, write_frame, FrameError, MAX_FRAME};
-use terax_remote_protocol::handshake::{negotiate, Hello, CAP_WORKSPACE};
+use terax_remote_protocol::handshake::{negotiate, Hello, CAP_PTY, CAP_WORKSPACE};
 use terax_remote_protocol::message::{
     decode, encode, Browse, Call, CallId, Envelope, Reply, WireError,
 };
@@ -24,6 +26,7 @@ use terax_workspace_core::confined::ConfinedRead;
 use terax_workspace_core::exec::ExecSpec;
 use terax_workspace_core::workspace::{EntryKind, Workspace};
 
+use crate::pty::{Emit, Ptys};
 use crate::roots::{Refusal, Roots};
 use crate::watch::Watches;
 
@@ -66,7 +69,7 @@ pub fn serve(
     options: Options,
 ) -> io::Result<()> {
     let output: Output = Arc::new(Mutex::new(Box::new(output)));
-    let ours = Hello::local(PROGRAM, &options.version, &[CAP_WORKSPACE]);
+    let ours = Hello::local(PROGRAM, &options.version, &[CAP_WORKSPACE, CAP_PTY]);
     send(&output, &Envelope::Hello(ours.clone()))?;
     match read_envelope(&mut input)? {
         Some(Envelope::Hello(theirs)) => {
@@ -112,16 +115,30 @@ pub fn serve(
         })
         .collect();
 
+    let ptys = Ptys::default();
+    let emit: Emit = {
+        let output = output.clone();
+        Arc::new(move |envelope| {
+            // The client may be gone; the read loop notices when input ends.
+            let _ = send(&output, &envelope);
+        })
+    };
     let outcome = read_loop(
         &mut input,
-        &output,
-        ws.as_ref(),
-        &roots,
-        &watches,
-        &in_flight,
-        &jobs,
+        &Session {
+            output: &output,
+            ws: ws.as_ref(),
+            roots: &roots,
+            watches: &watches,
+            in_flight: &in_flight,
+            jobs: &jobs,
+            ptys: &ptys,
+            home: home.as_deref(),
+            emit: &emit,
+        },
     );
     drop(watches);
+    ptys.close_all("the session ended");
 
     for cancel in in_flight.lock().unwrap().values() {
         cancel.store(true, Ordering::Relaxed);
@@ -133,15 +150,31 @@ pub fn serve(
     outcome
 }
 
-fn read_loop(
-    input: &mut impl Read,
-    output: &Output,
-    ws: &dyn Workspace,
-    roots: &RwLock<Roots>,
-    watches: &Watches,
-    in_flight: &InFlight,
-    jobs: &mpsc::Sender<Job>,
-) -> io::Result<()> {
+/// What the reading thread works with.
+struct Session<'a> {
+    output: &'a Output,
+    ws: &'a dyn Workspace,
+    roots: &'a RwLock<Roots>,
+    watches: &'a Watches,
+    in_flight: &'a InFlight,
+    jobs: &'a mpsc::Sender<Job>,
+    ptys: &'a Ptys,
+    home: Option<&'a str>,
+    emit: &'a Emit,
+}
+
+fn read_loop(input: &mut impl Read, session: &Session) -> io::Result<()> {
+    let Session {
+        output,
+        ws,
+        roots,
+        watches,
+        in_flight,
+        jobs,
+        ptys,
+        home,
+        emit,
+    } = *session;
     while let Some(envelope) = read_envelope(input)? {
         match envelope {
             Envelope::Request {
@@ -168,6 +201,19 @@ fn read_loop(
                     .map_err(|e| WireError::from_io(&e));
                 respond(output, id, result)?;
             }
+            // In order, so later keystrokes find the terminal.
+            Envelope::Request {
+                id,
+                call: Call::PtyOpen { id: pty, spec },
+            } => {
+                let roots = roots.read().unwrap().clone();
+                let result = pty_cwd(ws, &roots, spec.cwd.as_deref()).and_then(|cwd| {
+                    ptys.open(pty, &spec, &cwd, home, emit.clone())
+                        .map(|program| Reply::PtyOpened { program })
+                        .map_err(|e| WireError::from_io(&e))
+                });
+                respond(output, id, result)?;
+            }
             Envelope::Request { id, call } => {
                 let cancel = Arc::new(AtomicBool::new(false));
                 let duplicate = match in_flight.lock().unwrap().entry(id) {
@@ -191,7 +237,15 @@ fn read_loop(
             }
             Envelope::Ping { nonce } => send(output, &Envelope::Pong { nonce })?,
             Envelope::Pong { .. } => {}
-            other @ (Envelope::Hello(_) | Envelope::Response { .. } | Envelope::Changed { .. }) => {
+            Envelope::PtyWrite { id, bytes } => ptys.write(id, bytes),
+            Envelope::PtyResize { id, cols, rows } => ptys.resize(id, cols, rows),
+            Envelope::PtyClose { id } => ptys.close(id),
+            Envelope::PtyCredit { id, bytes } => ptys.credit(id, bytes),
+            other @ (Envelope::Hello(_)
+            | Envelope::Response { .. }
+            | Envelope::Changed { .. }
+            | Envelope::PtyData { .. }
+            | Envelope::PtyExit { .. }) => {
                 return Err(invalid(format!(
                     "unexpected message from the client: {other:?}"
                 )));
@@ -219,6 +273,7 @@ fn handle(
     match call {
         Call::SetRoots { .. } => Err(WireError::Protocol("SetRoots runs in order".into())),
         Call::SetWatch { .. } => Err(WireError::Protocol("SetWatch runs in order".into())),
+        Call::PtyOpen { .. } => Err(WireError::Protocol("PtyOpen runs in order".into())),
         Call::Home => match home {
             Some(home) => ws.canonicalize(home).map(Reply::Path).map_err(io),
             None => Err(io(io::Error::new(
@@ -339,6 +394,22 @@ fn handle(
             }
             ws.exec(spec).map(Reply::Exec).map_err(io)
         }
+    }
+}
+
+/// Where a terminal starts: `cwd` when it is inside the roots, else the
+/// first root.
+fn pty_cwd(ws: &dyn Workspace, roots: &Roots, cwd: Option<&str>) -> Result<String, WireError> {
+    let refused = |r: Refusal| WireError::Protocol(r.to_string());
+    match cwd {
+        Some(cwd) => {
+            roots.follow(ws, cwd).map_err(refused)?;
+            Ok(cwd.to_string())
+        }
+        None => roots
+            .first()
+            .map(str::to_string)
+            .ok_or_else(|| refused(Refusal::NoRoots)),
     }
 }
 
@@ -480,14 +551,20 @@ mod tests {
         let flag = Arc::new(AtomicBool::new(false));
         let in_flight: InFlight = Arc::new(Mutex::new(HashMap::from([(5, flag.clone())])));
         let (jobs, queued) = mpsc::channel();
+        let emit: Emit = Arc::new(|_| {});
         read_loop(
             &mut &input[..],
-            &output,
-            &ws,
-            &RwLock::default(),
-            &crate::watch::Watches::new(Arc::new(|_| {})),
-            &in_flight,
-            &jobs,
+            &Session {
+                output: &output,
+                ws: &ws,
+                roots: &RwLock::default(),
+                watches: &crate::watch::Watches::new(Arc::new(|_| {})),
+                in_flight: &in_flight,
+                jobs: &jobs,
+                ptys: &Ptys::default(),
+                home: None,
+                emit: &emit,
+            },
         )
         .unwrap();
         let written = sink.0.lock().unwrap().clone();

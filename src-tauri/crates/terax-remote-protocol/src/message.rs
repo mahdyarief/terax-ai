@@ -21,6 +21,19 @@ use terax_workspace_core::workspace::{DirEntry, Meta, ReadOutcome, ReadRequest, 
 /// Matches a `Response` (and a `Cancel`) to its `Request`.
 pub type CallId = u64;
 
+/// Names a terminal for its whole life; the client picks it (unique among
+/// its open ones) before `PtyOpen`, so data can be routed from the first
+/// byte.
+pub type PtyId = u64;
+
+/// What the agent reads from a terminal before it waits for `PtyCredit`:
+/// bytes sent and not yet credited back. Bounds what one flooding terminal
+/// holds in the stream ahead of file replies.
+pub const PTY_WINDOW: u64 = 1024 * 1024;
+
+/// The most a `PtyData` carries.
+pub const PTY_CHUNK: usize = 64 * 1024;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Envelope {
     /// Each side's first message; see `handshake`.
@@ -38,6 +51,57 @@ pub enum Envelope {
     /// and watched files whose stamp moved (debounced), as `SetWatch` named
     /// them in canonical form.
     Changed { paths: Vec<String> },
+    /// To the agent, unanswered (an unknown id is ignored: the terminal may
+    /// have just ended): keystrokes, in order.
+    PtyWrite {
+        id: PtyId,
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
+    PtyResize {
+        id: PtyId,
+        cols: u16,
+        rows: u16,
+    },
+    /// Ends the terminal (its process is killed); a `PtyExit` follows.
+    PtyClose {
+        id: PtyId,
+    },
+    /// The client consumed `bytes` of the terminal's output; see `PTY_WINDOW`.
+    PtyCredit {
+        id: PtyId,
+        bytes: u64,
+    },
+    /// From the agent: the terminal's output, at most `PTY_CHUNK` bytes.
+    PtyData {
+        id: PtyId,
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
+    /// From the agent, after the last `PtyData`: the terminal ended. `code`
+    /// is the process's exit code when it has one; `reason` says why when it
+    /// did not end by itself.
+    PtyExit {
+        id: PtyId,
+        code: Option<u32>,
+        reason: Option<String>,
+    },
+}
+
+/// How a terminal on the server starts.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PtySpec {
+    /// Where it starts (inside the roots); `None` is the first root.
+    pub cwd: Option<String>,
+    pub cols: u16,
+    pub rows: u16,
+    /// A program and its arguments. `None` is the user's login shell, with
+    /// Terax's shell integration when the agent has it for that shell.
+    pub command: Option<Vec<String>>,
+    /// Variables set on top of the agent's environment.
+    pub env: Vec<(String, String)>,
+    /// Command blocks (`TERAX_BLOCKS`), as the app sets them locally.
+    pub blocks: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -86,6 +150,12 @@ pub enum Call {
         dirs: Vec<String>,
         files: Vec<String>,
     },
+    /// Starts a terminal; answered with `Reply::PtyOpened`, then its output
+    /// arrives as `Envelope::PtyData` and its end as `Envelope::PtyExit`.
+    PtyOpen {
+        id: PtyId,
+        spec: PtySpec,
+    },
 }
 
 /// What `BrowseDirs` returns.
@@ -112,6 +182,10 @@ pub enum Reply {
     Files(Option<FileIndex>),
     Exec(Captured),
     Browse(Browse),
+    /// The program a terminal runs (the shell's path for a login shell).
+    PtyOpened {
+        program: String,
+    },
 }
 
 /// An error from the agent, rebuilt on the client as the same kind of error
@@ -474,6 +548,17 @@ mod tests {
                 dirs: vec![path()],
                 files: vec![format!("{}/a.rs", path())],
             },
+            Call::PtyOpen {
+                id: 3,
+                spec: PtySpec {
+                    cwd: Some(path()),
+                    cols: 120,
+                    rows: 30,
+                    command: Some(vec!["/bin/sh".into(), "-c".into(), "pwd".into()]),
+                    env: vec![("A".into(), "1".into())],
+                    blocks: true,
+                },
+            },
         ];
         for call in &calls {
             match call {
@@ -499,7 +584,8 @@ mod tests {
                 | Call::Exec { .. }
                 | Call::Home
                 | Call::BrowseDirs { .. }
-                | Call::SetWatch { .. } => {}
+                | Call::SetWatch { .. }
+                | Call::PtyOpen { .. } => {}
             }
         }
         calls
@@ -508,7 +594,7 @@ mod tests {
     #[test]
     fn every_call_round_trips() {
         let calls = every_call();
-        assert_eq!(calls.len(), 23);
+        assert_eq!(calls.len(), 24);
         for (id, call) in calls.into_iter().enumerate() {
             round_trip(Envelope::Request {
                 id: id as u64,
@@ -577,6 +663,9 @@ mod tests {
                 path: "/home/me".into(),
                 dirs: vec![".config".into(), "repo".into()],
             }),
+            Reply::PtyOpened {
+                program: "/bin/bash".into(),
+            },
         ];
         for (id, reply) in replies.into_iter().enumerate() {
             round_trip(Envelope::Response {
@@ -609,6 +698,31 @@ mod tests {
             Envelope::Pong { nonce: 1 },
             Envelope::Changed {
                 paths: vec!["/srv/repo".into(), "/srv/repo/a.rs".into()],
+            },
+            Envelope::PtyWrite {
+                id: 3,
+                bytes: b"ls\r".to_vec(),
+            },
+            Envelope::PtyResize {
+                id: 3,
+                cols: 80,
+                rows: 24,
+            },
+            Envelope::PtyClose { id: 3 },
+            Envelope::PtyCredit { id: 3, bytes: 4096 },
+            Envelope::PtyData {
+                id: 3,
+                bytes: vec![0x1b, b'[', b'm'],
+            },
+            Envelope::PtyExit {
+                id: 3,
+                code: Some(0),
+                reason: None,
+            },
+            Envelope::PtyExit {
+                id: 4,
+                code: None,
+                reason: Some("the connection ended".into()),
             },
         ] {
             round_trip(envelope);
