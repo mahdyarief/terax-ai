@@ -112,6 +112,7 @@ The themes below frame every scope decision.
 ### Coming next
 
 - [ ] SSH support (PTY auth and known_hosts first; SFTP and port forwarding later)
+- [ ] A Mac as an SSH server (today Linux servers only; see [docs/contributing/macos-ssh-servers.md](docs/contributing/macos-ssh-servers.md))
 - [ ] Inline terminal auto-suggestions (history-based first; AI-powered opt-in later)
 - [ ] AI agent reliability and workflow improvements (tool execution, context management, recovery, and long-running tasks)
 - [ ] Expand external coding-agent orchestration beyond Claude Code
