@@ -8,6 +8,53 @@ Installers are on the
 [Releases page](https://github.com/mahdyarief/terax-ai/releases). They are not
 code-signed; see the release notes for how to open them.
 
+## 0.9.5-dy — 2026-11-24
+
+### SSH remote workspaces
+
+- **Connect to SSH Host...** from the command palette or the new SSH menu in
+  the status bar opens a folder on a server as a space, like VS Code's
+  Remote-SSH. Hosts come from `~/.ssh/config` and recent connections.
+- Terax installs a small agent on the server the first time (static Linux
+  builds for x86_64 and arm64 ship with the installer) and reinstalls it
+  when the app's version changes.
+- In a server's space, everything works on the server: the file explorer,
+  the editor, file operations, find in files and the file finder, source
+  control with live status, terminals, and the AI's file and shell tools,
+  including background processes. Secrets on the server stay hidden from the
+  AI as they do locally.
+- ssh's own questions (passwords, passphrases, host keys) are asked in a
+  Terax dialog.
+- Connections are kept alive and reconnect on their own. A terminal that
+  dropped with its server reopens in the same folder when the server is back,
+  and the explorer shows the state, the reason and Connect while it is away.
+- The SSH menu lists every connection with its state, Reconnect, Disconnect
+  and Show log. The space switcher and the tab strip name a server's host.
+
+### Terminal
+
+- Paste an image: an image on the clipboard is saved as a PNG in a
+  `terax-image` folder and its path is pasted (on a server it is uploaded to
+  `~/.cache/terax-image`). Ctrl+V still hands the image to a running AI agent
+  such as Claude Code, which attaches it itself.
+- Open a tab with any installed shell: hover Terminal in the "+" menu.
+  Windows finds PowerShell, Windows PowerShell, Command Prompt, Git Bash
+  (also from Scoop or a custom folder), MSYS2, Cygwin and Nushell. The default
+  stays the one in Settings.
+
+### Interface
+
+- The SSH log, connection errors, terminal errors, toasts and the askpass
+  prompt can be selected and copied, with Copy buttons where they help.
+- Everything in the status bar, its menus included, uses one text and icon
+  size; long menus scroll with a visible scrollbar.
+- The new tab menu no longer cuts its shortcuts.
+
+### Fixes
+
+- In a space with a folder, the file explorer follows the terminal's `cd`
+  again while it stays inside that folder.
+
 ## 0.9.4-dy — 2026-11-23
 
 ### Tabs and editor
