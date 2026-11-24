@@ -316,6 +316,21 @@ export function whenServerReady(host: string): Promise<void> {
   });
 }
 
+/**
+ * Runs `then` the next time `host` becomes ready (a later connection than
+ * the current one, even if it is ready now: a terminal's drop can arrive
+ * before the state does). Returns a function that stops waiting.
+ */
+export function onNextReady(host: string, then: () => void): () => void {
+  const start = useRemoteStore.getState().readyEpochs[host] ?? 0;
+  const stop = useRemoteStore.subscribe((s) => {
+    if ((s.readyEpochs[host] ?? 0) <= start) return;
+    stop();
+    then();
+  });
+  return stop;
+}
+
 export async function fetchRemoteHome(host: string): Promise<string> {
   return invoke<string>("remote_home", { host });
 }

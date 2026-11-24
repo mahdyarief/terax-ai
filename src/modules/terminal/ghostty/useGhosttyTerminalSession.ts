@@ -1,5 +1,6 @@
 import { loadSessionRenderer } from "@/modules/terminal/ghostty/loadSessionRenderer";
 import { currentWorkspaceEnv, workspaceScopeKey } from "@/modules/workspace";
+import { onNextReady } from "@/modules/remote/connections";
 import { useSpaces } from "@/modules/spaces/lib/useSpaces";
 import {
   ensureGhosttyBlocks,
@@ -97,6 +98,8 @@ type GhosttySession = {
   startupError: string | null;
   /** The server's connection ended under the terminal; Retry opens a new one. */
   disconnected: boolean;
+  /** Stops waiting to reopen a disconnected terminal (`reopenWhenBack`). */
+  cancelReconnect: (() => void) | null;
   rendererError: string | null;
   shellExited: boolean;
   /** OSC 133 has been seen, so `commandRunning` can be trusted. */
@@ -520,6 +523,7 @@ export function releaseGhosttySessionForHandoff(leafId: number): boolean {
   const session = sessions.get(leafId);
   if (!session) return false;
   detachGhosttyView(leafId);
+  session.cancelReconnect?.();
   session.disposed = true;
   session.generation += 1;
   session.pty = null;
@@ -530,6 +534,7 @@ export function releaseGhosttySessionForHandoff(leafId: number): boolean {
 export function disposeGhosttySession(leafId: number): boolean {
   const session = sessions.get(leafId);
   if (!session) return false;
+  session.cancelReconnect?.();
   session.disposed = true;
   session.generation += 1;
   detachGhosttyView(leafId);
@@ -546,6 +551,8 @@ async function respawnGhosttySession(
   const session = sessions.get(leafId);
   if (!session || session.disposed) return false;
   session.generation += 1;
+  session.cancelReconnect?.();
+  session.cancelReconnect = null;
   session.cancelFocusRetry?.();
   session.input?.dispose();
   session.input = null;
@@ -612,6 +619,7 @@ function ensureSession(
     surfaceOptions: null,
     input: null,
     cancelFocusRetry: null,
+    cancelReconnect: null,
     pty: null,
     ptyResize,
     writer: new BoundedPtyWriter((error) => {
@@ -908,6 +916,8 @@ async function initializeSessionGeneration(
   const replay = session.replay;
   session.replay = null;
   if (replay) applyReplayEvents(model, replay.events);
+  const opened = currentWorkspaceEnv();
+  const server = opened.kind === "ssh" ? opened.host : null;
   const pty = await openPty(
     startCols,
     startRows,
@@ -928,6 +938,7 @@ async function initializeSessionGeneration(
         if (afterPtyExit(code) === "offer-new-terminal") {
           session.disconnected = true;
           session.callbacks.onError?.(sessionFailure(session));
+          if (server) reopenWhenBack(session, server);
           return;
         }
         session.callbacks.onExit?.(code);
@@ -1235,12 +1246,41 @@ async function retryGhosttyRenderer(session: GhosttySession): Promise<void> {
   }
 }
 
+/**
+ * Opens a new terminal in a disconnected pane when its server is ready
+ * again, in the folder the old one was in. Only while that server's space
+ * is the active one: a new terminal takes the active workspace, so in
+ * another space Retry stays for when the user comes back.
+ */
+function reopenWhenBack(session: GhosttySession, host: string) {
+  session.cancelReconnect?.();
+  const generation = session.generation;
+  session.cancelReconnect = onNextReady(host, () => {
+    session.cancelReconnect = null;
+    if (
+      session.disposed ||
+      !session.disconnected ||
+      session.generation !== generation
+    )
+      return;
+    const active = currentWorkspaceEnv();
+    if (active.kind !== "ssh" || active.host !== host) return;
+    const cwd = session.lastCwd ?? session.initialCwd;
+    void respawnGhosttySession(session.leafId, cwd ?? undefined).catch(
+      (error: unknown) => {
+        session.startupError = toError(error).message;
+        session.callbacks.onError?.(sessionFailure(session));
+      },
+    );
+  });
+}
+
 function sessionFailure(session: GhosttySession): GhosttySessionFailure | null {
   if (session.disconnected)
     return {
       kind: "disconnected",
       message:
-        "The connection to the server ended. Retry opens a new terminal once it is connected again.",
+        "The connection to the server ended. A new terminal opens here once it is connected again.",
     };
   if (session.startupError)
     return { kind: "startup", message: session.startupError };

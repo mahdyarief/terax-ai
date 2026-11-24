@@ -9,7 +9,9 @@ The limits Phase 6 left (see its plan), done before the walkthrough. Branch `dyd
 
 ### Task 2: A disconnected terminal comes back by itself
 
-- [ ] A server's terminal that ended because the connection dropped starts again in the same pane when that server is ready again; Retry stays for a failed reconnect.
+- [x] A server's terminal that ended because the connection dropped starts again in the same pane when that server is ready again; Retry stays for a failed reconnect.
+
+Done. `onNextReady(host, then)` waits for a later ready epoch than the current one (the drop can arrive before the state says so). `reopenWhenBack` respawns in the old terminal's folder only while that server's space is active, because a new terminal takes the active workspace; elsewhere Retry stays. Cancelled on respawn, dispose and handoff.
 
 ### Task 3: New files on a server reach the file finder
 

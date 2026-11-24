@@ -5,6 +5,7 @@ import {
   describeState,
   isValidHost,
   MAX_RECENT_HOSTS,
+  onNextReady,
   parseSnapshot,
   pickerEntries,
   type RemoteState,
@@ -208,5 +209,37 @@ describe("waiting for a server", () => {
     set("w-fail", { state: "connecting" });
     set("w-fail", { state: "failed", reason: "Permission denied" });
     expect(await waiting).toBe("rejected: Permission denied");
+  });
+});
+
+describe("the next connection to a server", () => {
+  const set = (host: string, state: RemoteState) =>
+    useRemoteStore.getState().apply({ host, state });
+
+  it("waits for a later ready, even when the server still looks ready", () => {
+    set("n-ready", { state: "ready" });
+    let runs = 0;
+    onNextReady("n-ready", () => {
+      runs += 1;
+    });
+    // The terminal's drop arrived before the state did.
+    set("n-ready", { state: "reconnecting", retry: 1, reason: "dropped" });
+    set("n-ready", { state: "connecting" });
+    expect(runs).toBe(0);
+    set("n-ready", { state: "ready" });
+    set("n-ready", { state: "reconnecting", retry: 1, reason: "again" });
+    set("n-ready", { state: "ready" });
+    expect(runs).toBe(1);
+  });
+
+  it("stops waiting when asked", () => {
+    set("n-stop", { state: "reconnecting", retry: 1, reason: "dropped" });
+    let runs = 0;
+    const stop = onNextReady("n-stop", () => {
+      runs += 1;
+    });
+    stop();
+    set("n-stop", { state: "ready" });
+    expect(runs).toBe(0);
   });
 });
