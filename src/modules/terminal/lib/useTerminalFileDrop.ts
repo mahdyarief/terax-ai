@@ -32,7 +32,8 @@ function leafIdAt(x: number, y: number): number | null {
   return Number.isFinite(id) ? id : null;
 }
 
-function dialectForLeaf(
+/** The quoting dialect of the shell running in a pane. */
+export function dialectForLeaf(
   leafId: number,
 ): ShellDialect | null | Promise<ShellDialect | null> {
   const id = ptyIdForLeaf(leafId);

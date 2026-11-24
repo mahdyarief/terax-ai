@@ -6,6 +6,7 @@ mod gate;
 mod handoff;
 mod hub;
 mod output;
+pub mod paste_image;
 mod presentation;
 mod protocol;
 mod queue;

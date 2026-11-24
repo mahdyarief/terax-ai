@@ -1,5 +1,9 @@
 import { loadSessionRenderer } from "@/modules/terminal/ghostty/loadSessionRenderer";
-import { currentWorkspaceEnv, workspaceScopeKey } from "@/modules/workspace";
+import {
+  currentWorkspaceEnv,
+  type WorkspaceEnv,
+  workspaceScopeKey,
+} from "@/modules/workspace";
 import { onNextReady } from "@/modules/remote/connections";
 import { useSpaces } from "@/modules/spaces/lib/useSpaces";
 import {
@@ -30,6 +34,8 @@ import {
   useSyncExternalStore,
 } from "react";
 import { isAgentActivePty } from "../lib/agentActivity";
+import { pasteClipboardImage } from "../lib/pasteImage";
+import { dialectForLeaf } from "../lib/useTerminalFileDrop";
 import { afterPtyExit, openPty, type PtySession } from "../lib/pty-bridge";
 import { applyReplayEvents, type PtyReplayPayload } from "../lib/ptyHandoff";
 import { takeHandoffReplay } from "../lib/handoffSession";
@@ -84,6 +90,8 @@ type GhosttySession = {
   initialCwd: string | undefined;
   /** The tab's own shell, for this and every later spawn (Retry, reopen). */
   shell: string | undefined;
+  /** Where the running PTY was opened; a pasted image is saved there. */
+  workspace: WorkspaceEnv | null;
   lastCwd: string | null;
   model: GhosttyTerminalModelApi | null;
   surface: GhosttySurface | null;
@@ -621,6 +629,7 @@ function ensureSession(
     backend,
     initialCwd,
     shell: undefined,
+    workspace: null,
     lastCwd: null,
     model: null,
     surface: null,
@@ -926,6 +935,7 @@ async function initializeSessionGeneration(
   if (replay) applyReplayEvents(model, replay.events);
   const opened = currentWorkspaceEnv();
   const server = opened.kind === "ssh" ? opened.host : null;
+  session.workspace = opened;
   const pty = await openPty(
     startCols,
     startRows,
@@ -1018,6 +1028,11 @@ function createGhosttyInput(
     },
     onText: insertPromptText,
     onPaste: insertPromptText,
+    agentActive: () => !!session.pty && isAgentActivePty(session.pty.id),
+    onPasteImage: () =>
+      pasteClipboardImage(session.workspace ?? currentWorkspaceEnv(), () =>
+        dialectForLeaf(session.leafId),
+      ),
     getSelection: () => surface.getSelection(),
     onCopy: () => {
       const text = surface.getSelection();

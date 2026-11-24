@@ -18,7 +18,12 @@ vi.mock("@/modules/terminal/lib/terminalClipboard", () => ({
 const PRESS = "\x1b[118;5u";
 const RELEASE = "\x1b[118;5:3u";
 
-function harness(flags: number) {
+type Extra = Pick<
+  ConstructorParameters<typeof GhosttyInputController>[0],
+  "onPasteImage" | "agentActive"
+>;
+
+function harness(flags: number, extra: Extra = {}) {
   const input = new FakeTextArea();
   const onData = vi.fn<(bytes: Uint8Array) => void>();
   const model = {
@@ -61,6 +66,7 @@ function harness(flags: number) {
     onCopy: () => false,
     isMac: false,
     isWindows: true,
+    ...extra,
   });
   const key = (type: "keydown" | "keyup", repeat = false) =>
     input.dispatchEvent(
@@ -172,6 +178,60 @@ describe("Ctrl+V forwarded as a key when the clipboard has no text", () => {
     await settle();
     key("keyup");
     expect(sent()).toEqual(["\x16"]);
+    controller.dispose();
+  });
+});
+
+describe("an image on the clipboard", () => {
+  it("is pasted as the path it was saved to", async () => {
+    const onPasteImage = vi.fn(async () => "C:/Temp/terax-image/a.png ");
+    const { controller, key, sent } = harness(0, { onPasteImage });
+    key("keydown");
+    key("keyup");
+    clipboard.resolve("");
+    await settle();
+    await settle();
+    expect(onPasteImage).toHaveBeenCalledOnce();
+    expect(sent()).toEqual(["C:/Temp/terax-image/a.png "]);
+    controller.dispose();
+  });
+
+  it("reaches a running agent as Ctrl+V, which reads the image itself", async () => {
+    const onPasteImage = vi.fn(async () => "never");
+    const { controller, key, sent } = harness(3, {
+      onPasteImage,
+      agentActive: () => true,
+    });
+    key("keydown");
+    key("keyup");
+    clipboard.resolve("");
+    await settle();
+    expect(onPasteImage).not.toHaveBeenCalled();
+    expect(sent()).toEqual([PRESS, RELEASE]);
+    controller.dispose();
+  });
+
+  it("falls back to the key when there is no image either", async () => {
+    const { controller, key, sent } = harness(3, {
+      onPasteImage: async () => null,
+    });
+    key("keydown");
+    key("keyup");
+    clipboard.resolve("");
+    await settle();
+    await settle();
+    expect(sent()).toEqual([PRESS, RELEASE]);
+    controller.dispose();
+  });
+
+  it("does not stop text from pasting as text", async () => {
+    const onPasteImage = vi.fn(async () => "never");
+    const { controller, key, sent } = harness(0, { onPasteImage });
+    key("keydown");
+    clipboard.resolve("echo hi");
+    await settle();
+    expect(onPasteImage).not.toHaveBeenCalled();
+    expect(sent()).toEqual(["echo hi"]);
     controller.dispose();
   });
 });

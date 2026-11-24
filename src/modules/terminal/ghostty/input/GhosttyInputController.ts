@@ -46,6 +46,17 @@ export type GhosttyInputControllerOptions = {
   /** Ctrl+C copies a selection when one exists; off restores SIGINT. Defaults true. */
   readonly smartCopyPaste?: () => boolean;
   readonly onPaste?: (text: string) => boolean;
+  /**
+   * The clipboard holds no text: saves its image where the terminal's
+   * programs can read it and resolves with the text to paste (the quoted
+   * path), or null when there is no image.
+   */
+  readonly onPasteImage?: () => Promise<string | null>;
+  /**
+   * An AI agent runs in this terminal. Ctrl+V on Windows then reaches it as
+   * a key, so it reads the clipboard's image itself.
+   */
+  readonly agentActive?: () => boolean;
   readonly onText?: (text: string) => boolean;
   readonly onKeyDown?: (event: KeyboardEvent) => boolean;
   /** Which Option key acts as Alt (Meta); read per key so a preference change applies at once. */
@@ -290,13 +301,8 @@ export class GhosttyInputController {
     const encoded = data ? this.options.model.encodeKey(data) : null;
     const waiting = { released: false };
     if (data) this.pasteKeys.set(code, waiting);
-    void readTerminalClipboard().then((text) => {
-      if (this.pasteKeys.get(code) === waiting) this.pasteKeys.delete(code);
+    const forwardKey = () => {
       if (this.disposed) return;
-      if (text) {
-        this.paste(text);
-        return;
-      }
       if (!data || !encoded || encoded.byteLength === 0) return;
       this.options.onData(
         (flags & KITTY_REPORT_EVENT_TYPES) !== 0
@@ -314,6 +320,32 @@ export class GhosttyInputController {
         action: KeyAction.RELEASE,
       });
       if (release.byteLength > 0) this.options.onData(release);
+    };
+    void readTerminalClipboard().then((text) => {
+      if (this.pasteKeys.get(code) === waiting) this.pasteKeys.delete(code);
+      if (this.disposed) return;
+      if (text) {
+        this.paste(text);
+        return;
+      }
+      // An agent reads the clipboard's image itself when Ctrl+V reaches it.
+      if (data && this.options.agentActive?.()) {
+        forwardKey();
+        return;
+      }
+      const image = this.options.onPasteImage?.();
+      if (!image) {
+        forwardKey();
+        return;
+      }
+      void image.then(
+        (pasted) => {
+          if (this.disposed) return;
+          if (pasted) this.paste(pasted);
+          else forwardKey();
+        },
+        () => {},
+      );
     });
   }
 
@@ -403,7 +435,20 @@ export class GhosttyInputController {
 
   private readonly handlePaste = (event: ClipboardEvent): void => {
     const text = event.clipboardData?.getData("text/plain") ?? "";
-    if (!text) return;
+    if (!text) {
+      const image = [...(event.clipboardData?.items ?? [])].some((item) =>
+        item.type.startsWith("image/"),
+      );
+      if (!image || !this.options.onPasteImage) return;
+      consume(event);
+      void this.options.onPasteImage().then(
+        (pasted) => {
+          if (pasted && !this.disposed) this.paste(pasted);
+        },
+        () => {},
+      );
+      return;
+    }
     consume(event);
     this.paste(text);
   };

@@ -420,6 +420,7 @@ pub fn run() {
             fs::mutate::fs_delete_batch,
             fs::copy::fs_copy,
             fs::clipboard::fs_clipboard_paths,
+            pty::paste_image::pty_paste_image,
             fs::watch::fs_watch_add,
             fs::watch::fs_watch_remove,
             lsp::lsp_detect,
