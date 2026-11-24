@@ -15,7 +15,7 @@ import {
 } from "./connections";
 import { RemoteLogLines } from "./RemoteLogDialog";
 import { RemoteGateNotice } from "./RemoteGate";
-import { RemoteStatusLabel } from "./RemoteStatusItems";
+import { RemoteStatusLabel, sshSummary } from "./RemoteStatusItems";
 
 describe("remote state events", () => {
   it("accept what the app sends", () => {
@@ -25,7 +25,10 @@ describe("remote state events", () => {
     });
     expect(
       parseSnapshot({ host: "dypod", state: "installing", bytes: 2863928 }),
-    ).toEqual({ host: "dypod", state: { state: "installing", bytes: 2863928 } });
+    ).toEqual({
+      host: "dypod",
+      state: { state: "installing", bytes: 2863928 },
+    });
     expect(
       parseSnapshot({
         host: "dypod",
@@ -259,5 +262,27 @@ describe("a server's failure on screen", () => {
     expect(html).toContain("select-text");
     expect(html).toContain(">Copy<");
     expect(html).toContain(">Show log<");
+  });
+});
+
+describe("the SSH status bar item", () => {
+  it("lists every connection that is not idle, worst tone first", () => {
+    expect(sshSummary({})).toEqual({ shown: [], tone: null });
+    const summary = sshSummary({
+      zeta: { state: "ready" },
+      alpha: { state: "reconnecting", retry: 1, reason: "dropped" },
+      idle: { state: "idle" },
+    });
+    expect(summary.shown.map(([host]) => host)).toEqual(["alpha", "zeta"]);
+    expect(summary.tone).toBe(
+      describeState({ state: "reconnecting", retry: 1, reason: "x" }).tone,
+    );
+    expect(
+      sshSummary({
+        a: { state: "ready" },
+        b: { state: "failed", reason: "no" },
+      }).tone,
+    ).toBe("error");
+    expect(sshSummary({ a: { state: "ready" } }).tone).toBe("ok");
   });
 });
