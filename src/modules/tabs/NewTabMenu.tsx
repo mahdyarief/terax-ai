@@ -26,6 +26,10 @@ import {
 import { HugeiconsIcon } from "@hugeicons/react";
 import { useRef, useState } from "react";
 
+/** A shortcut, set apart from its label so neither is cut at the edge. */
+const HINT =
+  "ml-6 shrink-0 whitespace-nowrap text-[11px] tabular-nums tracking-wide text-muted-foreground/80";
+
 type Props = {
   onNew: () => void;
   onNewBlock: () => void;
@@ -89,7 +93,7 @@ export function NewTabMenu({
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
-              className="min-w-44"
+              className="min-w-60"
               onCloseAutoFocus={(event) => {
                 event.preventDefault();
                 if (!openLauncherAfterMenuClose.current) return;
@@ -103,35 +107,34 @@ export function NewTabMenu({
                   icon={ComputerTerminal02Icon}
                   size={14}
                   strokeWidth={1.75}
+                  className="size-3.5 shrink-0 text-muted-foreground"
                 />
-                <span className="flex-1">Terminal</span>
-                <span className="text-xs text-muted-foreground">
-                  {terminalHint}
-                </span>
+                <span className="min-w-0 flex-1 truncate">Terminal</span>
+                <span className={HINT}>{terminalHint}</span>
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={onNewBlock}>
                 <HugeiconsIcon
                   icon={ComputerTerminal02Icon}
                   size={14}
                   strokeWidth={1.75}
+                  className="size-3.5 shrink-0 text-muted-foreground"
                 />
-                <span className="flex-1">Blocks</span>
-                <span className="text-xs text-muted-foreground">
-                  {blockHint}
-                </span>
+                <span className="min-w-0 flex-1 truncate">Blocks</span>
+                <span className={HINT}>{blockHint}</span>
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={openLauncher}>
                 <HugeiconsIcon
                   icon={AiBrowserIcon}
                   size={14}
                   strokeWidth={1.75}
+                  className="size-3.5 shrink-0 text-muted-foreground"
                 />
-                <span className="flex-1">Agents</span>
+                <span className="min-w-0 flex-1 truncate">Agents</span>
                 <HugeiconsIcon
                   icon={ArrowRight01Icon}
                   size={14}
                   strokeWidth={1.75}
-                  className="text-muted-foreground"
+                  className="ml-4 size-3.5 shrink-0 text-muted-foreground"
                 />
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={onNewPrivate}>
@@ -139,41 +142,39 @@ export function NewTabMenu({
                   icon={IncognitoIcon}
                   size={14}
                   strokeWidth={1.75}
+                  className="size-3.5 shrink-0 text-muted-foreground"
                 />
-                <span className="flex-1">Privacy</span>
-                <span className="text-xs text-muted-foreground">
-                  {privateHint}
-                </span>
+                <span className="min-w-0 flex-1 truncate">Privacy</span>
+                <span className={HINT}>{privateHint}</span>
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={onNewEditor}>
                 <HugeiconsIcon
                   icon={PencilEdit02Icon}
                   size={14}
                   strokeWidth={1.75}
+                  className="size-3.5 shrink-0 text-muted-foreground"
                 />
-                <span className="flex-1">Editor</span>
-                <span className="text-xs text-muted-foreground">
-                  {editorHint}
-                </span>
+                <span className="min-w-0 flex-1 truncate">Editor</span>
+                <span className={HINT}>{editorHint}</span>
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={onNewPreview}>
                 <HugeiconsIcon
                   icon={Globe02Icon}
                   size={14}
                   strokeWidth={1.75}
+                  className="size-3.5 shrink-0 text-muted-foreground"
                 />
-                <span className="flex-1">Preview</span>
-                <span className="text-xs text-muted-foreground">
-                  {previewHint}
-                </span>
+                <span className="min-w-0 flex-1 truncate">Preview</span>
+                <span className={HINT}>{previewHint}</span>
               </DropdownMenuItem>
               <DropdownMenuItem onSelect={onNewGitGraph}>
                 <HugeiconsIcon
                   icon={GitBranchIcon}
                   size={14}
                   strokeWidth={1.75}
+                  className="size-3.5 shrink-0 text-muted-foreground"
                 />
-                <span className="flex-1">Git Graph</span>
+                <span className="min-w-0 flex-1 truncate">Git Graph</span>
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
