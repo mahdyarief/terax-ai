@@ -699,6 +699,9 @@ mod windows {
             // git-bash's /etc/profile cd's to $HOME unless CHERE_INVOKING is
             // set; keep the cwd we configured in apply_common.
             cmd.env("CHERE_INVOKING", "1");
+            if let Some(msystem) = msys2_environment(&shell_path) {
+                cmd.env("MSYSTEM", msystem);
+            }
             // Native git-bash: same OSC 7/133 rcfile as Unix bash, in the
             // forward-slash form MSYS bash accepts.
             match prepare_bash_rcfile() {
@@ -974,12 +977,126 @@ mod windows {
         if let Some(p) = git_bash_path() {
             add(&mut out, "Git Bash", p, true);
         }
-        out
+        for root in msys2_roots() {
+            add(
+                &mut out,
+                "MSYS2",
+                root.join("usr").join("bin").join("bash.exe"),
+                true,
+            );
+        }
+        for root in cygwin_roots() {
+            add(&mut out, "Cygwin", root.join("bin").join("bash.exe"), true);
+        }
+        if let Some(p) = super::which_in_path("nu.exe") {
+            add(&mut out, "Nushell", p, false);
+        }
+        dedupe_shells(out)
+    }
+
+    /// One row per shell: a Git found both where it installs and through
+    /// PATH is the same file.
+    fn dedupe_shells(shells: Vec<super::ShellInfo>) -> Vec<super::ShellInfo> {
+        let mut seen = Vec::new();
+        shells
+            .into_iter()
+            .filter(|s| {
+                let key = fs::canonicalize(&s.path)
+                    .unwrap_or_else(|_| PathBuf::from(s.path.to_ascii_lowercase()));
+                if seen.contains(&key) {
+                    false
+                } else {
+                    seen.push(key);
+                    true
+                }
+            })
+            .collect()
+    }
+
+    fn env_dir(var: &str) -> Option<PathBuf> {
+        std::env::var_os(var).map(PathBuf::from)
+    }
+
+    /// Where Scoop keeps its apps: `%SCOOP%`, else `%USERPROFILE%\scoop`.
+    fn scoop_apps() -> Option<PathBuf> {
+        env_dir("SCOOP")
+            .or_else(|| env_dir("USERPROFILE").map(|home| home.join("scoop")))
+            .map(|scoop| scoop.join("apps"))
+    }
+
+    /// A Git for Windows root holding `git.exe` somewhere below it: the
+    /// install has `bin\bash.exe` beside `cmd\git.exe` or `git-bash.exe`,
+    /// which the WSL launcher in System32 never has.
+    fn git_root_of(git_exe: &Path) -> Option<PathBuf> {
+        git_exe.ancestors().skip(1).take(3).find_map(|dir| {
+            let bash = dir.join("bin").join("bash.exe");
+            let git =
+                dir.join("cmd").join("git.exe").is_file() || dir.join("git-bash.exe").is_file();
+            (bash.is_file() && git).then(|| dir.to_path_buf())
+        })
+    }
+
+    /// An MSYS2 install root (`msys2.exe` beside `usr\bin\bash.exe`).
+    fn is_msys2_root(root: &Path) -> bool {
+        root.join("msys2.exe").is_file() && root.join("usr").join("bin").join("bash.exe").is_file()
+    }
+
+    fn msys2_roots() -> Vec<PathBuf> {
+        let mut candidates = Vec::new();
+        if let Some(drive) = std::env::var_os("SystemDrive") {
+            // "C:" names a drive, not its root: join would give "C:msys64".
+            let mut root = drive;
+            root.push(r"\msys64");
+            candidates.push(PathBuf::from(root));
+        }
+        candidates.push(PathBuf::from(r"C:\msys64"));
+        if let Some(apps) = scoop_apps() {
+            candidates.push(apps.join("msys2").join("current"));
+        }
+        let mut roots: Vec<PathBuf> = Vec::new();
+        for root in candidates {
+            if is_msys2_root(&root) && !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+        roots.truncate(1);
+        roots
+    }
+
+    fn cygwin_roots() -> Vec<PathBuf> {
+        [r"C:\cygwin64", r"C:\cygwin"]
+            .into_iter()
+            .map(PathBuf::from)
+            .filter(|root| root.join("bin").join("bash.exe").is_file())
+            .take(1)
+            .collect()
+    }
+
+    /// MSYS2's bash picks its environment from `MSYSTEM`; without one its
+    /// profile starts the bare MSYS one, so a terminal gets MSYS2's default
+    /// (UCRT64) unless the user set their own.
+    fn msys2_environment(shell_path: &Path) -> Option<&'static str> {
+        let root = shell_path.parent()?.parent()?.parent()?;
+        (is_msys2_root(root) && std::env::var_os("MSYSTEM").is_none()).then_some("UCRT64")
     }
 
     fn git_bash_path() -> Option<PathBuf> {
-        // Git for Windows install locations only. A bash.exe on PATH is usually
-        // the WSL launcher in System32, which is the separate WSL switcher.
+        // Git for Windows installs only. A bash.exe on PATH is usually the WSL
+        // launcher in System32, which is the separate WSL switcher; a Git
+        // elsewhere (Scoop, a custom folder) is found from its git.exe.
+        if let Some(apps) = scoop_apps() {
+            let bash = apps
+                .join("git")
+                .join("current")
+                .join("bin")
+                .join("bash.exe");
+            if bash.is_file() {
+                return Some(bash);
+            }
+        }
+        if let Some(root) = super::which_in_path("git.exe").and_then(|git| git_root_of(&git)) {
+            return Some(root.join("bin").join("bash.exe"));
+        }
         for var in ["ProgramFiles", "ProgramFiles(x86)", "LocalAppData"] {
             if let Some(base) = std::env::var_os(var).map(PathBuf::from) {
                 for rel in [
@@ -1016,6 +1133,77 @@ mod windows {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        fn touch(path: &Path) {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(path, b"").unwrap();
+        }
+
+        #[test]
+        fn a_git_on_path_leads_to_its_bash() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("Git");
+            touch(&root.join("cmd").join("git.exe"));
+            touch(&root.join("bin").join("bash.exe"));
+            assert_eq!(
+                git_root_of(&root.join("cmd").join("git.exe")),
+                Some(root.clone())
+            );
+            touch(&root.join("mingw64").join("bin").join("git.exe"));
+            assert_eq!(
+                git_root_of(&root.join("mingw64").join("bin").join("git.exe")),
+                Some(root)
+            );
+        }
+
+        #[test]
+        fn a_bash_without_a_git_install_is_not_git_bash() {
+            // The WSL launcher: a bash.exe and a git.exe nearby, but no Git root.
+            let dir = tempfile::tempdir().unwrap();
+            let system32 = dir.path().join("System32");
+            touch(&system32.join("bash.exe"));
+            touch(&system32.join("git.exe"));
+            assert_eq!(git_root_of(&system32.join("git.exe")), None);
+        }
+
+        #[test]
+        fn msys2_gets_its_default_environment_unless_one_is_set() {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("msys64");
+            let bash = root.join("usr").join("bin").join("bash.exe");
+            touch(&bash);
+            assert!(!is_msys2_root(&root));
+            assert_eq!(msys2_environment(&bash), None);
+            touch(&root.join("msys2.exe"));
+            assert!(is_msys2_root(&root));
+            if std::env::var_os("MSYSTEM").is_none() {
+                assert_eq!(msys2_environment(&bash), Some("UCRT64"));
+            }
+            // Git's own usr\bin\bash.exe is not MSYS2.
+            let git = dir
+                .path()
+                .join("Git")
+                .join("usr")
+                .join("bin")
+                .join("bash.exe");
+            touch(&git);
+            assert_eq!(msys2_environment(&git), None);
+        }
+
+        #[test]
+        fn the_same_shell_is_listed_once() {
+            let dir = tempfile::tempdir().unwrap();
+            let bash = dir.path().join("bash.exe");
+            touch(&bash);
+            let row = |name: &str| super::super::ShellInfo {
+                name: name.into(),
+                path: bash.to_string_lossy().into_owned(),
+                integrated: true,
+            };
+            let rows = dedupe_shells(vec![row("Git Bash"), row("MSYS2")]);
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0].name, "Git Bash");
+        }
 
         #[test]
         fn builds_wsl_zsh_launch_spec_with_env_and_login() {
