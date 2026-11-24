@@ -1,3 +1,5 @@
+import { cn } from "@/lib/utils";
+import { statusMenuClass } from "@/components/ui/menu";
 import { Badge } from "@/components/ui/badge";
 import {
   Breadcrumb,
@@ -54,7 +56,7 @@ export function CwdBreadcrumb({ cwd, filePath, home, onCd }: Props) {
     const middle = segments.slice(1);
     return (
       <Breadcrumb>
-        <BreadcrumbList className="gap-1 text-xs sm:gap-1.5">
+        <BreadcrumbList className="gap-1 text-[11px] sm:gap-1.5">
           {first ? (
             <BreadcrumbSegment
               label={first.label}
@@ -84,7 +86,7 @@ export function CwdBreadcrumb({ cwd, filePath, home, onCd }: Props) {
 
   if (!cwd) {
     return (
-      <span className="text-xs text-muted-foreground/70">no directory</span>
+      <span className="text-[11px] text-muted-foreground/70">no directory</span>
     );
   }
 
@@ -96,7 +98,7 @@ export function CwdBreadcrumb({ cwd, filePath, home, onCd }: Props) {
   const middleParents = parents.slice(1);
   return (
     <Breadcrumb>
-      <BreadcrumbList className="gap-1 text-xs sm:gap-1.5">
+      <BreadcrumbList className="gap-1 text-[11px] sm:gap-1.5">
         {firstParent ? (
           <BreadcrumbSegment
             label={firstParent.label}
@@ -144,7 +146,7 @@ function BreadcrumbSegment({
           <button type="button" onClick={onClick} className="cursor-pointer">
             <Badge
               variant="outline"
-              className="gap-1 text-muted-foreground hover:text-foreground"
+              className="gap-1 text-[11px] text-muted-foreground hover:text-foreground"
             >
               {isHome ? (
                 <HugeiconsIcon
@@ -219,13 +221,16 @@ function CurrentSegmentDropdown({
           />
         </BreadcrumbPage>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="max-h-72 overflow-y-auto">
+      <DropdownMenuContent
+        align="start"
+        className={cn("max-h-72 overflow-y-auto", statusMenuClass)}
+      >
         {children === null ? (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+          <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
             Loading…
           </div>
         ) : children.length === 0 ? (
-          <div className="px-2 py-1.5 text-xs text-muted-foreground">
+          <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
             {error ?? "No subfolders"}
           </div>
         ) : (
@@ -274,7 +279,10 @@ function CollapsedSegments({
               />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="min-w-44">
+          <DropdownMenuContent
+            align="start"
+            className={cn("min-w-44", statusMenuClass)}
+          >
             {segments.map((s) => (
               <DropdownMenuItem
                 key={s.fullPath}

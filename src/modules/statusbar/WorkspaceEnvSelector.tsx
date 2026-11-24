@@ -1,3 +1,4 @@
+import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -5,6 +6,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { statusMenuClass } from "@/components/ui/menu";
 import { IS_WINDOWS } from "@/lib/platform";
 import {
   LOCAL_WORKSPACE,
@@ -54,13 +56,16 @@ function WorkspaceEnvSelectorWindows({ onSelect }: Props) {
         >
           <HugeiconsIcon
             icon={ServerStack03Icon}
-            size={13}
+            size={12}
             strokeWidth={1.75}
           />
           <span className="max-w-28 truncate">{label}</span>
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-48">
+      <DropdownMenuContent
+        align="start"
+        className={cn("min-w-48", statusMenuClass)}
+      >
         <DropdownMenuItem onSelect={() => onSelect(LOCAL_WORKSPACE)}>
           Windows Local
         </DropdownMenuItem>
@@ -85,7 +90,7 @@ function WorkspaceEnvSelectorWindows({ onSelect }: Props) {
         )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => void refreshDistros()}>
-          <HugeiconsIcon icon={Refresh01Icon} size={13} strokeWidth={1.75} />
+          <HugeiconsIcon icon={Refresh01Icon} size={12} strokeWidth={1.75} />
           Refresh
         </DropdownMenuItem>
       </DropdownMenuContent>

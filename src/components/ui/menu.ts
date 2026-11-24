@@ -23,3 +23,9 @@ export const menuLabelClass =
 
 export const menuShortcutClass =
   "ml-auto text-xs tracking-widest text-muted-foreground";
+
+// Menus opened from the status bar: rows, labels and icons the size of its
+// own text (11 px, icons 12 px). Put it on the content (and a sub-content,
+// which is portalled); an item sizes an icon without `size-*` to 16 px.
+export const statusMenuClass =
+  "[&_[data-slot^=dropdown-menu-]]:gap-1.5 [&_[data-slot^=dropdown-menu-]]:text-[11px] [&_svg]:size-3";

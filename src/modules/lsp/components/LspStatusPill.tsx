@@ -32,7 +32,7 @@ type Props = {
 };
 
 const PILL_CLASS =
-  "terax-pill-in ml-1.5 flex h-6 shrink-0 cursor-pointer [&_button]:cursor-pointer items-center gap-1 rounded-full border border-border/50 bg-accent/50 px-2 text-[10.5px] font-medium text-muted-foreground transition-colors duration-200 hover:bg-accent hover:text-foreground";
+  "terax-pill-in ml-1.5 flex h-6 shrink-0 cursor-pointer [&_button]:cursor-pointer items-center gap-1 rounded-full border border-border/50 bg-accent/50 px-2 text-[11px] font-medium text-muted-foreground transition-colors duration-200 hover:bg-accent hover:text-foreground";
 
 export function LspStatusPill({ filePath }: Props) {
   const hint = useLspHint(filePath);
@@ -47,7 +47,7 @@ export function LspStatusPill({ filePath }: Props) {
           onClick={() => void setLspActivation(hint.preset.id, "enabled")}
           title={`Start ${hint.preset.command} for this workspace`}
         >
-          <HugeiconsIcon icon={SourceCodeIcon} size={11} strokeWidth={2} />
+          <HugeiconsIcon icon={SourceCodeIcon} size={12} strokeWidth={2} />
           <span>Enable {hint.preset.name} LSP</span>
         </button>
         <DismissButton preset={hint.preset} />
@@ -110,7 +110,7 @@ function ErrorPill({ preset, reason }: { preset: LspPreset; reason: string }) {
               void restartPresetSessions(preset.id).catch(reportRestartFailure)
             }
           >
-            <HugeiconsIcon icon={RefreshIcon} size={11} strokeWidth={1.9} />
+            <HugeiconsIcon icon={RefreshIcon} size={12} strokeWidth={1.9} />
             Restart
           </button>
           <button
@@ -162,7 +162,7 @@ function InstallPill({ preset }: { preset: LspPreset }) {
       <span className={PILL_CLASS}>
         <PopoverTrigger asChild>
           <button type="button" className="flex items-center gap-1">
-            <HugeiconsIcon icon={SourceCodeIcon} size={11} strokeWidth={2} />
+            <HugeiconsIcon icon={SourceCodeIcon} size={12} strokeWidth={2} />
             <span>Install {preset.name} LSP</span>
           </button>
         </PopoverTrigger>
@@ -246,7 +246,7 @@ function ActivePill({
           {starting ? (
             <HugeiconsIcon
               icon={Loading03Icon}
-              size={11}
+              size={12}
               strokeWidth={2}
               className="animate-spin"
             />
@@ -276,7 +276,7 @@ function ActivePill({
               void restartPresetSessions(preset.id).catch(reportRestartFailure)
             }
           >
-            <HugeiconsIcon icon={RefreshIcon} size={11} strokeWidth={1.9} />
+            <HugeiconsIcon icon={RefreshIcon} size={12} strokeWidth={1.9} />
             Restart
           </button>
           <button

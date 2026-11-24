@@ -1,3 +1,4 @@
+import { statusMenuClass } from "@/components/ui/menu";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -124,7 +125,7 @@ export function AiStatusBarControls() {
         onClick={() => fileInputRef.current?.click()}
         disabled={c.isBusy}
       >
-        <HugeiconsIcon icon={Add01Icon} size={13} strokeWidth={2} />
+        <HugeiconsIcon icon={Add01Icon} size={12} strokeWidth={2} />
       </IconBtn>
 
       {c.voice.supported && (
@@ -152,7 +153,7 @@ export function AiStatusBarControls() {
           ) : c.voice.transcribing ? (
             <Spinner className="size-3" />
           ) : (
-            <HugeiconsIcon icon={Mic01Icon} size={13} strokeWidth={1.75} />
+            <HugeiconsIcon icon={Mic01Icon} size={12} strokeWidth={1.75} />
           )}
         </IconBtn>
       )}
@@ -176,7 +177,7 @@ export function AiStatusBarControls() {
         title={`${miniOpen ? "Close" : "Open"} AI chat window (${miniHint})`}
         onClick={toggleMini}
       >
-        <HugeiconsIcon icon={Message01Icon} size={13} strokeWidth={1.75} />
+        <HugeiconsIcon icon={Message01Icon} size={12} strokeWidth={1.75} />
       </IconBtn>
 
       {c.isBusy ? (
@@ -189,7 +190,7 @@ export function AiStatusBarControls() {
           aria-label="Stop"
           title="Stop"
         >
-          <HugeiconsIcon icon={StopCircleIcon} size={13} strokeWidth={1.75} />
+          <HugeiconsIcon icon={StopCircleIcon} size={12} strokeWidth={1.75} />
         </Button>
       ) : (
         <Button
@@ -201,7 +202,7 @@ export function AiStatusBarControls() {
           aria-label="Send"
           title="Send (Enter)"
         >
-          <HugeiconsIcon icon={ArrowUpIcon} size={13} strokeWidth={1.75} />
+          <HugeiconsIcon icon={ArrowUpIcon} size={12} strokeWidth={1.75} />
         </Button>
       )}
     </div>
@@ -309,7 +310,7 @@ function ModelDropdown() {
           {current.label}
           <HugeiconsIcon
             icon={ArrowDown01Icon}
-            size={11}
+            size={12}
             strokeWidth={2}
             className="opacity-70"
           />
@@ -318,7 +319,10 @@ function ModelDropdown() {
 
       <DropdownMenuContent
         align="end"
-        className="w-[28rem] p-0 overflow-hidden rounded-xl border border-border/70 shadow-xl"
+        className={cn(
+          "w-[28rem] p-0 overflow-hidden rounded-xl border border-border/70 shadow-xl",
+          statusMenuClass,
+        )}
         onFocusCapture={(e) => {
           if (e.target !== inputRef.current) inputRef.current?.focus();
         }}
@@ -404,7 +408,7 @@ function ModelDropdown() {
           <div className="min-h-0 flex-1 overflow-y-auto py-1">
             {activeProvider === COMPAT_PROVIDER_ID && (
               <div className="flex items-center gap-1.5 px-3 pt-1 pb-1.5 text-[11px] font-medium tracking-tight text-muted-foreground/90">
-                <HugeiconsIcon icon={PlugIcon} size={13} strokeWidth={1.75} />
+                <HugeiconsIcon icon={PlugIcon} size={12} strokeWidth={1.75} />
                 <span>OpenAI Compatible</span>
               </div>
             )}
@@ -546,7 +550,7 @@ function ProviderConfigureCTA({ providerId }: { providerId: ProviderId }) {
       onClick={() => void openSettingsWindow("models")}
       className="group mx-2 mb-1 flex w-[calc(100%-1rem)] items-center gap-2 rounded-md border border-dashed border-border/70 bg-muted/20 px-3 py-2 text-left text-[11px] text-muted-foreground transition-colors hover:border-border hover:bg-accent/40 hover:text-foreground"
     >
-      <HugeiconsIcon icon={Settings01Icon} size={13} strokeWidth={1.75} />
+      <HugeiconsIcon icon={Settings01Icon} size={12} strokeWidth={1.75} />
       <span className="flex-1 truncate">
         Configure {p.label} to use these models.
       </span>
