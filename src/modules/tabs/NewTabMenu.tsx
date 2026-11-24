@@ -120,23 +120,22 @@ export function NewTabMenu({
                 requestAnimationFrame(() => setLauncherOpen(true));
               }}
             >
-              <DropdownMenuItem onSelect={onNew}>
-                <HugeiconsIcon
-                  icon={ComputerTerminal02Icon}
-                  size={14}
-                  strokeWidth={1.75}
-                  className="size-3.5 shrink-0 text-muted-foreground"
-                />
-                <span className="min-w-0 flex-1 truncate">Terminal</span>
-                <span className={HINT}>{terminalHint}</span>
-              </DropdownMenuItem>
               {onNewWithShell && local && shells.length > 1 ? (
-                <ShellSubmenu
+                <TerminalItemWithShells
+                  hint={terminalHint}
                   shells={shells}
                   defaultPath={defaultShellPath(shells, shellSetting)}
+                  onDefault={() => {
+                    setMenuOpen(false);
+                    onNew();
+                  }}
                   onPick={onNewWithShell}
                 />
-              ) : null}
+              ) : (
+                <DropdownMenuItem onSelect={onNew}>
+                  <TerminalLabel hint={terminalHint} />
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onSelect={onNewBlock}>
                 <HugeiconsIcon
                   icon={ComputerTerminal02Icon}
@@ -229,27 +228,55 @@ export function NewTabMenu({
   );
 }
 
-/** Opens a terminal with one of this machine's shells, once; the default
- * stays as Settings > Integrated terminal shell has it. */
-export function ShellSubmenu({
+function TerminalLabel({ hint }: { hint: string | null | undefined }) {
+  return (
+    <>
+      <HugeiconsIcon
+        icon={ComputerTerminal02Icon}
+        size={14}
+        strokeWidth={1.75}
+        className="size-3.5 shrink-0 text-muted-foreground"
+      />
+      <span className="min-w-0 flex-1 truncate">Terminal</span>
+      {hint ? <span className={HINT}>{hint}</span> : null}
+    </>
+  );
+}
+
+/**
+ * The one Terminal row: a click (or Enter) opens the default shell, as
+ * Ctrl+T does; hovering it, or the right arrow, lists this machine's
+ * shells for a tab with another one.
+ */
+export function TerminalItemWithShells({
+  hint,
   shells,
   defaultPath,
+  onDefault,
   onPick,
 }: {
+  hint: string | null | undefined;
   shells: ShellInfo[];
   defaultPath: string | null;
+  onDefault: () => void;
   onPick: (shell: string) => void;
 }) {
   return (
     <DropdownMenuSub>
-      <DropdownMenuSubTrigger>
-        <HugeiconsIcon
-          icon={ComputerTerminal02Icon}
-          size={14}
-          strokeWidth={1.75}
-          className="size-3.5 shrink-0 text-muted-foreground"
-        />
-        <span className="min-w-0 flex-1 truncate">Terminal with</span>
+      <DropdownMenuSubTrigger
+        onClick={(event) => {
+          // A sub trigger only opens its list on click; this one opens a tab.
+          event.preventDefault();
+          onDefault();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onDefault();
+          }
+        }}
+      >
+        <TerminalLabel hint={hint} />
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent className="min-w-56">
         {shells.map((shell) => (
