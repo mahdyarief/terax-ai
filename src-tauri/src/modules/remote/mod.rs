@@ -29,6 +29,8 @@ mod fs_tests;
 
 #[cfg(test)]
 mod search_tests;
+#[cfg(test)]
+mod shell_tests;
 
 #[cfg(test)]
 mod watch_tests;

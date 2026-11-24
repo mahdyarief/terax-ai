@@ -14,10 +14,12 @@ Done. `fs::ai::run_glob`/`run_grep`/`run_read_dir` take the registry; on a serve
 
 ### Task 2: AI shell tools on a server
 
-- [ ] `shell_run_command` on a server runs `/bin/sh -c <command>` through `backend_for(ws).exec` in the authorized cwd (`covers`), with the same timeout and output caps, so the approval flow and the result shape stay as they are.
-- [ ] `shell_session_open`/`run` keep the session's cwd in the server's spelling: the POSIX sentinel wrapper, the cwd checked with the workspace's `metadata` instead of this machine's `is_dir`.
-- [ ] `shell_bg_spawn` on a server is refused with a clear message (a background process needs streamed output, which the protocol does not carry yet); the guard lists it as `Refused`.
-- [ ] Tests against the in-process agent; guard entries updated.
+- [x] `shell_run_command` on a server runs `sh -c <command>` through `backend_for(ws).exec` in the authorized cwd (`covers`), with the same timeout and output caps, so the approval flow and the result shape stay as they are.
+- [x] `shell_session_open`/`run` keep the session's cwd in the server's spelling: the POSIX sentinel wrapper, the cwd checked with the workspace's `metadata` instead of this machine's `is_dir`.
+- [x] `shell_bg_spawn` on a server is refused with a clear message (a background process needs streamed output, which the protocol does not carry yet); the guard lists it as `Refused`.
+- [x] Tests against the in-process agent; guard entries updated.
+
+Done. `shell::run_command_in` and `authorize_server_cwd` (a server has no default folder, so a cwd is required). `sh` comes from the server's `PATH`, so the in-process tests on Windows run MSYS's `sh`, whose `pwd` spells `/c/...`: the session's `cd` is checked on Unix and on dypod. The guard has no pending commands left, so its `Pending` variant is gone. Tests: `remote::shell_tests`.
 
 ### Task 3: UX polish
 

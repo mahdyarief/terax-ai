@@ -1,9 +1,8 @@
 //! Every Tauri command that takes a `WorkspaceEnv` says what it does on a
 //! server: it works there (and names the test that proves it against the
-//! agent), it refuses with a message, or it is still waiting for a phase of
-//! the remote plan. A new command, or one that went away, fails this test
-//! until it is listed, so none silently builds a path on this machine from a
-//! server's.
+//! agent), or it refuses with a message. A new command, or one that went
+//! away, fails this test until it is listed, so none silently builds a path
+//! on this machine from a server's.
 
 use std::path::{Path, PathBuf};
 
@@ -14,9 +13,6 @@ enum Ssh {
     Works(&'static str),
     /// Refused on a server with a message; why.
     Refused(&'static str),
-    /// Not done yet (refused or untested on a server until then); the
-    /// phase that brings it.
-    Pending(&'static str),
 }
 
 use Ssh::*;
@@ -28,7 +24,6 @@ const HOST_ONLY_GIT: Ssh =
 /// Task worktrees, their state and the project's task config live on this
 /// machine (`~/.terax`, an OS file lock).
 const TASKS: Ssh = Refused("task worktrees are local: \"only supported in local workspaces\"");
-const PHASE6: Ssh = Pending("Phase 6: AI tools on a server");
 
 /// (file under `src/modules`, command, what it does on a server)
 const COMMANDS: &[(&str, &str, Ssh)] = &[
@@ -374,10 +369,26 @@ const COMMANDS: &[(&str, &str, Ssh)] = &[
         "pty_open",
         Works("a_server_terminal_runs_through_the_apps_session"),
     ),
-    ("shell/mod.rs", "shell_bg_spawn", PHASE6),
-    ("shell/mod.rs", "shell_run_command", PHASE6),
-    ("shell/mod.rs", "shell_session_open", PHASE6),
-    ("shell/mod.rs", "shell_session_run", PHASE6),
+    (
+        "shell/mod.rs",
+        "shell_bg_spawn",
+        Refused("streamed output from a server is not in the protocol: \"Background processes run only in local and WSL workspaces for now\""),
+    ),
+    (
+        "shell/mod.rs",
+        "shell_run_command",
+        Works("the_ai_runs_a_command_on_the_server_in_its_folder"),
+    ),
+    (
+        "shell/mod.rs",
+        "shell_session_open",
+        Works("a_shell_session_on_the_server_keeps_its_folder"),
+    ),
+    (
+        "shell/mod.rs",
+        "shell_session_run",
+        Works("a_shell_session_on_the_server_keeps_its_folder"),
+    ),
     (
         "workspace.rs",
         "workspace_authorize",
@@ -487,7 +498,7 @@ fn every_command_taking_a_workspace_says_what_it_does_on_a_server() {
             Works(test) if !tests.contains(&format!("fn {test}(")) => problems.push(format!(
                 "{command}: no test `{test}` among the server tests"
             )),
-            Refused(why) | Pending(why) if why.len() < 20 => {
+            Refused(why) if why.len() < 20 => {
                 problems.push(format!("{command}: say why"))
             }
             _ => {}

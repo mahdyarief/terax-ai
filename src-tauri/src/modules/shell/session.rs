@@ -6,7 +6,8 @@ use serde::Serialize;
 
 use super::run_blocking_inner;
 use crate::modules::fs::to_canon;
-use crate::modules::workspace::{resolve_path, WorkspaceEnv};
+use crate::modules::workspace::{backend_for, resolve_path, WorkspaceEnv};
+use terax_workspace_core::workspace::EntryKind;
 
 pub struct ShellSession {
     pub cwd: Mutex<String>,
@@ -76,8 +77,7 @@ impl ShellSession {
         if self.pristine.load(Ordering::Acquire) {
             if let Some(hint) = cwd_hint.filter(|s| !s.is_empty()) {
                 let effective_workspace = workspace_hint.as_ref().unwrap_or(&self.workspace);
-                let p = resolve_path(&hint, effective_workspace);
-                if p.is_dir() {
+                if is_dir_in(&hint, effective_workspace) {
                     *self.cwd.lock().unwrap() = hint;
                 }
             }
@@ -91,8 +91,7 @@ impl ShellSession {
 
         let (stdout_clean, cwd_after) = strip_cwd_sentinel(&raw.stdout, &cwd, &self.sentinel);
         if let Some(ref new_cwd) = cwd_after {
-            let p = resolve_path(new_cwd, &self.workspace);
-            if p.is_dir() {
+            if is_dir_in(new_cwd, &self.workspace) {
                 *self.cwd.lock().unwrap() = new_cwd.clone();
             }
         }
@@ -109,6 +108,15 @@ impl ShellSession {
     }
 }
 
+fn is_dir_in(path: &str, workspace: &WorkspaceEnv) -> bool {
+    if workspace.is_ssh() {
+        return backend_for(workspace)
+            .metadata(path)
+            .is_ok_and(|meta| matches!(meta.kind, EntryKind::Dir));
+    }
+    resolve_path(path, workspace).is_dir()
+}
+
 fn wrap_posix_with_sentinel(command: &str, sentinel: &str) -> String {
     format!(
         "{command}\n__terax_rc=$?\nprintf '\\n%s%s\\n' '{sentinel}' \"$(pwd)\"\nexit $__terax_rc\n",
@@ -116,7 +124,7 @@ fn wrap_posix_with_sentinel(command: &str, sentinel: &str) -> String {
 }
 
 fn wrap_with_sentinel(command: &str, workspace: &WorkspaceEnv, sentinel: &str) -> String {
-    if workspace.is_wsl() {
+    if workspace.is_wsl() || workspace.is_ssh() {
         return wrap_posix_with_sentinel(command, sentinel);
     }
     #[cfg(unix)]

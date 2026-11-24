@@ -15,7 +15,11 @@ use tauri::Manager;
 use crate::modules::proc::capture::{self, Limits};
 #[cfg(windows)]
 use crate::modules::workspace::validate_wsl_distro_name;
-use crate::modules::workspace::{authorize_spawn_cwd, WorkspaceEnv, WorkspaceRegistry};
+use crate::modules::workspace::{
+    authorize_spawn_cwd, backend_for, WorkspaceEnv, WorkspaceRegistry,
+};
+use terax_workspace_core::exec::ExecSpec;
+use terax_workspace_core::workspace::EntryKind;
 
 use background::{BackgroundLogResponse, BackgroundProc, BackgroundProcInfo};
 use session::{SessionRunOutput, ShellSession};
@@ -23,6 +27,9 @@ use session::{SessionRunOutput, ShellSession};
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const MAX_TIMEOUT_SECS: u64 = 300;
 const MAX_OUTPUT_BYTES: usize = 256 * 1024;
+/// Background output is streamed from a local process; a server's command
+/// output only comes back whole, when it ends.
+pub(crate) const BG_ON_A_SERVER: &str = "Background processes run only in local and WSL workspaces for now. On a server, run it in a terminal, or run a command that ends.";
 
 #[derive(Serialize)]
 pub struct CommandOutput {
@@ -55,20 +62,75 @@ pub async fn shell_run_command(
     // Authorization canonicalizes the cwd and the run blocks until exit, so
     // both belong on the blocking pool, never on an async worker.
     tauri::async_runtime::spawn_blocking(move || {
-        authorize_spawn_cwd(
+        run_command_in(
             &app.state::<WorkspaceRegistry>(),
-            cwd.as_deref(),
-            &workspace,
-        )?;
-        let cwd_path = cwd
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(str::to_string);
-        run_blocking(trimmed, cwd_path, workspace, dur)
+            trimmed,
+            cwd,
+            workspace,
+            dur,
+        )
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// `shell_run_command` after its argument checks: blocks until exit.
+pub(crate) fn run_command_in(
+    registry: &WorkspaceRegistry,
+    command: String,
+    cwd: Option<String>,
+    workspace: WorkspaceEnv,
+    dur: Duration,
+) -> Result<CommandOutput, String> {
+    authorize_cwd(registry, cwd.as_deref(), &workspace)?;
+    let cwd_path = cwd
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    run_blocking(command, cwd_path, workspace, dur)
+}
+
+/// A server folder the AI's commands may start in: canonical on the server,
+/// a directory, and inside the folders authorized for that host. Always
+/// given: a server has no default folder the user approved.
+pub(crate) fn authorize_server_cwd(
+    registry: &WorkspaceRegistry,
+    cwd: Option<&str>,
+    workspace: &WorkspaceEnv,
+) -> Result<String, String> {
+    let Some(cwd) = cwd.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Err("a command on a server needs the folder it runs in".into());
+    };
+    let backend = backend_for(workspace);
+    let canonical = backend
+        .canonicalize(cwd)
+        .map_err(|e| format!("cwd not accessible: {e}"))?;
+    let meta = backend
+        .metadata(&canonical)
+        .map_err(|e| format!("cwd not accessible: {e}"))?;
+    if !matches!(meta.kind, EntryKind::Dir) {
+        return Err(format!("cwd is not a directory: {canonical}"));
+    }
+    if !registry.covers(workspace, &canonical) {
+        return Err(format!(
+            "cwd is outside the authorized workspace: {canonical}"
+        ));
+    }
+    Ok(canonical)
+}
+
+/// `authorize_spawn_cwd`, with a server's folder checked on the server.
+fn authorize_cwd(
+    registry: &WorkspaceRegistry,
+    cwd: Option<&str>,
+    workspace: &WorkspaceEnv,
+) -> Result<(), String> {
+    if workspace.is_ssh() {
+        authorize_server_cwd(registry, cwd, workspace).map(drop)
+    } else {
+        authorize_spawn_cwd(registry, cwd, workspace).map(drop)
+    }
 }
 
 fn clamp_timeout(timeout_secs: Option<u64>) -> Duration {
@@ -94,6 +156,31 @@ fn run_blocking(
     workspace: WorkspaceEnv,
     dur: Duration,
 ) -> Result<CommandOutput, String> {
+    let limits = Limits {
+        stdout: MAX_OUTPUT_BYTES,
+        stderr: MAX_OUTPUT_BYTES,
+        stop_on_stdout_cap: false,
+    };
+    if workspace.is_ssh() {
+        // `sh -c` on the server (from its `PATH`); the agent starts it in
+        // `cwd` after checking that against the host's roots too.
+        let captured = backend_for(&workspace)
+            .exec(ExecSpec {
+                program: "sh".into(),
+                args: vec!["-c".into(), command.into()],
+                cwd,
+                env: Vec::new(),
+                env_remove: Vec::new(),
+                stdin: None,
+                timeout: dur,
+                limits,
+            })
+            .map_err(|e| {
+                log::warn!("shell_run_command on a server failed: {e}");
+                e.to_string()
+            })?;
+        return Ok(output_of(captured));
+    }
     let mut cmd = build_oneshot_command(&command, &workspace, cwd.as_deref())?;
     if let (WorkspaceEnv::Local, Some(dir)) = (&workspace, cwd) {
         cmd.current_dir(dir);
@@ -103,27 +190,21 @@ fn run_blocking(
         .stderr(Stdio::piped());
     crate::modules::proc::hide_console(&mut cmd);
 
-    let captured = capture::run(
-        &mut cmd,
-        dur,
-        Limits {
-            stdout: MAX_OUTPUT_BYTES,
-            stderr: MAX_OUTPUT_BYTES,
-            stop_on_stdout_cap: false,
-        },
-    )
-    .map_err(|e| {
+    let captured = capture::run(&mut cmd, dur, limits).map_err(|e| {
         log::warn!("shell_run_command failed: {e}");
         e.to_string()
     })?;
+    Ok(output_of(captured))
+}
 
-    Ok(CommandOutput {
+fn output_of(captured: capture::Captured) -> CommandOutput {
+    CommandOutput {
         stdout: String::from_utf8_lossy(&captured.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&captured.stderr).into_owned(),
         exit_code: captured.exit_code,
         timed_out: captured.timed_out,
         truncated: captured.stdout_truncated || captured.stderr_truncated,
-    })
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────
@@ -158,6 +239,14 @@ pub async fn shell_session_open(
     // wsl_home spawns wsl.exe on Windows and authorization hits the disk.
     let registry_app = app.clone();
     let (initial, workspace) = tauri::async_runtime::spawn_blocking(move || {
+        if workspace.is_ssh() {
+            let initial = authorize_server_cwd(
+                &registry_app.state::<WorkspaceRegistry>(),
+                cwd.as_deref(),
+                &workspace,
+            )?;
+            return Ok((initial, workspace));
+        }
         authorize_spawn_cwd(
             &registry_app.state::<WorkspaceRegistry>(),
             cwd.as_deref(),
@@ -212,7 +301,7 @@ pub async fn shell_session_run(
         let effective_workspace = workspace
             .clone()
             .unwrap_or_else(|| session.workspace.clone());
-        authorize_spawn_cwd(
+        authorize_cwd(
             &app.state::<WorkspaceRegistry>(),
             cwd.as_deref(),
             &effective_workspace,
@@ -237,6 +326,9 @@ pub async fn shell_bg_spawn(
     workspace: Option<WorkspaceEnv>,
 ) -> Result<u32, String> {
     let workspace = WorkspaceEnv::from_option(workspace);
+    if workspace.is_ssh() {
+        return Err(BG_ON_A_SERVER.into());
+    }
     tauri::async_runtime::spawn_blocking(move || {
         authorize_spawn_cwd(
             &app.state::<WorkspaceRegistry>(),
