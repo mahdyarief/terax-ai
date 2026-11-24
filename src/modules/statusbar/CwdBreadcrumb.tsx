@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { statusMenuClass } from "@/components/ui/menu";
+import { statusMenuClass, statusMenuScrollClass } from "@/components/ui/menu";
 import { Badge } from "@/components/ui/badge";
 import {
   Breadcrumb,
@@ -223,7 +223,7 @@ function CurrentSegmentDropdown({
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        className={cn("max-h-72 overflow-y-auto", statusMenuClass)}
+        className={cn(statusMenuClass, statusMenuScrollClass)}
       >
         {children === null ? (
           <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
@@ -281,7 +281,7 @@ function CollapsedSegments({
           </DropdownMenuTrigger>
           <DropdownMenuContent
             align="start"
-            className={cn("min-w-44", statusMenuClass)}
+            className={cn("min-w-44", statusMenuClass, statusMenuScrollClass)}
           >
             {segments.map((s) => (
               <DropdownMenuItem

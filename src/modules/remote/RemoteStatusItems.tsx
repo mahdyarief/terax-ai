@@ -9,7 +9,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { statusMenuClass } from "@/components/ui/menu";
+import { statusMenuClass, statusMenuScrollClass } from "@/components/ui/menu";
 import { cn } from "@/lib/utils";
 import { ServerStack03Icon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -99,7 +99,11 @@ export function RemoteStatusItems() {
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        className={cn("max-w-80 min-w-56", statusMenuClass)}
+        className={cn(
+          "max-w-80 min-w-56",
+          statusMenuClass,
+          statusMenuScrollClass,
+        )}
       >
         {shown.length === 0 ? (
           <DropdownMenuItem disabled>No SSH connections</DropdownMenuItem>
@@ -135,7 +139,11 @@ function RemoteHostRow({ host, state }: { host: string; state: RemoteState }) {
         <RemoteStatusLabel host={host} state={state} />
       </DropdownMenuSubTrigger>
       <DropdownMenuSubContent
-        className={cn("max-w-80 min-w-48", statusMenuClass)}
+        className={cn(
+          "max-w-80 min-w-48",
+          statusMenuClass,
+          statusMenuScrollClass,
+        )}
       >
         <DropdownMenuLabel className="select-text text-[11px] font-normal text-muted-foreground">
           {detail ? `${host}: ${detail}` : host}

@@ -6,7 +6,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { statusMenuClass } from "@/components/ui/menu";
+import { statusMenuClass, statusMenuScrollClass } from "@/components/ui/menu";
 import { IS_WINDOWS } from "@/lib/platform";
 import {
   LOCAL_WORKSPACE,
@@ -64,7 +64,7 @@ function WorkspaceEnvSelectorWindows({ onSelect }: Props) {
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        className={cn("min-w-48", statusMenuClass)}
+        className={cn("min-w-48", statusMenuClass, statusMenuScrollClass)}
       >
         <DropdownMenuItem onSelect={() => onSelect(LOCAL_WORKSPACE)}>
           Windows Local

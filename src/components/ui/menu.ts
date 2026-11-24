@@ -29,3 +29,8 @@ export const menuShortcutClass =
 // which is portalled); an item sizes an icon without `size-*` to 16 px.
 export const statusMenuClass =
   "[&_[data-slot^=dropdown-menu-]]:gap-1.5 [&_[data-slot^=dropdown-menu-]]:text-[11px] [&_svg]:size-3";
+
+// A plain status bar menu that can grow long (folders, hosts) scrolls, with a
+// visible scrollbar. Not for menus that scroll a list of their own.
+export const statusMenuScrollClass =
+  "terax-scrollbar max-h-80 overflow-y-auto";
