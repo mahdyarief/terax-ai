@@ -98,10 +98,22 @@ export const PreviewPane = forwardRef<PreviewPaneHandle, Props>(
               strokeWidth={1.75}
               className="shrink-0"
             />
-            <span className="truncate">
+            <span className="min-w-0 flex-1 truncate">
               Many public sites refuse to embed (X-Frame-Options). If the page
               is blank, open it externally.
             </span>
+            <button
+              type="button"
+              onClick={() => void openUrl(url).catch(console.error)}
+              className="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 font-medium hover:bg-amber-500/15"
+            >
+              <HugeiconsIcon
+                icon={LinkSquare02Icon}
+                size={10}
+                strokeWidth={1.75}
+              />
+              Open in browser
+            </button>
           </div>
         ) : null}
         {showCookieHint ? (

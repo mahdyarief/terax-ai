@@ -20,6 +20,7 @@ import {
   FolderAddIcon,
   PencilEdit02Icon,
   PlusSignIcon,
+  Search01Icon,
   ServerStack03Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -142,6 +143,39 @@ export function SpaceSwitcher({
     return m;
   }, [tabs]);
 
+  const [searchQuery, setSearchQuery] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) {
+      setSearchQuery("");
+    }
+  }, [open]);
+
+  const filteredSpaces = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return spaces;
+    return spaces.filter((sp) => {
+      if (sp.name.toLowerCase().includes(q)) return true;
+      if (sp.root?.toLowerCase().includes(q)) return true;
+      if (sp.env.kind === "ssh" && sp.env.host.toLowerCase().includes(q))
+        return true;
+      if (sp.env.kind === "wsl" && sp.env.distro.toLowerCase().includes(q))
+        return true;
+      const spaceTabs = tabsBySpace.get(sp.id);
+      if (
+        spaceTabs?.some(
+          (t) =>
+            labelFor(t).toLowerCase().includes(q) ||
+            (t.kind === "terminal" && t.cwd?.toLowerCase().includes(q)),
+        )
+      ) {
+        return true;
+      }
+      return false;
+    });
+  }, [spaces, searchQuery, tabsBySpace]);
+
   const draggedTab =
     dragging?.kind === "tab"
       ? (tabs.find((t) => t.id === dragging.id) ?? null)
@@ -183,6 +217,7 @@ export function SpaceSwitcher({
     kind: "space" | "tab",
     id: string | number,
   ) => {
+    if (searchQuery.trim()) return;
     if (e.button !== 0) return;
     if ((e.target as HTMLElement).closest("[data-no-drag]")) return;
     drag.current = {
@@ -316,54 +351,97 @@ export function SpaceSwitcher({
             <Kbd className="h-5 bg-muted/70 text-[10px]">{shortcut}</Kbd>
           )}
         </div>
+        {!focusedWindow && spaces.length > 0 && (
+          <div className="relative mb-1.5 px-0.5">
+            <HugeiconsIcon
+              icon={Search01Icon}
+              size={13}
+              strokeWidth={1.75}
+              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/60"
+            />
+            <input
+              ref={searchInputRef}
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search spaces…"
+              className="h-7 w-full rounded-md border border-input/60 bg-muted/40 pl-7 pr-7 text-xs text-foreground placeholder:text-muted-foreground/60 transition-colors focus:border-ring focus:bg-background focus:outline-none"
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && searchQuery) {
+                  e.stopPropagation();
+                  setSearchQuery("");
+                }
+              }}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery("");
+                  searchInputRef.current?.focus();
+                }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground/70 transition-colors hover:text-foreground"
+                title="Clear search"
+              >
+                <HugeiconsIcon icon={Cancel01Icon} size={12} strokeWidth={2} />
+              </button>
+            )}
+          </div>
+        )}
         {/* The gutter is reserved so rows keep their width when the list
             grows past the cap; the negative right margin lets the bar sit in
             the popover's padding instead of eating into the rows. */}
         <div className="terax-visible-scrollbar -ml-0.5 -mr-1.5 max-h-[60vh] overflow-y-auto overflow-x-hidden pl-0.5 [scrollbar-gutter:stable]"
         >
-          {spaces.map((sp) => (
-            <SpaceRow
-              key={sp.id}
-              space={sp}
-              tabs={tabsBySpace.get(sp.id) ?? []}
-              isActive={sp.id === activeId}
-              canDelete={!focusedWindow && spaces.length > 1}
-              expanded={expanded.has(sp.id)}
-              editing={editingId === sp.id}
-              dragging={dragging}
-              drop={drop}
-              draggingTabFromOther={
-                draggedTab !== null && draggedTab.spaceId !== sp.id
-              }
-              onPointerDown={onPointerDown}
-              onPointerMove={onPointerMove}
-              onPointerUp={onPointerUp}
-              onToggle={() => toggleExpand(sp.id)}
-              onSwitch={() => {
-                setActive(sp.id);
-                onOpenChange(false);
-              }}
-              onStartRename={() => setEditingId(sp.id)}
-              onCommitRename={(name) => {
-                const v = name.trim();
-                if (v) rename(sp.id, v);
-                setEditingId(null);
-              }}
-              onCancelRename={() => setEditingId(null)}
-              onDelete={() => onDeleteSpace(sp.id)}
-              onOpenInWindow={() => onOpenSpaceInWindow(sp.id)}
-              onBringBack={() => onBringSpaceToWindow(sp.id)}
-              windowLabel={windowLabel}
-              onPickFolder={
-                onPickFolderForSpace
-                  ? () => onPickFolderForSpace(sp.id)
-                  : undefined
-              }
-              onNewTab={() => onNewTabInSpace(sp.id)}
-              onJumpTab={onJumpTab}
-              onCloseTab={onCloseTab}
-            />
-          ))}
+          {filteredSpaces.length === 0 ? (
+            <div className="py-6 text-center text-xs text-muted-foreground">
+              No spaces found
+            </div>
+          ) : (
+            filteredSpaces.map((sp) => (
+              <SpaceRow
+                key={sp.id}
+                space={sp}
+                tabs={tabsBySpace.get(sp.id) ?? []}
+                isActive={sp.id === activeId}
+                canDelete={!focusedWindow && spaces.length > 1}
+                expanded={expanded.has(sp.id) || Boolean(searchQuery.trim())}
+                editing={editingId === sp.id}
+                dragging={dragging}
+                drop={drop}
+                draggingTabFromOther={
+                  draggedTab !== null && draggedTab.spaceId !== sp.id
+                }
+                onPointerDown={onPointerDown}
+                onPointerMove={onPointerMove}
+                onPointerUp={onPointerUp}
+                onToggle={() => toggleExpand(sp.id)}
+                onSwitch={() => {
+                  setActive(sp.id);
+                  onOpenChange(false);
+                }}
+                onStartRename={() => setEditingId(sp.id)}
+                onCommitRename={(name) => {
+                  const v = name.trim();
+                  if (v) rename(sp.id, v);
+                  setEditingId(null);
+                }}
+                onCancelRename={() => setEditingId(null)}
+                onDelete={() => onDeleteSpace(sp.id)}
+                onOpenInWindow={() => onOpenSpaceInWindow(sp.id)}
+                onBringBack={() => onBringSpaceToWindow(sp.id)}
+                windowLabel={windowLabel}
+                onPickFolder={
+                  onPickFolderForSpace
+                    ? () => onPickFolderForSpace(sp.id)
+                    : undefined
+                }
+                onNewTab={() => onNewTabInSpace(sp.id)}
+                onJumpTab={onJumpTab}
+                onCloseTab={onCloseTab}
+              />
+            ))
+          )}
         </div>
         {!focusedWindow && (
           <div className="mt-1.5 flex flex-col gap-1 border-t border-border/60 pt-1.5">
