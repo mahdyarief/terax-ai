@@ -16,11 +16,14 @@ import {
   type ShortcutId,
   tabDigit,
 } from "./shortcuts";
+import { isShellKeyShortcut } from "./lib/shellKeys";
 
 // Both tables are tested regardless of the platform the tests run on.
 
 const MAC_EXPECTED = `terminal.clear: Cmd+k
 terminal.scrollToBottom: Shift+Cmd+ArrowDown
+terminal.historyPrev: Ctrl+p
+terminal.historyNext: Ctrl+n
 commandPalette.open: Shift+Cmd+p, Cmd+k
 commandPalette.files: Cmd+p
 commandPalette.content: Shift+Cmd+h
@@ -236,7 +239,7 @@ describe("Windows and Linux defaults", () => {
 
   it("never uses a chord a terminal program reads", () => {
     for (const id of ids) {
-      if (isEditor(id)) continue;
+      if (isEditor(id) || isShellKeyShortcut(id)) continue;
       for (const binding of table[id]) {
         for (const tui of TUI_EVENTS)
           expect(
@@ -249,7 +252,7 @@ describe("Windows and Linux defaults", () => {
 
   it("never uses a plain Ctrl control byte, an Alt chord or Ctrl+Alt+character outside the editor", () => {
     for (const id of ids) {
-      if (isEditor(id)) continue;
+      if (isEditor(id) || isShellKeyShortcut(id)) continue;
       for (const binding of table[id].flatMap((b) => accepted(id, b))) {
         const text = `${id}: ${describeBinding(binding)}`;
         const plainCtrl =

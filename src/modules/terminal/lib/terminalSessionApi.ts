@@ -145,6 +145,13 @@ export function clearFocusedTerminal(): boolean {
   return false;
 }
 
+/** Sends bytes to the focused terminal as if typed; false when none is focused. */
+export function writeToFocusedTerminal(data: string): boolean {
+  const ghosttyLeaf = ghosttyFocusedLeaf();
+  if (ghosttyLeaf !== null) return writeToGhosttySession(ghosttyLeaf, data);
+  return false;
+}
+
 export function scrollFocusedTerminalToBottom(): boolean {
   const ghosttyLeaf = ghosttyFocusedLeaf();
   if (ghosttyLeaf !== null) return scrollGhosttySessionToBottom(ghosttyLeaf);

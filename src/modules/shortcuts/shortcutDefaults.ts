@@ -21,12 +21,18 @@ import type { KeyBinding, ShortcutId } from "./shortcuts";
  * and Ctrl+Shift+U/E belong to the GTK and IBus input methods. Editor
  * shortcuts keep their plain Ctrl chords: the host only runs them in editor
  * tabs, which never hold a terminal.
+ *
+ * Shell history is the one exception (lib/shellKeys.ts): its default is the
+ * shell's own Ctrl+P and Ctrl+N, which the app lets through untouched. A user
+ * who moves it to another chord gets the same byte sent from that chord.
  */
 
 export const MAC_DEFAULTS: Readonly<Record<ShortcutId, readonly KeyBinding[]>> =
   {
     "terminal.clear": [{ meta: true, key: "k" }],
     "terminal.scrollToBottom": [{ shift: true, meta: true, key: "ArrowDown" }],
+    "terminal.historyPrev": [{ ctrl: true, key: "p" }],
+    "terminal.historyNext": [{ ctrl: true, key: "n" }],
     "commandPalette.open": [
       { shift: true, meta: true, key: "p" },
       { meta: true, key: "k" },
@@ -116,6 +122,8 @@ export const WIN_LINUX_DEFAULTS: Readonly<
   "pane.source": [{ ...CS, key: ";" }],
   "terminal.clear": [],
   "terminal.scrollToBottom": [{ ctrl: true, alt: true, key: "End" }],
+  "terminal.historyPrev": [{ ctrl: true, key: "p" }],
+  "terminal.historyNext": [{ ctrl: true, key: "n" }],
   "terminal.toggleInput": [{ ...CS, key: "y" }],
   "blocks.prev": [{ ...CS, key: "ArrowUp" }],
   "blocks.next": [{ ...CS, key: "ArrowDown" }],

@@ -21,6 +21,7 @@ import {
   type Shortcut,
   type ShortcutId,
 } from "@/modules/shortcuts/shortcuts";
+import { shortcutNotes } from "@/modules/shortcuts/lib/shortcutConflicts";
 import {
   ArrowTurnBackwardIcon,
   Delete02Icon,
@@ -47,6 +48,11 @@ export function ShortcutsSection() {
         s.group.toLowerCase().includes(lower),
     );
   }, [search]);
+
+  const notes = useMemo(
+    () => shortcutNotes(SHORTCUTS, userShortcuts),
+    [userShortcuts],
+  );
 
   const onRecord = (id: ShortcutId, binding: KeyBinding) => {
     const next = { ...userShortcuts, [id]: [binding] };
@@ -129,6 +135,7 @@ export function ShortcutsSection() {
                     onClear={() => onClear(s.id)}
                     onReset={() => onResetShortcut(s.id)}
                     userBindings={userShortcuts[s.id]}
+                    note={notes[s.id]}
                   />
                 ))}
               </div>
@@ -170,6 +177,7 @@ function ShortcutRow({
   onClear,
   onReset,
   userBindings,
+  note,
 }: {
   shortcut: Shortcut;
   isRecording: boolean;
@@ -179,6 +187,7 @@ function ShortcutRow({
   onClear: () => void;
   onReset: () => void;
   userBindings?: KeyBinding[];
+  note?: string;
 }) {
   const bindings =
     userBindings !== undefined ? userBindings : shortcut.defaultBindings;
@@ -189,6 +198,11 @@ function ShortcutRow({
     <div className="group flex items-center justify-between px-3 py-2.5 transition-colors hover:bg-muted/30">
       <div className="flex flex-col gap-0.5">
         <span className="text-[12.5px] font-medium">{shortcut.label}</span>
+        {note && (
+          <span className="text-[11px] text-amber-600 dark:text-amber-400">
+            {note}
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-2">

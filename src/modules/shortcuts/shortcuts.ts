@@ -32,6 +32,8 @@ export type ShortcutId =
   | "pane.source"
   | "terminal.clear"
   | "terminal.scrollToBottom"
+  | "terminal.historyPrev"
+  | "terminal.historyNext"
   | "terminal.toggleInput"
   | "blocks.prev"
   | "blocks.next"
@@ -95,6 +97,18 @@ const SHORTCUT_META: Omit<Shortcut, "defaultBindings">[] = [
     id: "terminal.scrollToBottom",
     label: "Scroll terminal to bottom",
     group: "Terminal",
+  },
+  {
+    id: "terminal.historyPrev",
+    label: "Previous command in shell history",
+    group: "Terminal",
+    allowRepeat: true,
+  },
+  {
+    id: "terminal.historyNext",
+    label: "Next command in shell history",
+    group: "Terminal",
+    allowRepeat: true,
   },
   {
     id: "commandPalette.open",

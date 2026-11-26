@@ -18,6 +18,7 @@ export {
   ptyIdForLeaf,
   scrollFocusedTerminalToBottom,
   whenSessionReady,
+  writeToFocusedTerminal,
   writeToSession,
 } from "./lib/terminalSessionApi";
 export { dropHandoffReplays, queueHandoffReplay } from "./lib/handoffSession";

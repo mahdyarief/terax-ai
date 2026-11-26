@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildShortcuts, type KeyBinding, type ShortcutId } from "../shortcuts";
 import { resolveShortcut } from "./resolveShortcut";
+import { isShellKeyShortcut, isTheShellsOwnChord } from "./shellKeys";
 
 const mac = buildShortcuts(true);
 const other = buildShortcuts(false);
@@ -75,8 +76,32 @@ describe("resolveShortcut on Windows and Linux", () => {
   });
 
   it("leaves Ctrl+P, Ctrl+K and Ctrl+O to the shell", () => {
-    for (const key of ["p", "k", "o"])
+    for (const key of ["k", "o"])
       expect(run(other, press(key, "C"))).toBeNull();
+    // History's default is the shell's own Ctrl+P, which the host lets through.
+    const event = press("p", "C");
+    expect(run(other, event)).toBe("terminal.historyPrev");
+    expect(
+      isShellKeyShortcut("terminal.historyPrev") &&
+        isTheShellsOwnChord("terminal.historyPrev", event),
+    ).toBe(true);
+    expect(
+      run(other, event, { disabled: ["terminal.historyPrev"] }),
+    ).toBeNull();
+  });
+
+  it("gives Ctrl+P to Go to file once the user records it there", () => {
+    const user = { "commandPalette.files": [{ ctrl: true, key: "p" }] };
+    expect(run(other, press("p", "C"), { user })).toBe("commandPalette.files");
+  });
+
+  it("sends history from the chord the user moved it to", () => {
+    const user = {
+      "terminal.historyPrev": [{ ctrl: true, alt: true, key: "ArrowUp" }],
+    };
+    const event = press("ArrowUp", "CA");
+    expect(run(other, event, { user })).toBe("terminal.historyPrev");
+    expect(isTheShellsOwnChord("terminal.historyPrev", event)).toBe(false);
   });
 
   it("keeps the chords the editor binds (Ctrl+Shift+L, G, \\, [ and ]) off the app", () => {

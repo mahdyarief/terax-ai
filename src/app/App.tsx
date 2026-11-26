@@ -61,6 +61,9 @@ import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { setShowHidden } from "@/modules/settings/store";
 import {
+  isShellKeyShortcut,
+  isTheShellsOwnChord,
+  SHELL_KEYS,
   type ShortcutHandlers,
   type ShortcutId,
   shouldDisableAskSelection,
@@ -157,6 +160,7 @@ import {
   ptyIdForLeaf,
   scrollFocusedTerminalToBottom,
   type TerminalPaneHandle,
+  writeToFocusedTerminal,
   useAgentActivityStore,
   useTerminalFileDrop,
   whenSessionReady,
@@ -1136,6 +1140,12 @@ export default function App() {
       "terminal.scrollToBottom": () => {
         scrollFocusedTerminalToBottom();
       },
+      "terminal.historyPrev": () => {
+        writeToFocusedTerminal(SHELL_KEYS["terminal.historyPrev"].data);
+      },
+      "terminal.historyNext": () => {
+        writeToFocusedTerminal(SHELL_KEYS["terminal.historyNext"].data);
+      },
       "terminal.toggleInput": () =>
         window.dispatchEvent(new CustomEvent(TOGGLE_BLOCK_INPUT_EVENT)),
       "blocks.prev": () => navigateFocusedBlocks(-1),
@@ -1234,6 +1244,13 @@ export default function App() {
           () => isTerminalSurfaceTarget(target),
           () => !!captureActiveSelection()?.trim(),
         );
+      }
+      if (isShellKeyShortcut(id)) {
+        // The shell's own chord reaches it untouched; another chord the user
+        // chose sends the same byte, but only to a focused terminal.
+        const target =
+          (e.target as HTMLElement | null) ?? document.activeElement;
+        return isTheShellsOwnChord(id, e) || !isTerminalSurfaceTarget(target);
       }
       if (id === "terminal.clear" || id === "terminal.scrollToBottom") {
         // Only intercept the chord while a terminal is focused; elsewhere let

@@ -12,6 +12,11 @@ export {
 export { useShortcutHint, useShortcutLabel } from "./lib/useShortcutLabel";
 export { shortcutLabel } from "./lib/shortcutLabel";
 export {
+  isShellKeyShortcut,
+  isTheShellsOwnChord,
+  SHELL_KEYS,
+} from "./lib/shellKeys";
+export {
   shouldDisableAskSelection,
   shouldDisablePaneSwapShortcut,
 } from "./lib/shortcutScope";
