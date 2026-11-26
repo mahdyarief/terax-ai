@@ -130,6 +130,45 @@ describe("hydrateTabs", () => {
     expect(restored.cwd).toBe("/b");
   });
 
+  it("keeps the sizes of a resized split, and drops ones that do not fit", () => {
+    const tree = (sizes: unknown): PaneNode =>
+      ({
+        kind: "split",
+        id: 10,
+        dir: "row",
+        children: [
+          { kind: "leaf", id: 11 },
+          { kind: "leaf", id: 12 },
+        ],
+        sizes,
+      }) as PaneNode;
+    const restore = (sizes: unknown) => {
+      const [tab] = hydrateTabs(
+        serializeTabs([term({ paneTree: tree(sizes), activeLeafId: 11 })]),
+        "s",
+        counter(),
+      );
+      return tab.kind === "terminal" && tab.paneTree.kind === "split"
+        ? tab.paneTree.sizes
+        : "not a split";
+    };
+    expect(restore([70, 30])).toEqual([70, 30]);
+    expect(restore(undefined)).toBeUndefined();
+    expect(restore([70, 20, 10])).toBeUndefined();
+
+    // A hand-edited or older file with bad sizes still restores the panes.
+    const saved = serializeTabs([term({ paneTree: tree(undefined) })]);
+    const node = (saved[0] as { tree: { sizes?: unknown } }).tree;
+    node.sizes = ["x", 1];
+    const [tab] = hydrateTabs(saved, "s", counter());
+    expect(tab.kind === "terminal" && tab.paneTree.kind).toBe("split");
+    expect(
+      tab.kind === "terminal" &&
+        tab.paneTree.kind === "split" &&
+        tab.paneTree.sizes,
+    ).toBeUndefined();
+  });
+
   it("allocates fresh, unique, monotonic ids across all tabs and leaves", () => {
     const tree: PaneNode = {
       kind: "split",

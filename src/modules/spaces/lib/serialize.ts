@@ -2,6 +2,7 @@ import {
   isLeaf,
   type PaneNode,
   type SplitDir,
+  validSplitSizes,
 } from "@/modules/terminal/lib/panes";
 import type {
   PtyAttachmentRef,
@@ -25,7 +26,13 @@ type SerializedNode =
       active?: boolean;
       ptyAttachment?: PtyAttachmentRef;
     }
-  | { kind: "split"; dir: SplitDir; children: SerializedNode[] };
+  | {
+      kind: "split";
+      dir: SplitDir;
+      children: SerializedNode[];
+      /** Percent per child after a resize; absent means even. */
+      sizes?: number[];
+    };
 
 export type SerializedTab =
   | {
@@ -91,6 +98,9 @@ function serializeNode(node: PaneNode, activeLeafId: number): SerializedNode {
     kind: "split",
     dir: node.dir,
     children: node.children.map((c) => serializeNode(c, activeLeafId)),
+    ...(validSplitSizes(node.sizes, node.children.length) && {
+      sizes: node.sizes,
+    }),
   };
 }
 
@@ -239,7 +249,15 @@ function hydrateNode(
   );
   if (children.length === 0) return { kind: "leaf", id: allocId() };
   if (children.length === 1) return children[0];
-  return { kind: "split", id: allocId(), dir: node.dir, children };
+  return {
+    kind: "split",
+    id: allocId(),
+    dir: node.dir,
+    children,
+    ...(validSplitSizes(node.sizes, children.length) && {
+      sizes: [...node.sizes],
+    }),
+  };
 }
 
 function hydrateTree(

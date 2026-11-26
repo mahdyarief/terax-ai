@@ -18,6 +18,12 @@ type Props = {
   onCwd: (leafId: number, cwd: string) => void;
   onExit: (leafId: number, code: number) => void;
   onFocusLeaf: (tabId: number, leafId: number) => void;
+  /** A split was resized (`undefined`: back to even sizes). */
+  onSplitSizes: (
+    tabId: number,
+    splitId: number,
+    sizes: readonly number[] | undefined,
+  ) => void;
 };
 
 type Bundle = {
@@ -36,6 +42,7 @@ export function TerminalStack({
   onCwd,
   onExit,
   onFocusLeaf,
+  onSplitSizes,
 }: Props) {
   const terminals = useMemo(() => selectLiveTerminals(tabs), [tabs]);
 
@@ -113,6 +120,9 @@ export function TerminalStack({
               blocks={t.blocks ?? false}
               shell={t.shell}
               onFocusLeaf={(leafId) => onFocusLeaf(t.id, leafId)}
+              onSplitSizes={(splitId, sizes) =>
+                onSplitSizes(t.id, splitId, sizes)
+              }
               getBundle={getBundle}
             />
           </div>

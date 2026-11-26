@@ -4,9 +4,10 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import type { TerminalSearchController } from "@/modules/terminal/search/TerminalSearchController";
-import { Fragment, useCallback, useEffect, useRef } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef } from "react";
+import { type LayoutChangedMeta, useGroupRef } from "react-resizable-panels";
 import { useTerminalDropStore } from "./lib/dropStore";
-import { firstLeafSlotId, type PaneNode } from "./lib/panes";
+import { firstLeafSlotId, type PaneNode, validSplitSizes } from "./lib/panes";
 import {
   beginTerminalResizeInteraction,
   endTerminalResizeInteraction,
@@ -28,8 +29,12 @@ type Props = {
   /** The tab's own shell; undefined follows the setting. */
   shell?: string;
   onFocusLeaf: (leafId: number) => void;
+  /** The user resized a split (`undefined`: back to even sizes). */
+  onSplitSizes: (splitId: number, sizes: readonly number[] | undefined) => void;
   getBundle: (leafId: number) => LeafBundle;
 };
+
+type SplitNode = Extract<PaneNode, { kind: "split" }>;
 
 export function PaneTreeView(props: Props) {
   const { node } = props;
@@ -69,16 +74,56 @@ export function PaneTreeView(props: Props) {
     );
   }
 
+  return <PaneSplitView {...props} node={node} />;
+}
+
+const panelIdOf = (child: PaneNode) => `pane-slot-${firstLeafSlotId(child)}`;
+
+function PaneSplitView(props: Props & { node: SplitNode }) {
+  const { node, onSplitSizes } = props;
+  const groupRef = useGroupRef();
+  const panelIds = node.children.map(panelIdOf);
+  const panelKey = panelIds.join(" ");
+
+  // Read once per set of panes: the group owns the layout after it mounts, and
+  // what the user drags is written back to the tree (and the saved space).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on purpose, see above
+  const defaultLayout = useMemo(() => {
+    if (!validSplitSizes(node.sizes, panelIds.length)) return undefined;
+    const sizes = node.sizes;
+    return Object.fromEntries(panelIds.map((id, i) => [id, sizes[i]]));
+  }, [panelKey]);
+
+  const onLayoutChanged = (
+    layout: Record<string, number>,
+    meta: LayoutChangedMeta,
+  ) => {
+    if (!meta.isUserInteraction) return;
+    const sizes = panelIds.map((id) => layout[id]);
+    if (sizes.every((n) => typeof n === "number")) onSplitSizes(node.id, sizes);
+  };
+
+  const resetToEven = () => {
+    const even = 100 / panelIds.length;
+    groupRef.current?.setLayout(
+      Object.fromEntries(panelIds.map((id) => [id, even])),
+    );
+    onSplitSizes(node.id, undefined);
+  };
+
   return (
     <ResizablePanelGroup
+      groupRef={groupRef}
+      defaultLayout={defaultLayout}
+      onLayoutChanged={onLayoutChanged}
       orientation={node.dir === "row" ? "horizontal" : "vertical"}
     >
       {node.children.map((child, i) => {
         const slotId = firstLeafSlotId(child);
         return (
           <Fragment key={slotId}>
-            {i > 0 && <TerminalResizableHandle />}
-            <ResizablePanel id={`pane-slot-${slotId}`} minSize="10%">
+            {i > 0 && <TerminalResizableHandle onReset={resetToEven} />}
+            <ResizablePanel id={panelIdOf(child)} minSize="10%">
               <PaneTreeView {...props} node={child} />
             </ResizablePanel>
           </Fragment>
@@ -97,7 +142,7 @@ const RESIZE_KEYS = new Set([
   "Home",
 ]);
 
-function TerminalResizableHandle() {
+function TerminalResizableHandle({ onReset }: { onReset: () => void }) {
   const interactionToken = useRef<object>({});
   const removePointerListeners = useRef<(() => void) | null>(null);
 
@@ -136,6 +181,9 @@ function TerminalResizableHandle() {
         if (RESIZE_KEYS.has(event.key)) finish();
       }}
       onBlur={finish}
+      // Double-click puts the panes of this split back to even sizes.
+      onDoubleClick={onReset}
+      title="Drag to resize, double-click to make even"
     />
   );
 }

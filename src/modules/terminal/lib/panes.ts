@@ -25,6 +25,12 @@ export type PaneNode =
       id: PaneId;
       dir: SplitDir;
       children: PaneNode[];
+      /**
+       * Percent of the split each child takes, in child order, after the user
+       * resized it. Absent means even sizes. Dropped whenever a child is added
+       * or removed, since the old sizes no longer describe the panes.
+       */
+      sizes?: number[];
     };
 
 export function isLeaf(
@@ -70,6 +76,62 @@ export function setLeafCwd(
   return changed ? { ...n, children: next } : n;
 }
 
+/** `sizes` describes `count` panes: one positive percent each, about 100 in all. */
+export function validSplitSizes(
+  sizes: unknown,
+  count: number,
+): sizes is number[] {
+  if (!Array.isArray(sizes) || sizes.length !== count || count < 2)
+    return false;
+  const positive = (n: unknown) =>
+    typeof n === "number" && Number.isFinite(n) && n > 0;
+  if (!sizes.every(positive)) return false;
+  const total = sizes.reduce((a, b) => a + b, 0);
+  return Math.abs(total - 100) < 1;
+}
+
+/** Every pane within half a percent of an even share. */
+export function splitSizesAreEven(sizes: readonly number[]): boolean {
+  const even = 100 / sizes.length;
+  return sizes.every((n) => Math.abs(n - even) < 0.5);
+}
+
+/**
+ * Record a split's sizes; `undefined`, or sizes that are even anyway, go back
+ * to even. Returns the same tree when nothing changes, so a layout callback
+ * that reports what is already stored never re-renders the tabs.
+ */
+export function setSplitSizes(
+  n: PaneNode,
+  splitId: PaneId,
+  sizes: readonly number[] | undefined,
+): PaneNode {
+  if (isLeaf(n)) return n;
+  if (n.id === splitId) {
+    const next =
+      validSplitSizes(sizes, n.children.length) && !splitSizesAreEven(sizes)
+        ? sizes.map((x) => Math.round(x * 100) / 100)
+        : undefined;
+    const same =
+      next === undefined
+        ? n.sizes === undefined
+        : (n.sizes?.every((x, i) => Math.abs(x - next[i]) < 0.01) ?? false);
+    if (same) return n;
+    if (next === undefined) {
+      const { sizes: _old, ...rest } = n;
+      return rest;
+    }
+    return { ...n, sizes: next };
+  }
+  let changed = false;
+  const children = n.children.map((c) => {
+    const u = setSplitSizes(c, splitId, sizes);
+    if (u !== c) changed = true;
+    return u;
+  });
+  return changed ? { ...n, children } : n;
+}
+
 /**
  * Insert a new leaf next to `targetId` in direction `dir`.
  *
@@ -91,8 +153,9 @@ export function splitLeaf(
     );
     if (idx >= 0) {
       const newLeaf: PaneNode = { kind: "leaf", id: newLeafId, cwd: newCwd };
+      const { sizes: _old, ...split } = tree;
       return {
-        ...tree,
+        ...split,
         children: [
           ...tree.children.slice(0, idx + 1),
           newLeaf,
@@ -135,7 +198,10 @@ export function removeLeaf(
   }
   if (newChildren.length === 0) return null;
   if (newChildren.length === 1) return newChildren[0];
-  return { ...tree, children: newChildren };
+  if (newChildren.length === tree.children.length)
+    return { ...tree, children: newChildren };
+  const { sizes: _old, ...split } = tree;
+  return { ...split, children: newChildren };
 }
 
 export function nextLeafId(

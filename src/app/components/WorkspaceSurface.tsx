@@ -33,6 +33,7 @@ type Props = {
   onCwd: TerminalStackProps["onCwd"];
   onExit: TerminalStackProps["onExit"];
   onFocusLeaf: TerminalStackProps["onFocusLeaf"];
+  onSplitSizes: TerminalStackProps["onSplitSizes"];
   registerEditorHandle: EditorStackProps["registerHandle"];
   onEditorDirtyChange: EditorStackProps["onDirtyChange"];
   onEditorCloseTab: EditorStackProps["onCloseTab"];
@@ -73,6 +74,7 @@ function SurfaceLayers({
   onCwd,
   onExit,
   onFocusLeaf,
+  onSplitSizes,
   registerEditorHandle,
   onEditorDirtyChange,
   onEditorCloseTab,
@@ -119,6 +121,7 @@ function SurfaceLayers({
           onCwd={onCwd}
           onExit={onExit}
           onFocusLeaf={onFocusLeaf}
+          onSplitSizes={onSplitSizes}
         />
       </div>
       <div

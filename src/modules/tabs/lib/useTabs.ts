@@ -15,6 +15,7 @@ import {
   removeLeaf,
   type SplitDir,
   setLeafCwd as setLeafCwdInTree,
+  setSplitSizes as setSplitSizesInTree,
   siblingLeafOf,
   splitLeaf,
   swapLeafInDirection,
@@ -1425,6 +1426,24 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     [tabs, setActiveId],
   );
 
+  /** Record the sizes of a split the user resized; `undefined` makes it even. */
+  const setSplitSizes = useCallback(
+    (tabId: number, splitId: number, sizes: readonly number[] | undefined) => {
+      setTabs((curr) => {
+        let changed = false;
+        const next = curr.map((t) => {
+          if (t.id !== tabId || t.kind !== "terminal") return t;
+          const paneTree = setSplitSizesInTree(t.paneTree, splitId, sizes);
+          if (paneTree === t.paneTree) return t;
+          changed = true;
+          return { ...t, paneTree };
+        });
+        return changed ? next : curr;
+      });
+    },
+    [setTabs],
+  );
+
   /** Update a leaf's cwd; mirror to the tab's `cwd` when the leaf is active.
    * Bails out without setTabs when nothing actually changed — shell integration
    * re-emits OSC 7 on every prompt, including empty Enters, so this fires at
@@ -1763,6 +1782,7 @@ export function useTabs(initial?: Partial<TerminalTab>) {
     updateTab,
     selectByIndex,
     setLeafCwd,
+    setSplitSizes,
     focusPane,
     focusNextPaneInTab,
     swapActivePaneInDirection,
