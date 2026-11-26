@@ -11,10 +11,10 @@ per-terminal frame loop, or per-pane GPU lifecycle.
 - Restty commit: `7700b14a7643ba9240818209ef1e0aa90d83ad77`
 - Zig: `0.16.0`
 - Optimization: `ReleaseFast`, WebAssembly SIMD and scalar variants
-- SIMD artifact size: `755971` bytes
-- Scalar artifact size: `753894` bytes
-- SIMD SHA-256: `32b630675916b3122c2c187c640191e90ae848ee9f196ec5fe091681560c1f11`
-- Scalar SHA-256: `3749923e6d7c9ad8f1919f0072073843d9792dcd41d6628b42f208b1f733aa13`
+- SIMD artifact size: `756607` bytes
+- Scalar artifact size: `754534` bytes
+- SIMD SHA-256: `4350e825f6f7d8375baa7fb457e584cb2b49a9a79d1a2d28d34f283619b40426`
+- Scalar SHA-256: `eba2c865931c28053127e4d5aff69a3e712ac323a566b475cf2b253dc19f53cc`
 
 Terax-specific changes include:
 
@@ -28,6 +28,9 @@ Terax-specific changes include:
 - native tracked selections that survive streaming and reflow, clamp when
   partially pruned, and release their tracked pins deterministically;
 - bounded parser-owned semantic events for shell and product integration;
+- OSC 9;4 progress reports (ConEmu, Windows Terminal) as semantic event 13,
+  two bytes: the state (0 remove, 1 set, 2 error, 3 indeterminate, 4 pause)
+  and the percent, 255 when none was given;
 - optional parser-time command markers with 2,048 tracked pins per terminal,
   exact endpoint columns, full signed exit codes, and deterministic cleanup;
 - parser-time block invalidation for primary-screen clear and reset, retaining
@@ -198,6 +201,11 @@ zig build -Dtarget=wasm32-freestanding -Doptimize=ReleaseFast -Dwasm-simd=false
 cp zig-out/bin/terax-ghostty-vt.wasm ../ghostty-vt-scalar.wasm
 shasum -a 256 ../ghostty-vt.wasm ../ghostty-vt-scalar.wasm
 ```
+
+The same source does not build byte for byte the same on every host: built
+on Windows with Zig 0.16.0, the unchanged source gave a SIMD artifact 4 bytes
+larger in the code section than the one built before it. After a rebuild,
+run the core tests and `pnpm soak:ghostty`, not only a checksum compare.
 
 `build.zig.zon` pins both the Ghostty archive URL and Zig package hash. A
 checksum change must be reviewed together with the source revision and the

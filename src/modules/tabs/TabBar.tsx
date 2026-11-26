@@ -31,6 +31,10 @@ import {
   usePtyActivityStore,
 } from "@/modules/terminal";
 import {
+  selectTabProgress,
+  useTerminalProgressStore,
+} from "@/modules/terminal/lib/terminalProgress";
+import {
   ArrowRight01Icon,
   Cancel01Icon,
   CancelCircleIcon,
@@ -557,6 +561,7 @@ export function TabBar({
                       />
                     </span>
                   )}
+                  {t.kind === "terminal" && <TerminalTabProgress tab={t} />}
                 </TabsTrigger>
               );
 
@@ -705,6 +710,60 @@ function terminalPtyIds(tab: TerminalTab): number[] {
     if (id !== null) ptyIds.push(id);
   }
   return ptyIds;
+}
+
+const PROGRESS_NAMES = {
+  normal: "Progress",
+  error: "Failed",
+  paused: "Paused",
+  indeterminate: "Working",
+} as const;
+
+/**
+ * The OSC 9;4 progress of a terminal tab's panes, as a 2px bar along the tab's
+ * bottom edge: a share of the width, a sweeping segment when the program gives
+ * no number, red on error and amber while paused.
+ */
+function TerminalTabProgress({ tab }: { tab: TerminalTab }) {
+  const ids = leafIds(tab.paneTree);
+  const progress = useTerminalProgressStore(
+    useShallow((s) => selectTabProgress(s, ids)),
+  );
+  if (!progress) return null;
+  const color =
+    progress.state === "error"
+      ? "bg-destructive"
+      : progress.state === "paused"
+        ? "bg-amber-500"
+        : "bg-primary";
+  const name = PROGRESS_NAMES[progress.state];
+  const label =
+    progress.percent === null ? name : `${name} ${progress.percent}%`;
+  return (
+    <span
+      role="progressbar"
+      aria-label={label}
+      title={label}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={progress.percent ?? undefined}
+      className="pointer-events-none absolute inset-x-1.5 bottom-0 h-0.5 overflow-hidden rounded-full bg-foreground/10"
+    >
+      {progress.state === "indeterminate" ? (
+        <span
+          className={cn("terax-progress-sweep absolute inset-y-0 w-1/4", color)}
+        />
+      ) : (
+        <span
+          className={cn(
+            "absolute inset-y-0 left-0 transition-[width] duration-[var(--dur-base)]",
+            color,
+          )}
+          style={{ width: `${progress.percent ?? 100}%` }}
+        />
+      )}
+    </span>
+  );
 }
 
 /**

@@ -29,6 +29,39 @@ describe("GhosttySemanticEventRouter", () => {
     expect(onCommandState.mock.calls).toEqual([[false], [true], [false]]);
   });
 
+  it("routes OSC 9;4 progress and clears it when the program is done", () => {
+    const onProgress = vi.fn();
+    const router = new GhosttySemanticEventRouter({ onProgress });
+
+    router.handle({ type: "progress", state: 1, progress: 40 });
+    router.handle({ type: "progress", state: 3, progress: null });
+    router.handle({ type: "progress", state: 0, progress: null });
+    expect(onProgress.mock.calls).toEqual([
+      [{ state: "normal", percent: 40 }],
+      [{ state: "indeterminate", percent: null }],
+      [null],
+    ]);
+
+    // A program that exits mid progress: the prompt or the command's end
+    // clears it, once.
+    onProgress.mockClear();
+    router.handle({ type: "progress", state: 1, progress: 10 });
+    router.handle({ type: "end-of-command", exitCode: 1 });
+    router.handle({ type: "prompt-start" });
+    expect(onProgress.mock.calls).toEqual([
+      [{ state: "normal", percent: 10 }],
+      [null],
+    ]);
+
+    onProgress.mockClear();
+    router.handle({ type: "progress", state: 2, progress: 70 });
+    router.reset();
+    expect(onProgress.mock.calls).toEqual([
+      [{ state: "error", percent: 70 }],
+      [null],
+    ]);
+  });
+
   it("validates and decodes OSC 52 clipboard writes", () => {
     const onClipboard = vi.fn();
     const router = new GhosttySemanticEventRouter({ onClipboard });

@@ -54,6 +54,7 @@ import {
 import { getWebGpuTerminalRuntime } from "./gpu/WebGpuTerminalRuntime";
 import { WebGpuTerminalSurface } from "./gpu/WebGpuTerminalSurface";
 import { GhosttyInputController } from "./input/GhosttyInputController";
+import { useTerminalProgressStore } from "../lib/terminalProgress";
 import {
   encodeTerminalSubmission,
   enqueueTerminalInput,
@@ -556,6 +557,7 @@ export function disposeGhosttySession(leafId: number): boolean {
   void session.pty?.close();
   session.pty = null;
   sessions.delete(leafId);
+  useTerminalProgressStore.getState().set(leafId, null);
   return true;
 }
 
@@ -760,6 +762,9 @@ async function initializeSessionGeneration(
       },
       onPromptEnd: (reportsCommandStart) => {
         session.commandTracked = reportsCommandStart;
+      },
+      onProgress: (progress) => {
+        useTerminalProgressStore.getState().set(session.leafId, progress);
       },
       onCommandState: (running) => {
         session.promptIntegrated = true;

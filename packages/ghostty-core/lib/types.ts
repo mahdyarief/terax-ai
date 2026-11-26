@@ -507,6 +507,15 @@ export type GhosttyTerminalEvent =
     }
   | { readonly type: "screen-cleared" }
   | { readonly type: "synchronized-output-reset" }
+  /**
+   * OSC 9;4 progress. `state`: 0 remove, 1 set, 2 error, 3 indeterminate,
+   * 4 pause. `progress`: 0 to 100, or null when the program gave none.
+   */
+  | {
+      readonly type: "progress";
+      readonly state: number;
+      readonly progress: number | null;
+    }
   | { readonly type: "overflow"; readonly dropped: number };
 
 /**

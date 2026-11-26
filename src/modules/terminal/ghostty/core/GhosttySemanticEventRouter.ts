@@ -1,5 +1,9 @@
 import type { GhosttyTerminalEvent } from "@terax/ghostty-core/protocol";
 import { parseOsc7, parseOsc52Clipboard } from "../../lib/osc-handlers";
+import {
+  decodeTerminalProgress,
+  type TerminalProgress,
+} from "../../lib/terminalProgress";
 
 export type GhosttySemanticEventCallbacks = {
   readonly onBell?: () => void;
@@ -10,6 +14,8 @@ export type GhosttySemanticEventCallbacks = {
   readonly onCwd?: (cwd: string) => void;
   readonly onNotification?: (title: string, body: string) => void;
   readonly onOverflow?: (dropped: number) => void;
+  /** OSC 9;4 progress; null when it is removed or the prompt is back. */
+  readonly onProgress?: (progress: TerminalProgress | null) => void;
   readonly onTitle?: (title: string) => void;
 };
 
@@ -21,6 +27,7 @@ export type GhosttySemanticEventCallbacks = {
  */
 export class GhosttySemanticEventRouter {
   private inCommand = false;
+  private hasProgress = false;
 
   /** `remote`: the terminal's shell runs on a server (see `parseOsc7`). */
   constructor(
@@ -53,6 +60,8 @@ export class GhosttySemanticEventRouter {
       case "prompt-start":
         this.inCommand = false;
         this.callbacks.onCommandState?.(false);
+        // A program that exits (or crashes) mid progress leaves it set.
+        this.clearProgress();
         break;
       case "prompt-continuation":
         break;
@@ -67,7 +76,17 @@ export class GhosttySemanticEventRouter {
       case "end-of-command":
         this.inCommand = false;
         this.callbacks.onCommandState?.(false);
+        this.clearProgress();
         break;
+      case "progress": {
+        const progress = decodeTerminalProgress(
+          event.state,
+          event.progress ?? 255,
+        );
+        this.hasProgress = progress !== null;
+        this.callbacks.onProgress?.(progress);
+        break;
+      }
       case "overflow":
         this.callbacks.onOverflow?.(event.dropped);
         break;
@@ -76,5 +95,12 @@ export class GhosttySemanticEventRouter {
 
   reset(): void {
     this.inCommand = false;
+    this.clearProgress();
+  }
+
+  private clearProgress(): void {
+    if (!this.hasProgress) return;
+    this.hasProgress = false;
+    this.callbacks.onProgress?.(null);
   }
 }

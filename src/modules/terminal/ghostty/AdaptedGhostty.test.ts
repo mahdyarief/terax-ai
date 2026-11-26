@@ -105,6 +105,38 @@ describe.each([
       }
     });
 
+    it("reports OSC 9;4 progress in every state", () => {
+      const terminal = ghostty.createTerminal(16, 4);
+      try {
+        terminal.write(
+          new TextEncoder().encode(
+            "\x1b]9;4;1;42\x07\x1b]9;4;3\x07\x1b]9;4;2;80\x1b\\\x1b]9;4;4\x07\x1b]9;4;0\x07",
+          ),
+        );
+        expect(terminal.drainEvents()).toEqual([
+          { type: "progress", state: 1, progress: 42 },
+          { type: "progress", state: 3, progress: null },
+          { type: "progress", state: 2, progress: 80 },
+          { type: "progress", state: 4, progress: null },
+          { type: "progress", state: 0, progress: null },
+        ]);
+      } finally {
+        terminal.dispose();
+      }
+    });
+
+    it("still reports a plain OSC 9 as a notification", () => {
+      const terminal = ghostty.createTerminal(16, 4);
+      try {
+        terminal.write(new TextEncoder().encode("\x1b]9;build done\x07"));
+        expect(terminal.drainEvents()).toEqual([
+          { type: "notification", title: "", body: "build done" },
+        ]);
+      } finally {
+        terminal.dispose();
+      }
+    });
+
     it("tracks exact command boundaries through batching, reflow and reset", () => {
       const terminal = ghostty.createTerminal(16, 4);
       try {

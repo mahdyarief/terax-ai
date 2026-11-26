@@ -27,10 +27,10 @@ export const ADAPTED_GHOSTTY_COMMIT =
 export const ADAPTED_RESTTY_COMMIT =
   "7700b14a7643ba9240818209ef1e0aa90d83ad77";
 export const ADAPTED_GHOSTTY_WASM_SHA256 =
-  "32b630675916b3122c2c187c640191e90ae848ee9f196ec5fe091681560c1f11";
+  "4350e825f6f7d8375baa7fb457e584cb2b49a9a79d1a2d28d34f283619b40426";
 
 export const ADAPTED_GHOSTTY_SCALAR_WASM_SHA256 =
-  "3749923e6d7c9ad8f1919f0072073843d9792dcd41d6628b42f208b1f733aa13";
+  "eba2c865931c28053127e4d5aff69a3e712ac323a566b475cf2b253dc19f53cc";
 
 let wasmSimdAvailable: boolean | undefined;
 
@@ -1848,6 +1848,13 @@ function decodeTerminalEvent(
       return { type: "screen-cleared" };
     case 12:
       return { type: "synchronized-output-reset" };
+    case 13:
+      if (payload.byteLength < 2) return null;
+      return {
+        type: "progress",
+        state: payload[0],
+        progress: payload[1] === 255 ? null : payload[1],
+      };
     default:
       return null;
   }

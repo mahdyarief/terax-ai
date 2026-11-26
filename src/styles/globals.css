@@ -638,6 +638,20 @@ html *::-webkit-scrollbar {
   animation: terax-blink 1.2s steps(1, end) infinite;
 }
 
+/* A tab's indeterminate OSC 9;4 progress: a segment that sweeps across the
+ * tab's bottom edge, in 24 steps a cycle rather than a repaint every frame. */
+@keyframes terax-progress-sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(300%);
+  }
+}
+.terax-progress-sweep {
+  animation: terax-progress-sweep 1.6s steps(24, end) infinite;
+}
+
 /* Draws the eye to a pending prompt for a few beats, then settles to a static
  * dot: a waiting approval must not animate for as long as it sits there. */
 @keyframes terax-attention {
@@ -676,6 +690,10 @@ html[data-window-inactive] *::after {
   .terax-blink,
   .terax-attention-pulse {
     animation: none;
+  }
+  .terax-progress-sweep {
+    animation: none;
+    transform: translateX(100%);
   }
 }
 

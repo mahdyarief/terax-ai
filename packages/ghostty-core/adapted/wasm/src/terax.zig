@@ -33,6 +33,7 @@ const TerminalEvent = enum(u8) {
     end_of_command = 10,
     screen_cleared = 11,
     synchronized_output_reset = 12,
+    progress = 13,
 };
 
 const CursorInfo = extern struct {
@@ -889,6 +890,13 @@ const StreamHandler = struct {
                 var title_len: [4]u8 = undefined;
                 std.mem.writeInt(u32, &title_len, @intCast(value.title.len), .little);
                 try self.emitEvent(.notification, &.{ &title_len, value.title, value.body });
+            },
+            .progress_report => {
+                // OSC 9;4 (ConEmu, Windows Terminal): state 0 remove, 1 set,
+                // 2 error, 3 indeterminate, 4 pause; 255 means no percent.
+                self.readonly.vt(action, value);
+                const payload = [_]u8{ @intCast(@intFromEnum(value.state)), value.progress orelse 255 };
+                try self.emitEvent(.progress, &.{&payload});
             },
             .semantic_prompt => {
                 self.readonly.vt(action, value);
