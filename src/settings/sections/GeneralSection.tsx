@@ -24,6 +24,7 @@ import {
   setConfirmCloseRunningTerminal,
   setDefaultWorkspaceEnv,
   setExplorerGitDecorations,
+  setStatusBarGitBranch,
   setRestoreWindowState,
   setShowHidden,
   setTerminalCursorBlink,
@@ -108,6 +109,7 @@ export function GeneralSection() {
   const explorerGitDecorations = usePreferencesStore(
     (s) => s.explorerGitDecorations,
   );
+  const statusBarGitBranch = usePreferencesStore((s) => s.statusBarGitBranch);
   const terminalRenderer = usePreferencesStore((s) => s.terminalRenderer);
   const terminalScreenReader = usePreferencesStore(
     (s) => s.terminalScreenReader,
@@ -257,6 +259,15 @@ export function GeneralSection() {
           <Switch
             checked={explorerGitDecorations}
             onCheckedChange={(v) => void setExplorerGitDecorations(v)}
+          />
+        </SettingRow>
+        <SettingRow
+          title="Git branch in the status bar"
+          description="Show the repository's branch, commits to push and pull, and changed files. Click it to switch or create a branch. Keeps git status up to date while it is shown."
+        >
+          <Switch
+            checked={statusBarGitBranch}
+            onCheckedChange={(v) => void setStatusBarGitBranch(v)}
           />
         </SettingRow>
       </div>

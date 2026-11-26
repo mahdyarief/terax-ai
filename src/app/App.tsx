@@ -1020,6 +1020,7 @@ export default function App() {
   const explorerGitDecorations = usePreferencesStore(
     (s) => s.explorerGitDecorations,
   );
+  const statusBarGitBranch = usePreferencesStore((s) => s.statusBarGitBranch);
   const { sourceControl, toggleSourceControl, openGitGraphFromContext } =
     useSourceControlContext({
       activeTab,
@@ -1032,6 +1033,7 @@ export default function App() {
       sidebarView,
       sidebarCollapsed,
       explorerGitDecorations,
+      statusBarGitBranch,
       repositoryTarget: sourceControlRepositoryTarget,
       cycleSidebarView,
       openCommitHistoryTab,
@@ -2725,6 +2727,14 @@ export default function App() {
                 activeTab?.kind === "terminal" && activeTab.private === true
               }
               onOpenProblems={() => openSidebarView("problems")}
+              git={
+                statusBarGitBranch
+                  ? {
+                      summary: sourceControl,
+                      onOpenSourceControl: openSourceControl,
+                    }
+                  : undefined
+              }
             />
           )}
 

@@ -166,6 +166,8 @@ export type Preferences = {
   editorWordWrapColumn: number;
   showHidden: boolean;
   explorerGitDecorations: boolean;
+  /** The status bar shows the repository's branch, sync counts and changes. */
+  statusBarGitBranch: boolean;
   terminalRenderer: TerminalRendererSetting;
   terminalScreenReader: boolean;
   terminalCursorBlink: boolean;
@@ -264,6 +266,7 @@ const KEY_EDITOR_WORD_WRAP_COLUMN = "editorWordWrapColumn";
 const KEY_SHOW_HIDDEN = "showHidden";
 const LEGACY_KEY_SHOW_HIDDEN_DIRS = "showHiddenDirectories";
 const KEY_EXPLORER_GIT_DECORATIONS = "explorerGitDecorations";
+const KEY_STATUS_BAR_GIT_BRANCH = "statusBarGitBranch";
 const KEY_TERMINAL_RENDERER = "terminalRenderer";
 const KEY_TERMINAL_SCREEN_READER = "terminalScreenReader";
 const KEY_TERMINAL_CURSOR_BLINK = "terminalCursorBlink";
@@ -361,6 +364,7 @@ export const DEFAULT_PREFERENCES: Preferences = {
   editorWordWrapColumn: EDITOR_WORD_WRAP_COLUMN_DEFAULT,
   showHidden: false,
   explorerGitDecorations: true,
+  statusBarGitBranch: true,
   terminalRenderer: "auto",
   terminalScreenReader: false,
   terminalCursorBlink: false,
@@ -532,6 +536,9 @@ export async function loadPreferences(): Promise<Preferences> {
     explorerGitDecorations:
       get<boolean>(KEY_EXPLORER_GIT_DECORATIONS) ??
       DEFAULT_PREFERENCES.explorerGitDecorations,
+    statusBarGitBranch:
+      get<boolean>(KEY_STATUS_BAR_GIT_BRANCH) ??
+      DEFAULT_PREFERENCES.statusBarGitBranch,
     terminalRenderer: coerceTerminalRenderer(get<string>(KEY_TERMINAL_RENDERER)),
     terminalScreenReader: get<boolean>(KEY_TERMINAL_SCREEN_READER) === true,
     terminalCursorBlink:
@@ -831,6 +838,10 @@ export async function setExplorerGitDecorations(value: boolean): Promise<void> {
   await writePref(KEY_EXPLORER_GIT_DECORATIONS, value);
 }
 
+export async function setStatusBarGitBranch(value: boolean): Promise<void> {
+  await writePref(KEY_STATUS_BAR_GIT_BRANCH, value);
+}
+
 export async function setTerminalRenderer(
   value: TerminalRendererSetting,
 ): Promise<void> {
@@ -1047,6 +1058,7 @@ export async function onPreferencesChange(
     [KEY_EDITOR_WORD_WRAP_COLUMN]: "editorWordWrapColumn",
     [KEY_SHOW_HIDDEN]: "showHidden",
     [KEY_EXPLORER_GIT_DECORATIONS]: "explorerGitDecorations",
+    [KEY_STATUS_BAR_GIT_BRANCH]: "statusBarGitBranch",
     [KEY_TERMINAL_RENDERER]: "terminalRenderer",
     [KEY_TERMINAL_SCREEN_READER]: "terminalScreenReader",
     [KEY_TERMINAL_CURSOR_BLINK]: "terminalCursorBlink",

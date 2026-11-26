@@ -24,6 +24,8 @@ type Params = {
   sidebarCollapsed: boolean;
   /** The `explorerGitDecorations` preference. */
   explorerGitDecorations: boolean;
+  /** The `statusBarGitBranch` preference. */
+  statusBarGitBranch: boolean;
   repositoryTarget: SourceControlRepositoryTarget;
   cycleSidebarView: (view: SidebarViewId) => void;
   openCommitHistoryTab: (args: {
@@ -48,6 +50,7 @@ export function useSourceControlContext({
   sidebarView,
   sidebarCollapsed,
   explorerGitDecorations,
+  statusBarGitBranch,
   repositoryTarget,
   cycleSidebarView,
   openCommitHistoryTab,
@@ -95,6 +98,7 @@ export function useSourceControlContext({
       sidebarView,
       activeTabKind: activeTab?.kind,
       explorerGitDecorations,
+      statusBarGitBranch,
     }),
   );
   const sourceControl = useSourceControl(sourceControlPath, true, { live });

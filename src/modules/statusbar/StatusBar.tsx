@@ -10,12 +10,14 @@ import {
   AiStatusBarControls,
 } from "@/modules/ai/components/AiStatusBarControls";
 import { LspStatusPill } from "@/modules/lsp";
+import type { SourceControlSummary } from "@/modules/source-control/useSourceControl";
 import { RemoteStatusItems } from "@/modules/remote";
 import type { WorkspaceEnv } from "@/modules/workspace";
 import { IncognitoIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CwdBreadcrumb } from "./CwdBreadcrumb";
 import { DiagnosticsBadge } from "./DiagnosticsBadge";
+import { GitBranchPill } from "./GitBranchPill";
 import { WorkspaceEnvSelector } from "./WorkspaceEnvSelector";
 
 type Props = {
@@ -32,6 +34,11 @@ type Props = {
   privateActive: boolean;
   /** Opens the sidebar Problems panel. */
   onOpenProblems?: () => void;
+  /** The repository's branch; absent when Settings turns it off. */
+  git?: {
+    summary: SourceControlSummary;
+    onOpenSourceControl: () => void;
+  };
 };
 
 export function StatusBar({
@@ -45,6 +52,7 @@ export function StatusBar({
   hasComposer,
   privateActive,
   onOpenProblems,
+  git,
 }: Props) {
   const panelOpen = useChatStore((s) => s.panelOpen);
 
@@ -54,6 +62,12 @@ export function StatusBar({
         <WorkspaceEnvSelector onSelect={onWorkspaceChange} />
         <RemoteStatusItems />
         <CwdBreadcrumb cwd={cwd} filePath={filePath} home={home} onCd={onCd} />
+        {git ? (
+          <GitBranchPill
+            summary={git.summary}
+            onOpenSourceControl={git.onOpenSourceControl}
+          />
+        ) : null}
         <LspStatusPill filePath={filePath ?? null} />
         <DiagnosticsBadge
           filePath={filePath ?? null}

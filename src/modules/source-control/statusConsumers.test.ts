@@ -7,6 +7,7 @@ const base = {
   sidebarView: "explorer" as SidebarViewId,
   activeTabKind: "terminal" as string | undefined,
   explorerGitDecorations: false,
+  statusBarGitBranch: false,
 };
 const live = (over: Partial<typeof base>) =>
   isStatusLive(statusConsumers({ ...base, ...over }));
@@ -52,7 +53,22 @@ describe("statusConsumers", () => {
     // Explorer open, decorations off, plain terminal tab: only the badge is
     // visible, and the badge refreshes lazily instead of on every focus.
     expect(statusConsumers({ ...base, explorerGitDecorations: false })).toEqual(
-      { panel: false, gitTab: false, explorerDecorations: false },
+      {
+        panel: false,
+        gitTab: false,
+        explorerDecorations: false,
+        statusBar: false,
+      },
+    );
+  });
+
+  it("keeps the status live while the status bar shows the branch", () => {
+    expect(live({ statusBarGitBranch: true })).toBe(true);
+    expect(live({ statusBarGitBranch: true, sidebarCollapsed: true })).toBe(
+      true,
+    );
+    expect(live({ statusBarGitBranch: false, sidebarCollapsed: true })).toBe(
+      false,
     );
   });
 });
