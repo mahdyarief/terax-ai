@@ -7,14 +7,14 @@ body:
       value: |
         Thanks for taking the time to report a bug. Please fill in the fields below — it makes triage much faster.
 
-        For **security issues**, do NOT open an issue. See [SECURITY.md](https://github.com/crynta/Terax-AI/blob/main/SECURITY.md).
+        This is the tracker for the **dy** build of Terax (versions ending in `-dy`). For **security issues**, do NOT open an issue: [report them privately](https://github.com/mahdyarief/terax-ai/security/advisories/new) (see SECURITY.md).
 
   - type: input
     id: version
     attributes:
       label: Terax version
       description: From Settings → About, or the title bar.
-      placeholder: "0.5.9"
+      placeholder: "0.9.6-dy"
     validations:
       required: true
 
@@ -27,6 +27,19 @@ body:
         - macOS (Intel)
         - Linux
         - Windows
+    validations:
+      required: true
+
+  - type: dropdown
+    id: workspace
+    attributes:
+      label: Where does it happen?
+      description: The workspace of the space or tab, as the status bar shows it.
+      options:
+        - This machine (local)
+        - WSL
+        - An SSH server
+        - Not sure
     validations:
       required: true
 
@@ -72,6 +85,7 @@ body:
       description: |
         If applicable, paste relevant logs (devtools console, terminal output) or attach screenshots.
         On macOS / Linux: launch from a terminal to see stderr.
+        For an SSH server: the SSH menu in the status bar → the host → Show log → Copy log. Remove host names or paths you'd rather not share.
 
   - type: checkboxes
     id: checks
@@ -80,5 +94,5 @@ body:
       options:
         - label: I searched existing issues and didn't find a duplicate
           required: true
-        - label: I am running the latest version (or this happens on `main`)
+        - label: I am running the latest dy release (or this happens on `main`)
           required: false

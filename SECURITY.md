@@ -1,5 +1,11 @@
 # Security
 
+> **The dy build** (`mahdyarief/terax-ai`, versions ending in `-dy`): report
+> security problems privately through
+> [GitHub's vulnerability reporting](https://github.com/mahdyarief/terax-ai/security/advisories/new),
+> not in an issue. If the problem is also in upstream Terax, report it to
+> upstream as described below as well. The rest of this page is upstream's.
+
 Terax runs shells, reads/writes files, and talks to AI providers, so security bugs matter. If you find one, please tell us before posting it publicly.
 
 ## Reporting
