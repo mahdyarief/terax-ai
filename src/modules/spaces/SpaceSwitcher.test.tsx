@@ -179,3 +179,8 @@ it("names a server's space's host where the tab strip starts", () => {
   }
   expect(renderSwitcher()).not.toContain("data-space-server-host");
 });
+
+it("renders search input in spaces switcher popover", () => {
+  const html = renderSwitcher();
+  expect(html).toContain('placeholder="Search spaces…"');
+});

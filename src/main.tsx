@@ -56,9 +56,10 @@ const showWindow = () => {
     .show()
     .catch((e) => console.error("window.show failed:", e));
 };
+showWindow();
 setTimeout(showWindow, 50);
-// Safety net: if the first show somehow fails to take effect, force again.
 setTimeout(showWindow, 500);
+setTimeout(showWindow, 1500);
 
 if (terminalDiagnosticsEnabled()) {
   void import("@/modules/terminal/lib/terminalDiagnostics").then(

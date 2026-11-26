@@ -309,9 +309,22 @@ pub fn run() {
                         .set_window_ready(webview.label(), false);
                     state.control_frontend_ready(webview.label(), false);
                 }
+            } else if matches!(payload.event(), tauri::webview::PageLoadEvent::Finished) {
+                if webview.label() == "main" {
+                    let _ = webview.show();
+                    let _ = webview.set_focus();
+                }
             }
         })
         .setup(move |_app| {
+            if let Some(main) = _app.get_webview_window("main") {
+                let main_clone = main.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+                    let _ = main_clone.show();
+                    let _ = main_clone.set_focus();
+                });
+            }
             #[cfg(feature = "bench")]
             modules::bench::guard(_app.handle())?;
             #[cfg(target_os = "macos")]
