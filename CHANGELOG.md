@@ -8,6 +8,28 @@ Installers are on the
 [Releases page](https://github.com/mahdyarief/terax-ai/releases). They are not
 code-signed; see the release notes for how to open them.
 
+## Unreleased
+
+### From issues
+
+- Terminal tabs show a program's OSC 9;4 progress (winget, PowerShell 7.5
+  and others) as a thin bar along the tab: the share done, a sweeping
+  segment when there is no number, red on error and amber while paused
+  (#5).
+- The status bar shows the repository's branch, `*` for changes and `↑`/`↓`
+  for commits to push and pull. Clicking it switches to another branch or
+  creates one. Settings > General turns it off (#9).
+- Split panes keep the sizes they were dragged to when a space is restored,
+  and a double-click on the line between them makes them even (#8).
+- Shell history (Ctrl+P / Ctrl+N) is a shortcut you can move, so Go to file
+  can take Ctrl+P. Settings > Shortcuts notes a key two shortcuts share, or
+  a recorded Ctrl+letter that terminals then may not receive (#7).
+
+### From pull requests
+
+- The spaces switcher has a search box, and a preview the site refuses to
+  frame has an "Open in browser" button (#4 by rayss868).
+
 ## 0.9.6-dy — 2026-11-24
 
 ### From upstream pull requests
