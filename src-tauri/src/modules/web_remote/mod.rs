@@ -69,6 +69,63 @@ impl WebRemoteState {
     }
 }
 
+/// What `--remote-serve` asked for. Unknown flags keep their defaults.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ServeOptions {
+    pub enabled: bool,
+    pub bind: RemoteBind,
+    pub port: u16,
+}
+
+impl Default for ServeOptions {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            bind: RemoteBind::Loopback,
+            port: DEFAULT_PORT,
+        }
+    }
+}
+
+fn bind_from(value: &str) -> Option<RemoteBind> {
+    match value {
+        "loopback" | "this-computer" => Some(RemoteBind::Loopback),
+        "tailscale" => Some(RemoteBind::Tailscale),
+        "all" | "lan" => Some(RemoteBind::All),
+        _ => None,
+    }
+}
+
+/// `--remote-serve [--bind loopback|tailscale|all] [--port N]`, also accepting
+/// the `--flag=value` spelling.
+pub fn parse_serve_args(args: impl IntoIterator<Item = String>) -> ServeOptions {
+    let mut options = ServeOptions::default();
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        if arg == "--remote-serve" {
+            options.enabled = true;
+        } else if arg == "--bind" {
+            if let Some(bind) = args.next().as_deref().and_then(bind_from) {
+                options.bind = bind;
+            }
+        } else if let Some(value) = arg.strip_prefix("--bind=") {
+            if let Some(bind) = bind_from(value) {
+                options.bind = bind;
+            }
+        } else if arg == "--port" {
+            if let Some(port) = args.next().and_then(|value| value.parse().ok()) {
+                options.port = port;
+            }
+        } else if let Some(port) = arg
+            .strip_prefix("--port=")
+            .and_then(|value| value.parse().ok())
+        {
+            options.port = port;
+        }
+    }
+    options
+}
+
 fn emit_status(app: &tauri::AppHandle, info: &RemoteAccessInfo) {
     let _ = app.emit("terax:remote-access", info);
 }
@@ -99,11 +156,30 @@ pub async fn remote_access_start(
     allow_plain_lan: Option<bool>,
     https: Option<bool>,
 ) -> Result<RemoteAccessInfo, String> {
-    let port = port.unwrap_or(DEFAULT_PORT);
-    let allow_plain_lan = allow_plain_lan.unwrap_or(false);
+    start_listener(
+        &app,
+        &state,
+        bind,
+        port.unwrap_or(DEFAULT_PORT),
+        allow_plain_lan.unwrap_or(false),
+        https.unwrap_or(false),
+    )
+    .await
+}
+
+/// Starts (or restarts) the listener. Shared by the Settings command and the
+/// `--remote-serve` flag, which has no window in front of it.
+pub async fn start_listener(
+    app: &tauri::AppHandle,
+    state: &WebRemoteState,
+    bind: RemoteBind,
+    port: u16,
+    allow_plain_lan: bool,
+    https: bool,
+) -> Result<RemoteAccessInfo, String> {
     // `tailscale serve` terminates TLS on 443 and proxies to the loopback
     // listener, so HTTPS only makes sense where a tailnet address exists.
-    let https = https.unwrap_or(false) && bind == RemoteBind::Tailscale;
+    let https = https && bind == RemoteBind::Tailscale;
     if let Some(running) = state.running.lock().unwrap().as_ref() {
         if running.bind == bind
             && running.port == port
@@ -155,7 +231,7 @@ pub async fn remote_access_start(
     tauri::async_runtime::spawn(server::accept_loop(bound.listener, deps, stopped));
     *state.running.lock().unwrap() = Some(running);
     log::info!("remote access listening on port {}", info.port.unwrap_or(0));
-    emit_status(&app, &info);
+    emit_status(app, &info);
     Ok(info)
 }
 
@@ -245,5 +321,47 @@ pub fn forget_window(app: &tauri::AppHandle, label: &str) {
     if let Some(state) = app.try_state::<WebRemoteState>() {
         state.tabs.remove_window(label);
         state.tabs.note_pty_change();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|arg| arg.to_string()).collect()
+    }
+
+    #[test]
+    fn remote_serve_defaults_to_loopback_on_the_usual_port() {
+        let options = parse_serve_args(args(&["--remote-serve"]));
+        assert!(options.enabled);
+        assert_eq!(options.bind, RemoteBind::Loopback);
+        assert_eq!(options.port, DEFAULT_PORT);
+    }
+
+    #[test]
+    fn the_bind_and_port_follow_the_flags() {
+        let options = parse_serve_args(args(&[
+            "--remote-serve",
+            "--bind",
+            "tailscale",
+            "--port",
+            "7681",
+        ]));
+        assert_eq!(options.bind, RemoteBind::Tailscale);
+        assert_eq!(options.port, 7681);
+
+        let joined = parse_serve_args(args(&["--remote-serve", "--bind=all", "--port=9000"]));
+        assert_eq!(joined.bind, RemoteBind::All);
+        assert_eq!(joined.port, 9000);
+    }
+
+    #[test]
+    fn a_missing_or_unknown_value_keeps_the_default() {
+        let options = parse_serve_args(args(&["--bind", "carrier-pigeon", "--port", "many"]));
+        assert!(!options.enabled);
+        assert_eq!(options.bind, RemoteBind::Loopback);
+        assert_eq!(options.port, DEFAULT_PORT);
     }
 }

@@ -8,9 +8,9 @@ use modules::{
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 #[cfg(target_os = "macos")]
 use tauri::PhysicalPosition;
+use tauri::{Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_window_state::StateFlags;
 
 /// Drained on first read so HMR / re-mounts can't replay the launch dir.
@@ -93,9 +93,7 @@ fn space_window_label(space_id: &str) -> String {
 }
 
 fn space_id_from_label(label: &str) -> Option<String> {
-    label
-        .strip_prefix(SPACE_WINDOW_PREFIX)
-        .map(str::to_string)
+    label.strip_prefix(SPACE_WINDOW_PREFIX).map(str::to_string)
 }
 
 fn can_open_space_window(label: &str) -> bool {
@@ -256,6 +254,7 @@ pub fn run() {
     modules::runtime::install();
 
     let launch = parse_launch_target();
+    let serve = modules::web_remote::parse_serve_args(std::env::args().skip(1));
     let cli_dir = launch.dir.clone();
     workspace::init_launch_cwd(cli_dir.as_deref());
     let control_state = control::ControlState::default();
@@ -294,7 +293,9 @@ pub fn run() {
         .register_asynchronous_uri_scheme_protocol("terax-doc", fs::preview::serve)
         .on_page_load(|webview, payload| {
             if matches!(payload.event(), tauri::webview::PageLoadEvent::Started) {
-                if let Some(grants) = webview.try_state::<fs::assets::AssetGrants>() { grants.revoke_owner(webview.label()); }
+                if let Some(grants) = webview.try_state::<fs::assets::AssetGrants>() {
+                    grants.revoke_owner(webview.label());
+                }
                 if let Some(state) = webview.try_state::<net::AiStreamState>() {
                     state.cancel_window(webview.window().label());
                 }
@@ -317,9 +318,29 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             modules::window_presentation::macos::install(_app.handle());
             if let Some(remote) = _app.try_state::<modules::web_remote::WebRemoteState>() {
-                remote.attach_device_store(modules::web_remote::devices::store_path(
-                    _app.handle(),
-                ));
+                remote.attach_device_store(modules::web_remote::devices::store_path(_app.handle()));
+            }
+            if serve.enabled {
+                // Nobody is at this machine: the browser is the only window.
+                if let Some(main) = _app.get_webview_window("main") {
+                    let _ = main.hide();
+                }
+                let handle = _app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let state = handle.state::<modules::web_remote::WebRemoteState>();
+                    match modules::web_remote::start_listener(
+                        &handle, &state, serve.bind, serve.port, false, false,
+                    )
+                    .await
+                    {
+                        Ok(info) => log::info!(
+                            "remote serve listening on {} for {}",
+                            info.port.unwrap_or(0),
+                            info.urls.first().cloned().unwrap_or_default()
+                        ),
+                        Err(error) => log::error!("remote serve could not start: {error}"),
+                    }
+                });
             }
             if let Err(error) = control::start(_app.handle().clone(), control_for_setup.clone()) {
                 log::warn!("could not start Terax control server: {error}");
@@ -570,7 +591,9 @@ pub fn run() {
                         }
                     }
                     tauri::WindowEvent::Destroyed => {
-                        if let Some(grants) = app.try_state::<fs::assets::AssetGrants>() { grants.revoke_owner(&label); }
+                        if let Some(grants) = app.try_state::<fs::assets::AssetGrants>() {
+                            grants.revoke_owner(&label);
+                        }
                         if let Some(state) = app.try_state::<net::AiStreamState>() {
                             state.cancel_window(&label);
                         }
