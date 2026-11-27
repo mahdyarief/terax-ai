@@ -513,6 +513,7 @@ pub fn run() {
             open_space_window,
             focus_space_window,
             agent::agent_enable_hooks,
+            modules::agent_command::agent_command_available,
             agent::agent_disable_hooks,
             agent::agent_hooks_plan,
             agent::agent_hooks_apply,

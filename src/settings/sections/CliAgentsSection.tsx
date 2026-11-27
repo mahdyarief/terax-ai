@@ -17,6 +17,7 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { AgentIcon } from "@/modules/agents/lib/agentIcon";
+import { useAgentCommandFound } from "@/modules/agents/lib/commandAvailability";
 import { validateAgentLaunchCommand } from "@/modules/agents/lib/launcher";
 import {
   AGENT_ICON_KEYS,
@@ -39,6 +40,11 @@ import {
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { setAgentSettings } from "@/modules/settings/store";
 import {
+  LOCAL_WORKSPACE,
+  parseWorkspaceScopeKey,
+  workspaceEnvLabel,
+} from "@/modules/workspace/env";
+import {
   Add01Icon,
   ArrowDown01Icon,
   ArrowUp01Icon,
@@ -47,6 +53,7 @@ import {
   Refresh01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { SectionHeader } from "../components/SectionHeader";
@@ -93,6 +100,7 @@ export function CliAgentsSection() {
                 enabled: true,
                 integration: null,
                 icon: "agent",
+                workspaceCommands: {},
                 builtin: false,
               })
             }
@@ -144,6 +152,7 @@ export function CliAgentsSection() {
                 enabled: true,
                 integration: agent.integration,
                 icon: agent.icon,
+                workspaceCommands: agent.workspaceCommands,
               }),
             );
           } else {
@@ -151,6 +160,7 @@ export function CliAgentsSection() {
               updateAgent(settings, agent.id, {
                 label: agent.label,
                 command: agent.command,
+                workspaceCommands: agent.workspaceCommands,
                 ...(agent.builtin
                   ? {}
                   : { integration: agent.integration, icon: agent.icon }),
@@ -221,6 +231,8 @@ function AgentRow({
   const integration = AGENT_INTEGRATIONS.find(
     (i) => i.id === agent.integration,
   );
+  const found = useAgentCommandFound(agent.command, LOCAL_WORKSPACE);
+  const workspaces = Object.keys(agent.workspaceCommands);
   return (
     <li
       className={cn(
@@ -248,9 +260,26 @@ function AgentRow({
             </span>
           ) : null}
         </span>
-        <code className="truncate font-mono text-[10.5px] text-muted-foreground">
-          {agent.command}
-        </code>
+        <span className="flex min-w-0 items-center gap-1.5 text-[10.5px] text-muted-foreground">
+          <code className="truncate font-mono">{agent.command}</code>
+          {found === false ? (
+            <span
+              className="shrink-0 text-amber-600 dark:text-amber-400"
+              title="Not on PATH on this computer. An alias, or a command used only in WSL or over SSH, still works."
+            >
+              not found
+            </span>
+          ) : null}
+          {workspaces.length > 0 ? (
+            <span
+              className="shrink-0"
+              title={workspaces.map((key) => workspaceName(key)).join(", ")}
+            >
+              +{workspaces.length}{" "}
+              {workspaces.length === 1 ? "workspace" : "workspaces"}
+            </span>
+          ) : null}
+        </span>
       </div>
       <IconButton
         label="Move up"
@@ -313,7 +342,11 @@ function AgentDialog({
 
   const label = validateAgentLabel(draft.label);
   const command = validateAgentLaunchCommand(draft.command);
-  const canSave = label.ok && command.ok;
+  const workspaceCommands = Object.entries(draft.workspaceCommands).map(
+    ([key, value]) => [key, validateAgentLaunchCommand(value)] as const,
+  );
+  const canSave =
+    label.ok && command.ok && workspaceCommands.every(([, c]) => c.ok);
   // A built-in agent keeps its own icon and hooks.
   const fixed = draft.builtin;
 
@@ -331,7 +364,16 @@ function AgentDialog({
             e.preventDefault();
             if (canSave)
               onSave(
-                { ...draft, label: label.label, command: command.command },
+                {
+                  ...draft,
+                  label: label.label,
+                  command: command.command,
+                  workspaceCommands: Object.fromEntries(
+                    workspaceCommands.flatMap(([key, c]) =>
+                      c.ok ? [[key, c.command]] : [],
+                    ),
+                  ),
+                },
                 isNew,
               );
           }}
@@ -397,6 +439,11 @@ function AgentDialog({
                 : "Typed into a new terminal; aliases and flags work."}
             </span>
           </div>
+          <WorkspaceCommandsField
+            value={draft.workspaceCommands}
+            fallback={draft.command}
+            onChange={(next) => setDraft({ ...draft, workspaceCommands: next })}
+          />
           {!fixed ? (
             <div className="flex flex-col gap-1">
               <FieldLabel>Integration</FieldLabel>
@@ -441,6 +488,118 @@ function AgentDialog({
         </form>
       </DialogContent>
     </Dialog>
+  );
+}
+
+const workspaceName = (key: string) =>
+  workspaceEnvLabel(parseWorkspaceScopeKey(key), "This computer");
+
+/** Workspaces the user can pick: this computer, WSL distros, SSH hosts. */
+function useWorkspaceKeys(): string[] {
+  const [keys, setKeys] = useState<string[]>(["local"]);
+  useEffect(() => {
+    let live = true;
+    void Promise.all([
+      invoke<{ name: string }[]>("wsl_list_distros")
+        .then((d) => d.map((x) => `wsl:${x.name}`))
+        .catch(() => [] as string[]),
+      invoke<string[]>("remote_ssh_hosts")
+        .then((h) => h.map((x) => `ssh:${x}`))
+        .catch(() => [] as string[]),
+    ]).then(([wsl, ssh]) => {
+      if (live) setKeys(["local", ...wsl, ...ssh]);
+    });
+    return () => {
+      live = false;
+    };
+  }, []);
+  return keys;
+}
+
+function WorkspaceCommandsField({
+  value,
+  fallback,
+  onChange,
+}: {
+  value: Record<string, string>;
+  fallback: string;
+  onChange: (next: Record<string, string>) => void;
+}) {
+  const known = useWorkspaceKeys();
+  const free = known.filter((key) => !(key in value));
+  const [pick, setPick] = useState("");
+  const chosen = free.includes(pick) ? pick : (free[0] ?? "");
+  const entries = Object.entries(value);
+
+  return (
+    <div className="flex flex-col gap-1">
+      <FieldLabel>Per-workspace commands</FieldLabel>
+      {entries.map(([key, command]) => {
+        const check = validateAgentLaunchCommand(command);
+        return (
+          <div key={key} className="flex items-center gap-1.5">
+            <span
+              className="w-32 shrink-0 truncate text-[11px] text-muted-foreground"
+              title={workspaceName(key)}
+            >
+              {workspaceName(key)}
+            </span>
+            <Input
+              value={command}
+              onChange={(e) => onChange({ ...value, [key]: e.target.value })}
+              spellCheck={false}
+              autoCapitalize="off"
+              autoCorrect="off"
+              aria-invalid={!check.ok}
+              aria-label={`Command in ${workspaceName(key)}`}
+              className="h-7 font-mono text-[11.5px]"
+            />
+            <IconButton
+              label={`Use the start command in ${workspaceName(key)}`}
+              icon={Delete02Icon}
+              danger
+              onClick={() => {
+                const next = { ...value };
+                delete next[key];
+                onChange(next);
+              }}
+            />
+          </div>
+        );
+      })}
+      {free.length > 0 ? (
+        <div className="flex items-center gap-1.5">
+          <Select value={chosen} onValueChange={setPick}>
+            <SelectTrigger className="h-7 w-48 text-[11.5px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {free.map((key) => (
+                <SelectItem key={key} value={key}>
+                  {workspaceName(key)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-7 gap-1 px-2 text-[11px]"
+            disabled={!chosen}
+            onClick={() => onChange({ ...value, [chosen]: fallback })}
+          >
+            <HugeiconsIcon icon={Add01Icon} size={11} strokeWidth={1.75} />
+            Add
+          </Button>
+        </div>
+      ) : null}
+      <span className="text-[10.5px] text-muted-foreground">
+        A different command where the CLI is installed elsewhere, such as a
+        server where it lives in <code className="font-mono">~/.local/bin</code>
+        . Other workspaces use the start command.
+      </span>
+    </div>
   );
 }
 

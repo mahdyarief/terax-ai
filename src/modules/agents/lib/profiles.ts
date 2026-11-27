@@ -37,11 +37,20 @@ export type AgentProfile = {
   enabled: boolean;
   integration: AgentIntegration | null;
   icon: AgentIconKey;
+  /**
+   * Commands for particular workspaces, by workspace scope key (`local`,
+   * `wsl:<distro>`, `ssh:<host>`): a server where the CLI sits elsewhere, or
+   * a distro that needs other flags. Any other workspace uses `command`.
+   */
+  workspaceCommands: Record<string, string>;
   /** Shipped with Terax: it can be reset, but not deleted. */
   builtin: boolean;
 };
 
-type BuiltinAgent = Omit<AgentProfile, "enabled" | "builtin">;
+type BuiltinAgent = Omit<
+  AgentProfile,
+  "enabled" | "builtin" | "workspaceCommands"
+>;
 
 export const BUILTIN_AGENTS: readonly BuiltinAgent[] = [
   {
@@ -87,9 +96,15 @@ export type BuiltinOverride = {
   label?: string;
   command?: string;
   enabled?: boolean;
+  workspaceCommands?: Record<string, string>;
 };
 
-export type CustomAgent = Omit<AgentProfile, "builtin">;
+export type CustomAgent = Omit<
+  AgentProfile,
+  "builtin" | "workspaceCommands"
+> & {
+  workspaceCommands?: Record<string, string>;
+};
 
 /**
  * The agents preference. Built-ins live in code and only the user's changes
@@ -144,6 +159,25 @@ const record = (v: unknown): Record<string, unknown> =>
     ? (v as Record<string, unknown>)
     : {};
 
+const MAX_WORKSPACE_COMMANDS = 32;
+const WORKSPACE_KEY =
+  /^(local|wsl:[^\u0000-\u001f\u007f]{1,128}|ssh:[^\u0000-\u001f\u007f\s]{1,255})$/;
+
+/** Keeps the well-formed workspace commands; `undefined` when none are left. */
+function normalizeWorkspaceCommands(
+  value: unknown,
+): Record<string, string> | undefined {
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(record(value)).slice(
+    0,
+    MAX_WORKSPACE_COMMANDS,
+  )) {
+    const command = validateAgentLaunchCommand(raw);
+    if (WORKSPACE_KEY.test(key) && command.ok) out[key] = command.command;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /**
  * Reads the stored preference, dropping anything malformed. With nothing
  * stored yet, the older per-agent command map (`agentLaunchCommands`) is
@@ -166,6 +200,8 @@ export function normalizeAgentSettings(
     const command = validateAgentLaunchCommand(o.command);
     if (command.ok) next.command = command.command;
     if (typeof o.enabled === "boolean") next.enabled = o.enabled;
+    const workspaceCommands = normalizeWorkspaceCommands(o.workspaceCommands);
+    if (workspaceCommands) next.workspaceCommands = workspaceCommands;
     if (Object.keys(next).length > 0) overrides[id] = next;
   }
   const custom: CustomAgent[] = [];
@@ -182,6 +218,7 @@ export function normalizeAgentSettings(
       !command.ok
     )
       continue;
+    const workspaceCommands = normalizeWorkspaceCommands(c.workspaceCommands);
     custom.push({
       id: c.id,
       label: label.label,
@@ -189,6 +226,7 @@ export function normalizeAgentSettings(
       enabled: c.enabled !== false,
       integration: isIntegration(c.integration) ? c.integration : null,
       icon: isIconKey(c.icon) ? c.icon : "agent",
+      ...(workspaceCommands ? { workspaceCommands } : {}),
     });
   }
   const known = new Set([
@@ -235,10 +273,15 @@ export function resolveAgentProfiles(settings: AgentSettings): AgentProfile[] {
         label: o.label ?? b.label,
         command: o.command ?? b.command,
         enabled: o.enabled ?? true,
+        workspaceCommands: o.workspaceCommands ?? {},
         builtin: true,
       };
     }),
-    ...settings.custom.map((c) => ({ ...c, builtin: false })),
+    ...settings.custom.map((c) => ({
+      ...c,
+      workspaceCommands: c.workspaceCommands ?? {},
+      builtin: false,
+    })),
   ];
   const rank = (id: string) => {
     const i = settings.order.indexOf(id);
@@ -265,7 +308,15 @@ export function updateAgent(
   settings: AgentSettings,
   id: string,
   change: Partial<
-    Pick<AgentProfile, "label" | "command" | "enabled" | "integration" | "icon">
+    Pick<
+      AgentProfile,
+      | "label"
+      | "command"
+      | "enabled"
+      | "integration"
+      | "icon"
+      | "workspaceCommands"
+    >
   >,
 ): AgentSettings {
   const builtin = builtinAgent(id);
@@ -274,9 +325,16 @@ export function updateAgent(
     if (change.label !== undefined) current.label = change.label;
     if (change.command !== undefined) current.command = change.command;
     if (change.enabled !== undefined) current.enabled = change.enabled;
+    if (change.workspaceCommands !== undefined)
+      current.workspaceCommands = change.workspaceCommands;
     if (current.label === builtin.label) delete current.label;
     if (current.command === builtin.command) delete current.command;
     if (current.enabled === true) delete current.enabled;
+    if (
+      current.workspaceCommands &&
+      Object.keys(current.workspaceCommands).length === 0
+    )
+      delete current.workspaceCommands;
     const overrides = { ...settings.overrides };
     if (Object.keys(current).length > 0) overrides[id] = current;
     else delete overrides[id];
@@ -284,8 +342,40 @@ export function updateAgent(
   }
   return {
     ...settings,
-    custom: settings.custom.map((c) => (c.id === id ? { ...c, ...change } : c)),
+    custom: settings.custom.map((c) => {
+      if (c.id !== id) return c;
+      const next = { ...c, ...change };
+      if (
+        next.workspaceCommands &&
+        Object.keys(next.workspaceCommands).length === 0
+      )
+        delete next.workspaceCommands;
+      return next;
+    }),
   };
+}
+
+/** The command an agent starts with in a workspace, by its scope key. */
+export function commandForWorkspace(
+  agent: AgentProfile,
+  scopeKey: string,
+): string {
+  return agent.workspaceCommands[scopeKey] ?? agent.command;
+}
+
+/**
+ * Sets, or with `null` removes, the command an agent uses in one workspace.
+ */
+export function setWorkspaceCommand(
+  settings: AgentSettings,
+  agent: AgentProfile,
+  scopeKey: string,
+  command: string | null,
+): AgentSettings {
+  const workspaceCommands = { ...agent.workspaceCommands };
+  if (command === null) delete workspaceCommands[scopeKey];
+  else workspaceCommands[scopeKey] = command;
+  return updateAgent(settings, agent.id, { workspaceCommands });
 }
 
 /** Drops a built-in agent's changes, so it is as Terax ships it. */

@@ -1,4 +1,5 @@
 mod env;
+pub(crate) use env::resolve_binary;
 mod framing;
 mod session;
 

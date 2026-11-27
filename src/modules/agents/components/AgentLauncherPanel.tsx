@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { AgentIcon } from "@/modules/agents/lib/agentIcon";
+import { useAgentCommandFound } from "@/modules/agents/lib/commandAvailability";
 import {
   type AgentInstanceCount,
   type AgentLaunchRequest,
@@ -9,12 +10,19 @@ import {
 } from "@/modules/agents/lib/launcher";
 import {
   builtinAgent,
+  commandForWorkspace,
   enabledAgentProfiles,
+  setWorkspaceCommand,
   updateAgent,
 } from "@/modules/agents/lib/profiles";
 import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { setAgentSettings } from "@/modules/settings/store";
+import {
+  useWorkspaceEnvStore,
+  workspaceEnvLabel,
+  workspaceScopeKey,
+} from "@/modules/workspace/env";
 import {
   ArrowLeft01Icon,
   PlayIcon,
@@ -38,15 +46,24 @@ export function AgentLauncherPanel({ onBack, onLaunch }: Props) {
   const [picked, setPicked] = useState<string | null>(null);
   const [instances, setInstances] = useState<AgentInstanceCount>(2);
   const agent = agents.find((a) => a.id === picked) ?? agents[0] ?? null;
-  const [draft, setDraft] = useState(agent?.command ?? "");
+  const env = useWorkspaceEnvStore((s) => s.env);
+  const scope = workspaceScopeKey(env);
+  const workspaceName = workspaceEnvLabel(env, "this computer");
+  // A command set for this workspace wins over the agent's own.
+  const scoped = agent ? agent.workspaceCommands[scope] !== undefined : false;
+  const storedCommand = agent ? commandForWorkspace(agent, scope) : "";
+  const [draft, setDraft] = useState(storedCommand);
   const command = draft;
   const validation = validateAgentLaunchCommand(command);
+  const found = useAgentCommandFound(
+    validation.ok ? validation.command : "",
+    env,
+  );
   const defaultCommand = agent ? builtinAgent(agent.id)?.command : undefined;
 
   // Show the stored command whenever another agent is picked, or it changes
   // in Settings.
   const agentId = agent?.id;
-  const storedCommand = agent?.command ?? "";
   // biome-ignore lint/correctness/useExhaustiveDependencies: reset the draft when another agent is picked.
   useEffect(() => {
     setDraft(storedCommand);
@@ -56,9 +73,11 @@ export function AgentLauncherPanel({ onBack, onLaunch }: Props) {
     if (!agent) return null;
     const result = validateAgentLaunchCommand(value);
     if (!result.ok) return null;
-    if (result.command !== agent.command) {
+    if (result.command !== storedCommand) {
       void setAgentSettings(
-        updateAgent(settings, agent.id, { command: result.command }),
+        scoped
+          ? setWorkspaceCommand(settings, agent, scope, result.command)
+          : updateAgent(settings, agent.id, { command: result.command }),
       ).catch((error) => {
         console.error("[terax] failed to save the agent command:", error);
       });
@@ -71,10 +90,26 @@ export function AgentLauncherPanel({ onBack, onLaunch }: Props) {
     setPicked(id);
   };
 
+  const save = (next: Parameters<typeof setAgentSettings>[0]) =>
+    void setAgentSettings(next).catch((error) => {
+      console.error("[terax] failed to save the agent command:", error);
+    });
+
   const resetCommand = () => {
-    if (!agent || !defaultCommand) return;
+    if (!agent) return;
+    // A workspace's own command goes first, back to the agent's.
+    if (scoped) {
+      save(setWorkspaceCommand(settings, agent, scope, null));
+      return;
+    }
+    if (!defaultCommand) return;
     setDraft(defaultCommand);
     persist(defaultCommand);
+  };
+
+  const keepForWorkspace = () => {
+    if (!agent || !validation.ok) return;
+    save(setWorkspaceCommand(settings, agent, scope, validation.command));
   };
 
   const submit = () => {
@@ -197,10 +232,17 @@ export function AgentLauncherPanel({ onBack, onLaunch }: Props) {
             type="button"
             onClick={resetCommand}
             disabled={
-              !hydrated || !defaultCommand || command === defaultCommand
+              !hydrated ||
+              (!scoped && (!defaultCommand || command === defaultCommand))
             }
             className="ml-auto flex items-center gap-1 rounded-md px-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-            title={defaultCommand ? `Reset to ${defaultCommand}` : undefined}
+            title={
+              scoped
+                ? `Use ${agent?.command} here too`
+                : defaultCommand
+                  ? `Reset to ${defaultCommand}`
+                  : undefined
+            }
           >
             <HugeiconsIcon icon={Refresh01Icon} size={11} strokeWidth={1.75} />
             Reset
@@ -222,12 +264,32 @@ export function AgentLauncherPanel({ onBack, onLaunch }: Props) {
         <div
           className={cn(
             "mt-1 min-h-4 text-[10px]",
-            validation.ok ? "text-muted-foreground" : "text-destructive",
+            !validation.ok
+              ? "text-destructive"
+              : found === false
+                ? "text-amber-600 dark:text-amber-400"
+                : "text-muted-foreground",
           )}
         >
-          {validation.ok
-            ? "Aliases and flags are supported."
-            : validation.error}
+          {!validation.ok ? (
+            validation.error
+          ) : found === false ? (
+            `Not found on PATH (${workspaceName}). An alias still works.`
+          ) : scoped ? (
+            `Set for ${workspaceName} only. Reset goes back to ${agent?.command}.`
+          ) : (
+            <>
+              Aliases and flags are supported.{" "}
+              <button
+                type="button"
+                disabled={!hydrated || !agent}
+                onClick={keepForWorkspace}
+                className="underline-offset-2 hover:text-foreground hover:underline"
+              >
+                Set for {workspaceName} only
+              </button>
+            </>
+          )}
         </div>
       </div>
 

@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod agent_command;
 pub mod agent_events;
 pub mod agent_json;
 pub mod ai_sessions;

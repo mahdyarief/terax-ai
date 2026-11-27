@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   addCustomAgent,
   BUILTIN_AGENTS,
+  commandForWorkspace,
   DEFAULT_AGENT_SETTINGS,
   enabledAgentProfiles,
   moveAgent,
@@ -9,7 +10,9 @@ import {
   removeCustomAgent,
   resetAgent,
   resolveAgentProfiles,
+  setWorkspaceCommand,
   updateAgent,
+  type AgentSettings,
   type CustomAgent,
 } from "./profiles";
 
@@ -153,5 +156,56 @@ describe("editing agents", () => {
     const removed = removeCustomAgent(s, "custom-router1");
     expect(removed.custom).toEqual([]);
     expect(removed.order).not.toContain("custom-router1");
+  });
+});
+
+describe("workspace commands", () => {
+  const profile = (s: AgentSettings, id: string) => {
+    const found = resolveAgentProfiles(s).find((a) => a.id === id);
+    if (!found) throw new Error(`no agent ${id}`);
+    return found;
+  };
+  const claude = (s = DEFAULT_AGENT_SETTINGS) => profile(s, "claude");
+
+  it("uses a workspace's own command, and the default elsewhere", () => {
+    const s = setWorkspaceCommand(
+      DEFAULT_AGENT_SETTINGS,
+      claude(),
+      "ssh:dypod",
+      "~/.local/bin/claude",
+    );
+    expect(commandForWorkspace(claude(s), "ssh:dypod")).toBe(
+      "~/.local/bin/claude",
+    );
+    expect(commandForWorkspace(claude(s), "local")).toBe("claude");
+    // Removing the last one leaves the built-in unchanged.
+    const cleared = setWorkspaceCommand(s, claude(s), "ssh:dypod", null);
+    expect(cleared.overrides).toEqual({});
+  });
+
+  it("works for custom agents and survives a reload", () => {
+    let s = addCustomAgent(DEFAULT_AGENT_SETTINGS, router);
+    const agent = profile(s, router.id);
+    s = setWorkspaceCommand(s, agent, "wsl:Ubuntu", "ccr code --wsl");
+    const reloaded = normalizeAgentSettings(JSON.parse(JSON.stringify(s)));
+    expect(reloaded.custom[0].workspaceCommands).toEqual({
+      "wsl:Ubuntu": "ccr code --wsl",
+    });
+  });
+
+  it("drops malformed workspace keys and commands", () => {
+    const s = normalizeAgentSettings({
+      overrides: {
+        claude: {
+          workspaceCommands: {
+            local: "cc",
+            "ssh:dy pod": "x",
+            "nope:x": "x",
+            "wsl:Ubuntu": "a\nb",
+          },
+        },
+      },
+    });
+    expect(s.overrides.claude).toEqual({ workspaceCommands: { local: "cc" } });
   });
 });
