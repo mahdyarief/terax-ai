@@ -98,9 +98,9 @@
 - [x] Tests: refused without the grant, and the bytes arrive in order.
 
 ### Task 8: remote tab actions
-- [ ] `POST /api/tabs` with `{ action: "new", spaceId, mode }` or `{ action: "close", tabId }`. Requires `grant.tabs`.
-- [ ] Rust emits `remote:tab-action` to the window hosting that space. That window runs its existing new-tab or close-tab code and the registry update follows.
-- [ ] Tests: the action is routed to the right window and refused without the grant.
+- [x] `POST /api/tabs` with `{ action: "new", spaceId, mode }` or `{ action: "close", tabId }`. Requires `grant.tabs`.
+- [x] Rust emits `remote:tab-action` to the window hosting that space. That window runs its existing new-tab or close-tab code and the registry update follows.
+- [x] Tests: the action is routed to the right window and refused without the grant.
 
 ### Task 9: wiring
 - [ ] Manage the state and register the commands in `lib.rs`.

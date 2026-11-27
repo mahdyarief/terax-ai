@@ -135,6 +135,8 @@ pub(crate) struct Deps {
     pub pairing: Arc<Pairing>,
     pub sessions: Arc<dyn PtySessions>,
     pub limits: Arc<StreamLimits>,
+    /// Delivers tab actions to the window that owns the tab or space.
+    pub events: Arc<dyn TabEvents>,
     /// Whether browsers reach us over HTTPS (through `tailscale serve`), so
     /// the device cookie can be `Secure`.
     pub https: bool,
@@ -254,6 +256,41 @@ fn tabs_stream(deps: &Deps, headers: &hyper::header::HeaderMap) -> Response<Body
 /// is split by the client.
 pub(crate) const MAX_INPUT_BYTES: usize = 64 * 1024;
 
+/// What a browser asked a window to do with its tabs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "action")]
+pub enum TabAction {
+    #[serde(rename = "new")]
+    New {
+        #[serde(rename = "spaceId")]
+        space_id: String,
+        /// `terminal` or `blocks`.
+        mode: String,
+    },
+    #[serde(rename = "close")]
+    Close {
+        #[serde(rename = "tabId")]
+        tab_id: u32,
+    },
+}
+
+/// The windows' inbox. Implemented over Tauri events in the app and over a
+/// recorder in tests.
+pub(crate) trait TabEvents: Send + Sync {
+    fn emit(&self, window: &str, action: &TabAction);
+}
+
+pub(crate) struct AppTabEvents(pub tauri::AppHandle);
+
+impl TabEvents for AppTabEvents {
+    fn emit(&self, window: &str, action: &TabAction) {
+        use tauri::Emitter;
+        if let Err(error) = self.0.emit_to(window, "remote:tab-action", action) {
+            log::debug!("remote tab action to {window} failed: {error}");
+        }
+    }
+}
+
 /// `/api/pty/<id>/<action>`.
 fn pty_route(path: &str) -> Option<(u32, &str)> {
     let rest = path.strip_prefix("/api/pty/")?;
@@ -311,11 +348,78 @@ async fn post(deps: &Deps, request: Request<Incoming>, path: &str) -> Response<B
     }
     match path {
         "/api/pair" => pair(deps, request).await,
+        "/api/tabs" => tabs_action(deps, request).await,
         _ => match pty_route(path) {
             Some((id, "input")) => pty_input(deps, request, id).await,
             _ => secure(text(StatusCode::NOT_FOUND, "Not found.")),
         },
     }
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "lowercase")]
+enum TabActionRequest {
+    New {
+        #[serde(rename = "spaceId")]
+        space_id: String,
+        #[serde(default)]
+        mode: String,
+    },
+    Close {
+        #[serde(rename = "tabId")]
+        tab_id: u32,
+    },
+}
+
+/// A new or closed tab is forward to the window that hosts it, which runs its
+/// own new-tab or close-tab code; the registry then follows its next report.
+async fn tabs_action(deps: &Deps, request: Request<Incoming>) -> Response<Body> {
+    let Some(caller) = caller(deps, request.headers()) else {
+        return secure(text(StatusCode::UNAUTHORIZED, "Pair this device first."));
+    };
+    if !caller.grant.tabs {
+        return secure(text(
+            StatusCode::FORBIDDEN,
+            "This device may not change tabs.",
+        ));
+    }
+    let body = match read_body(request, 4096).await {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let Ok(action) = serde_json::from_slice::<TabActionRequest>(&body) else {
+        return secure(text(StatusCode::BAD_REQUEST, "Unknown tab action."));
+    };
+    let (window, event) = match action {
+        TabActionRequest::New { space_id, mode } => {
+            let Some(window) = deps.tabs.window_for_space(&space_id) else {
+                return secure(text(StatusCode::NOT_FOUND, "No such workspace."));
+            };
+            let mode = if mode == "blocks" {
+                "blocks"
+            } else {
+                "terminal"
+            };
+            (
+                window,
+                TabAction::New {
+                    space_id,
+                    mode: mode.to_string(),
+                },
+            )
+        }
+        TabActionRequest::Close { tab_id } => {
+            let Some((window, _tab)) = deps.tabs.tab(tab_id) else {
+                return secure(text(StatusCode::NOT_FOUND, "No such tab."));
+            };
+            (window, TabAction::Close { tab_id })
+        }
+    };
+    deps.events.emit(&window, &event);
+    secure(json(
+        StatusCode::OK,
+        &serde_json::json!({ "ok": true, "window": window }),
+    ))
 }
 
 /// Raw bytes typed at a browser, written through the session's ordered
@@ -644,6 +748,7 @@ mod tests {
             pairing: Arc::new(crate::modules::web_remote::devices::Pairing::default()),
             sessions: Arc::new(NoSessions),
             limits: Arc::new(StreamLimits::default()),
+            events: Arc::new(NoEvents),
             https: false,
         }
     }
@@ -666,14 +771,42 @@ mod tests {
     }
 
     fn serve_with(sessions: Arc<dyn PtySessions>) -> (u16, watch::Sender<bool>, Deps) {
+        serve_full(sessions, Arc::new(NoEvents))
+    }
+
+    fn serve_full(
+        sessions: Arc<dyn PtySessions>,
+        events: Arc<dyn TabEvents>,
+    ) -> (u16, watch::Sender<bool>, Deps) {
         let listener =
             tauri::async_runtime::block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
         let port = listener.local_addr().unwrap().port();
         let (stop, stopped) = watch::channel(false);
         let mut deps = deps(port);
         deps.sessions = sessions;
+        deps.events = events;
         tauri::async_runtime::spawn(accept_loop(listener, deps.clone(), stopped));
         (port, stop, deps)
+    }
+
+    struct NoEvents;
+
+    impl TabEvents for NoEvents {
+        fn emit(&self, _window: &str, _action: &TabAction) {}
+    }
+
+    #[derive(Default)]
+    struct RecordingEvents {
+        sent: std::sync::Mutex<Vec<(String, TabAction)>>,
+    }
+
+    impl TabEvents for RecordingEvents {
+        fn emit(&self, window: &str, action: &TabAction) {
+            self.sent
+                .lock()
+                .unwrap()
+                .push((window.to_string(), action.clone()));
+        }
     }
 
     #[derive(Default)]
@@ -1021,6 +1154,75 @@ mod tests {
             "x",
         );
         assert!(unlisted.starts_with("HTTP/1.1 404"), "{unlisted}");
+        let _ = stop.send(true);
+    }
+
+    #[test]
+    fn tab_actions_are_routed_to_the_window_that_hosts_them() {
+        let events = Arc::new(RecordingEvents::default());
+        let (port, stop, deps) = serve_full(Arc::new(NoSessions), events.clone());
+        let host = format!("localhost:{port}");
+        publish_pty(&deps, 7);
+        deps.tabs.publish(
+            "space-b",
+            vec![crate::modules::web_remote::tabs::RemoteTab {
+                id: 2,
+                title: "other".into(),
+                kind: "terminal".into(),
+                space_id: Some("space-b".into()),
+                workspace: None,
+                mode: Some("blocks".into()),
+                panes: Vec::new(),
+                agent: None,
+            }],
+        );
+        let (info, token) = deps.devices.add("phone");
+        let cookie = format!("terax_remote={token}");
+        let new_tab = "{\"action\":\"new\",\"spaceId\":\"space-b\",\"mode\":\"blocks\"}";
+
+        let denied = post(port, &host, "/api/tabs", &[("Cookie", &cookie)], new_tab);
+        assert!(denied.starts_with("HTTP/1.1 403"), "{denied}");
+        assert!(events.sent.lock().unwrap().is_empty());
+
+        assert!(deps.devices.update(
+            &info.id,
+            crate::modules::web_remote::devices::Grant {
+                input: false,
+                tabs: true
+            }
+        ));
+        let created = post(port, &host, "/api/tabs", &[("Cookie", &cookie)], new_tab);
+        assert!(created.starts_with("HTTP/1.1 200"), "{created}");
+        let closed = post(
+            port,
+            &host,
+            "/api/tabs",
+            &[("Cookie", &cookie)],
+            "{\"action\":\"close\",\"tabId\":1}",
+        );
+        assert!(closed.starts_with("HTTP/1.1 200"), "{closed}");
+
+        let sent = events.sent.lock().unwrap().clone();
+        assert_eq!(sent.len(), 2);
+        assert_eq!(sent[0].0, "space-b");
+        assert_eq!(
+            sent[0].1,
+            TabAction::New {
+                space_id: "space-b".into(),
+                mode: "blocks".into()
+            }
+        );
+        assert_eq!(sent[1].0, "main");
+        assert_eq!(sent[1].1, TabAction::Close { tab_id: 1 });
+
+        let unknown = post(
+            port,
+            &host,
+            "/api/tabs",
+            &[("Cookie", &cookie)],
+            "{\"action\":\"new\",\"spaceId\":\"nope\"}",
+        );
+        assert!(unknown.starts_with("HTTP/1.1 404"), "{unknown}");
         let _ = stop.send(true);
     }
 

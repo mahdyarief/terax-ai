@@ -3,6 +3,7 @@ import { ptyIdForLeaf } from "@/modules/terminal/lib/terminalSessionApi";
 import type { Tab } from "@/modules/tabs";
 import { useSpaces } from "@/modules/spaces";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef } from "react";
 import { buildRemoteTabs } from "./tabPayload";
 
@@ -81,6 +82,45 @@ export function usePublishTabs(tabs: readonly Tab[]): void {
       unsubscribeSpaces();
     };
   }, [tabs]);
+}
+
+/** A tab action the browser asked this window to run. */
+export type RemoteTabAction =
+  | { action: "new"; spaceId: string; mode: string }
+  | { action: "close"; tabId: number };
+
+type TabActionHandlers = {
+  openTab: (spaceId: string, mode: string) => void;
+  closeTab: (tabId: number) => void;
+};
+
+/**
+ * Runs the tab actions a paired browser asked for. The browser never creates
+ * or closes a tab itself; it asks the window that hosts the space, so the
+ * result is the same as the desktop's own New Tab and close buttons.
+ */
+export function useRemoteTabActions(handlers: TabActionHandlers): void {
+  const latest = useRef(handlers);
+  latest.current = handlers;
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let disposed = false;
+    void listen<RemoteTabAction>("remote:tab-action", (event) => {
+      const action = event.payload;
+      if (action.action === "new") {
+        latest.current.openTab(action.spaceId, action.mode);
+      } else if (action.action === "close") {
+        latest.current.closeTab(action.tabId);
+      }
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 }
 
 /** Reads the backend once so a page reload keeps publishing. */

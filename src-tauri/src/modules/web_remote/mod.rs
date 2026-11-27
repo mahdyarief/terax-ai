@@ -131,6 +131,7 @@ pub async fn remote_access_start(
         pairing: state.pairing.clone(),
         sessions: Arc::new(stream::AppSessions(app.clone())),
         limits: Arc::new(stream::StreamLimits::default()),
+        events: Arc::new(server::AppTabEvents(app.clone())),
         https: false,
     };
     let running = Running {

@@ -150,6 +150,7 @@ import {
 } from "@/modules/tabs/lib/splitView";
 import {
   usePublishTabs,
+  useRemoteTabActions,
   useRemotePublishingStatus,
 } from "@/modules/web-remote/publishTabs";
 import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
@@ -418,6 +419,18 @@ export default function App() {
   // access is off.
   useRemotePublishingStatus();
   usePublishTabs(tabs);
+  useRemoteTabActions({
+    openTab: (spaceId, mode) => {
+      if (spaceId !== (activeSpaceId ?? DEFAULT_SPACE_ID)) {
+        newTabInSpace(spaceId);
+      } else if (mode === "blocks") {
+        newBlockTab();
+      } else {
+        newTab();
+      }
+    },
+    closeTab,
+  });
 
   useEffect(() => {
     setTabHostingGuard((spaceId) => {
