@@ -13,6 +13,7 @@ import {
   PaintBoardIcon,
   Settings01Icon,
   SourceCodeIcon,
+  SmartPhone01Icon,
   UserMultiple02Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -24,6 +25,7 @@ import { CliAgentsSection } from "./sections/CliAgentsSection";
 import { EditorSection } from "./sections/EditorSection";
 import { GeneralSection } from "./sections/GeneralSection";
 import { ModelsSection } from "./sections/ModelsSection";
+import { RemoteSection } from "./sections/RemoteSection";
 import { ShortcutsSection } from "./sections/ShortcutsSection";
 import { ThemesSection } from "./sections/ThemesSection";
 
@@ -71,6 +73,12 @@ const TABS: {
     component: CliAgentsSection,
   },
   {
+    id: "remote",
+    label: "Remote",
+    icon: SmartPhone01Icon,
+    component: RemoteSection,
+  },
+  {
     id: "about",
     label: "About",
     icon: InformationCircleIcon,
@@ -86,6 +94,7 @@ const VALID_TABS: SettingsTab[] = [
   "models",
   "agents",
   "cli-agents",
+  "remote",
   "about",
 ];
 

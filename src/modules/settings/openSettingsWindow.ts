@@ -8,6 +8,7 @@ export type SettingsTab =
   | "models"
   | "agents"
   | "cli-agents"
+  | "remote"
   | "about";
 
 export async function openSettingsWindow(tab?: SettingsTab): Promise<void> {

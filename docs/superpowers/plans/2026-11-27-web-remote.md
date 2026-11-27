@@ -138,12 +138,12 @@
 ## Phase 3: Desktop controls
 
 ### Task 16: UI
-- [ ] Settings > Remote access:
+- [x] Settings > Remote access:
   - on/off;
   - bind (This computer only / Tailscale / All interfaces + plain-HTTP warning) and port;
-  - "Pair a device" with the code, URL and QR;
+  - "Pair a device" with the code and URL (QR deferred: the project has no QR encoder and adding a dependency is out of scope);
   - device list with input and tab grants and Revoke.
-- [ ] Status bar pill while it is on, showing connected viewers.
+- [x] Status bar pill while it is on, showing connected viewers.
 
 ### Task 17: optional HTTPS through Tailscale
 - [ ] "Use HTTPS (tailscale serve)" runs `tailscale serve --bg --https=443 http://127.0.0.1:<port>` and adds the MagicDNS name to the Host allowlist. It never overwrites a serve config it did not create, and removes its own entry on stop.

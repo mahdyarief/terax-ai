@@ -12,6 +12,7 @@ import {
 import { LspStatusPill } from "@/modules/lsp";
 import type { SourceControlSummary } from "@/modules/source-control/useSourceControl";
 import { RemoteStatusItems } from "@/modules/remote";
+import { RemoteAccessPill } from "@/modules/web-remote/RemoteAccessPill";
 import type { WorkspaceEnv } from "@/modules/workspace";
 import { IncognitoIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
@@ -97,6 +98,7 @@ export function StatusBar({
         ) : null}
       </div>
       <div className="flex shrink-0 items-center gap-1.5">
+        <RemoteAccessPill />
         <AgentStatusPill onClick={onOpenMini} />
         {panelOpen && hasComposer ? (
           <AiStatusBarControls />
