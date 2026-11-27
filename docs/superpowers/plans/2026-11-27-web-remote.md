@@ -110,8 +110,8 @@
 ## Phase 2: Web client (`web-index.html`, `src/web/`)
 
 ### Task 10: entry and pairing
-- [ ] Add `web-index.html` to `rollupOptions.input`. `src/web/main.tsx` shows the pairing screen: it reads `#pair=` from the fragment, asks for a device name, then removes the fragment. It then lazy-loads `RemoteApp`.
-- [ ] Guard test: nothing reachable from `src/web/main.tsx` imports `@tauri-apps/*`.
+- [x] Add `web-index.html` to `rollupOptions.input`. `src/web/main.tsx` shows the pairing screen: it reads `#pair=` from the fragment, asks for a device name, then removes the fragment. It then lazy-loads `RemoteApp`.
+- [x] Guard test: nothing reachable from `src/web/main.tsx` imports `@tauri-apps/*`.
 
 ### Task 11: remote terminal view
 - [ ] `useRemoteTerminal(ptyId)`: an EventSource feeds the Ghostty model. A snapshot resets the model, data is written, and a resize sets the size.
