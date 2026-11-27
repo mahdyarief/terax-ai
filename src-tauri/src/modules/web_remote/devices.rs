@@ -186,6 +186,15 @@ impl DeviceStore {
         self.devices.lock().unwrap().len()
     }
 
+    /// Whether a device is still paired; open streams end when it is not.
+    pub fn contains(&self, id: &str) -> bool {
+        self.devices
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|device| device.id == id)
+    }
+
     fn save(&self) {
         let Some(path) = &self.path else { return };
         let file = File {

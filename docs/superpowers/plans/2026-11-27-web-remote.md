@@ -75,8 +75,8 @@
 - [x] Tests: expiry, attempt limit, single use, a revoked cookie gets 401, a cross-site POST gets 403, and a missing header gets 403.
 
 ### Task 5: `GET /api/tabs` (SSE)
-- [ ] Event `tabs` carries the full registry snapshot on connect and on every version bump. A heartbeat goes out every 25 s.
-- [ ] Test: a publish reaches a connected stream.
+- [x] Event `tabs` carries the full registry snapshot on connect and on every version bump. A heartbeat goes out every 25 s.
+- [x] Test: a publish reaches a connected stream.
 
 ### Task 6: `GET /api/pty/:id/stream` (SSE)
 - [ ] On connect, or when `Last-Event-ID` is older than the log:

@@ -19,13 +19,13 @@ use hyper::header::{HeaderValue, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, HO
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
-use tauri::Manager;
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use super::devices::{Caller, DeviceStore, Pairing};
 use super::http_rules::{
     self, cookie, is_cross_site, remote_header_present, same_origin, HostPolicy, DEVICE_COOKIE,
 };
+use super::sse;
 use super::tabs::TabRegistry;
 
 /// Where a device reaches the server.
@@ -194,7 +194,55 @@ pub(crate) async fn respond(deps: &Deps, request: Request<Incoming>) -> Response
             None => secure(text(StatusCode::UNAUTHORIZED, "Pair this device first.")),
         };
     }
+    if path == "/api/tabs" {
+        return tabs_stream(deps, request.headers());
+    }
     serve_static(deps, &path, request.method() == Method::HEAD)
+}
+
+/// The whole registry, on connect and on every change. A heartbeat keeps the
+/// connection open through idle proxies, and a revocation ends the stream at
+/// once instead of waiting for the next request.
+fn tabs_stream(deps: &Deps, headers: &hyper::header::HeaderMap) -> Response<Body> {
+    let Some(caller) = caller(deps, headers) else {
+        return secure(text(StatusCode::UNAUTHORIZED, "Pair this device first."));
+    };
+    let (tx, rx) = mpsc::channel(sse::STREAM_BUFFER);
+    let tabs = deps.tabs.clone();
+    let devices = deps.devices.clone();
+    let guard = sse::ViewerGuard::open(&deps.viewers);
+    tauri::async_runtime::spawn(async move {
+        let _guard = guard;
+        let mut updates = tabs.subscribe();
+        let mut device_updates = devices.subscribe();
+        let mut heartbeat = tokio::time::interval(sse::HEARTBEAT);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        let mut send_snapshot = |tx: &mpsc::Sender<sse::Item>| {
+            let snapshot = tabs.snapshot();
+            if let Ok(data) = serde_json::to_string(&*snapshot) {
+                sse::send(tx, sse::event(None, "tabs", &data));
+            }
+        };
+        send_snapshot(&tx);
+        loop {
+            tokio::select! {
+                _ = tx.closed() => break,
+                _ = heartbeat.tick() => sse::send(&tx, sse::comment("ping")),
+                changed = updates.changed() => {
+                    if changed.is_err() {
+                        break;
+                    }
+                    send_snapshot(&tx);
+                }
+                _ = device_updates.changed() => {
+                    if !devices.contains(&caller.id) {
+                        break;
+                    }
+                }
+            }
+        }
+    });
+    secure(sse::response(rx))
 }
 
 /// Every POST is same-origin, marked by the web client, and not cross-site.
@@ -681,6 +729,60 @@ mod tests {
             "origin: {wrong_origin}"
         );
         let _ = stop.send(true);
+    }
+
+    #[test]
+    fn a_tab_publish_reaches_a_connected_viewer() {
+        let (port, stop, deps) = serve_for_test();
+        let host = format!("localhost:{port}");
+        let (_info, token) = deps.devices.add("phone");
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        {
+            use std::io::Write;
+            write!(
+                stream,
+                "GET /api/tabs HTTP/1.1\r\nHost: {host}\r\nCookie: terax_remote={token}\r\nAccept: text/event-stream\r\n\r\n"
+            )
+            .unwrap();
+        }
+        let first = read_until(&mut stream, "\"version\":0");
+        assert!(first.starts_with("HTTP/1.1 200"), "{first}");
+        assert!(first.contains("event: tabs"), "{first}");
+
+        deps.tabs.publish(
+            "main",
+            vec![crate::modules::web_remote::tabs::RemoteTab {
+                id: 1,
+                title: "shell".into(),
+                kind: "terminal".into(),
+                space_id: Some("default".into()),
+                workspace: None,
+                mode: Some("terminal".into()),
+                panes: Vec::new(),
+                agent: None,
+            }],
+        );
+        let second = read_until(&mut stream, "\"version\":1");
+        assert!(second.contains("\"title\":\"shell\""), "{second}");
+        let _ = stop.send(true);
+    }
+
+    fn read_until(stream: &mut std::net::TcpStream, needle: &str) -> String {
+        use std::io::Read;
+        let mut seen = String::new();
+        let mut buffer = [0u8; 4096];
+        while !seen.contains(needle) {
+            match stream.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => seen.push_str(&String::from_utf8_lossy(&buffer[..n])),
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(error) => panic!("stream read failed: {error}"),
+            }
+        }
+        seen
     }
 
     #[test]

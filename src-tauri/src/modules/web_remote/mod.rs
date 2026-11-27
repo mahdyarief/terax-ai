@@ -6,6 +6,7 @@
 pub mod devices;
 pub mod http_rules;
 pub mod server;
+pub mod sse;
 pub mod tabs;
 
 use std::path::PathBuf;
