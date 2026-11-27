@@ -148,6 +148,10 @@ import {
   reconcileSecondary,
   SPLIT_DEFAULT,
 } from "@/modules/tabs/lib/splitView";
+import {
+  usePublishTabs,
+  useRemotePublishingStatus,
+} from "@/modules/web-remote/publishTabs";
 import { DEFAULT_SPACE_ID } from "@/modules/tabs/lib/useTabs";
 import {
   clearFocusedTerminal,
@@ -409,6 +413,11 @@ export default function App() {
     activeSpaceId: activeSpaceId ?? DEFAULT_SPACE_ID,
     enabled: spacesHydrated,
   });
+
+  // Mirrors this window's tabs for the browser view; a no-op while remote
+  // access is off.
+  useRemotePublishingStatus();
+  usePublishTabs(tabs);
 
   useEffect(() => {
     setTabHostingGuard((spaceId) => {

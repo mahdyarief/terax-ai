@@ -23,6 +23,7 @@ pub mod runtime;
 pub mod secrets;
 pub mod shell;
 pub mod vibrancy;
+pub mod web_remote;
 pub mod window_presentation;
 pub mod workspace;
 #[cfg(test)]

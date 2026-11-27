@@ -54,10 +54,10 @@
 - [x] Test: pushing output wakes a receiver with the new sequence, and `replay_after(old)` returns exactly the new events.
 
 ### Task 2: tab registry
-- [ ] Command `remote_publish_tabs(tabs: Vec<RemoteTab>)`. The window label comes from the calling webview, never from the payload. The registry is keyed by window label. A version counter and a `watch` channel go up on every change, and a window's tabs are dropped when the window closes.
-- [ ] `RemoteTab = { id, title, spaceId, workspace (scope key + label), mode: terminal|blocks, panes: [{ leafId, ptyId, active }], agent: { kind, state } | null }`. Non-terminal tabs are sent as `{ id, title, kind }` only.
-- [ ] Frontend `src/modules/web-remote/publishTabs.ts`: subscribes to `useTabs`, the leaf→PTY bindings (`pty-bridge`) and agent activity, and publishes at most every 250 ms while remote access is on.
-- [ ] Tests: merging two windows, dropping a closed window, and no publish when nothing changed.
+- [x] Command `remote_publish_tabs(tabs: Vec<RemoteTab>)`. The window label comes from the calling webview, never from the payload. The registry is keyed by window label. A version counter and a `watch` channel go up on every change, and a window's tabs are dropped when the window closes.
+- [x] `RemoteTab = { id, title, spaceId, workspace (scope key + label), mode: terminal|blocks, panes: [{ leafId, ptyId, active }], agent: { kind, state } | null }`. Non-terminal tabs are sent as `{ id, title, kind }` only.
+- [x] Frontend `src/modules/web-remote/publishTabs.ts`: subscribes to `useTabs`, the leaf→PTY bindings (`pty-bridge`) and agent activity, and publishes at most every 250 ms while remote access is on.
+- [x] Tests: merging two windows, dropping a closed window, and no publish when nothing changed.
 
 ### Task 3: server skeleton
 - [ ] hyper 1 (as in `live_server`) on a tokio listener. Commands `remote_access_start({ bind: "loopback"|"tailscale"|"all", port, allowPlainLan })`, `remote_access_stop` and `remote_access_status`.
