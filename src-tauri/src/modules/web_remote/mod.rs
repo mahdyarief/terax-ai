@@ -5,6 +5,7 @@
 
 pub mod devices;
 pub mod http_rules;
+pub mod https;
 pub mod server;
 pub mod sse;
 pub mod stream;
@@ -96,22 +97,36 @@ pub async fn remote_access_start(
     bind: RemoteBind,
     port: Option<u16>,
     allow_plain_lan: Option<bool>,
+    https: Option<bool>,
 ) -> Result<RemoteAccessInfo, String> {
     let port = port.unwrap_or(DEFAULT_PORT);
     let allow_plain_lan = allow_plain_lan.unwrap_or(false);
+    // `tailscale serve` terminates TLS on 443 and proxies to the loopback
+    // listener, so HTTPS only makes sense where a tailnet address exists.
+    let https = https.unwrap_or(false) && bind == RemoteBind::Tailscale;
     if let Some(running) = state.running.lock().unwrap().as_ref() {
         if running.bind == bind
             && running.port == port
             && running.allow_plain_lan == allow_plain_lan
+            && running.https == https
         {
             return Ok(running.info());
         }
+    }
+    let mut extra_names = Vec::new();
+    let mut public_urls = None;
+    if https {
+        let dns = https::magic_dns().await?;
+        https::claim(&format!("http://127.0.0.1:{port}")).await?;
+        public_urls = Some(vec![format!("https://{dns}/web-index.html")]);
+        extra_names.push(dns);
     }
     // Restarting: every existing stream ends with the old listener.
     if let Some(old) = state.running.lock().unwrap().take() {
         let _ = old.stop.send(true);
     }
-    let bound = server::bind(bind, port, allow_plain_lan, Vec::new(), false).await?;
+    let bound = server::bind(bind, port, allow_plain_lan, extra_names, https).await?;
+    let urls = public_urls.unwrap_or(bound.urls);
     let (stop, stopped) = watch::channel(false);
     let viewers = Arc::new(AtomicUsize::new(0));
     let deps = Deps {
@@ -124,14 +139,14 @@ pub async fn remote_access_start(
         sessions: Arc::new(stream::AppSessions(app.clone())),
         limits: Arc::new(stream::StreamLimits::default()),
         events: Arc::new(server::AppTabEvents(app.clone())),
-        https: false,
+        https,
     };
     let running = Running {
         bind,
         port: bound.port,
-        urls: bound.urls,
+        urls,
         allow_plain_lan,
-        https: false,
+        https,
         viewers,
         stop,
         _serve: None,
@@ -148,6 +163,13 @@ pub async fn remote_access_start(
 pub fn remote_access_stop(app: tauri::AppHandle, state: tauri::State<'_, WebRemoteState>) {
     if let Some(running) = state.running.lock().unwrap().take() {
         let _ = running.stop.send(true);
+        if running.https {
+            tauri::async_runtime::spawn(async {
+                if let Err(error) = https::release().await {
+                    log::warn!("could not remove the tailscale serve mount: {error}");
+                }
+            });
+        }
     }
     let info = state.status();
     emit_status(&app, &info);

@@ -69,6 +69,7 @@ export function RemoteSection() {
   const [bind, setBind] = useState<Bind>("loopback");
   const [port, setPort] = useState(7681);
   const [plainLan, setPlainLan] = useState(false);
+  const [https, setHttps] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -119,6 +120,7 @@ export function RemoteSection() {
         bind,
         port,
         allowPlainLan: plainLan,
+        https: https && bind === "tailscale",
       }),
     );
 
@@ -211,6 +213,19 @@ export function RemoteSection() {
             className="h-8 w-24 text-[12px]"
           />
         </SettingRow>
+
+        {bind === "tailscale" ? (
+          <SettingRow
+            title="Use HTTPS (tailscale serve)"
+            description="Tailscale terminates TLS on 443 and proxies here, so the browser gets a real certificate. Refused if serve is already configured."
+          >
+            <Switch
+              checked={https}
+              disabled={running || busy}
+              onCheckedChange={setHttps}
+            />
+          </SettingRow>
+        ) : null}
 
         {bind === "all" ? (
           <SettingRow

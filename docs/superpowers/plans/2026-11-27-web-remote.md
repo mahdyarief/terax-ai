@@ -146,7 +146,7 @@
 - [x] Status bar pill while it is on, showing connected viewers.
 
 ### Task 17: optional HTTPS through Tailscale
-- [ ] "Use HTTPS (tailscale serve)" runs `tailscale serve --bg --https=443 http://127.0.0.1:<port>` and adds the MagicDNS name to the Host allowlist. It never overwrites a serve config it did not create, and removes its own entry on stop.
+- [x] "Use HTTPS (tailscale serve)" runs `tailscale serve --bg --https=443 http://127.0.0.1:<port>` and adds the MagicDNS name to the Host allowlist. It never overwrites a serve config it did not create, and removes its own entry on stop.
 
 ### Task 18: run without a desktop session
 - [ ] A `--remote-serve` CLI flag starts with remote access on (bind and port from settings or flags) and the main window hidden.
