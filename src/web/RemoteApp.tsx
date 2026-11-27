@@ -60,7 +60,10 @@ export default function RemoteApp({ device }: { device: Device }) {
 
         <section className="min-h-0 min-w-0 flex-1">
           {ptyId !== null ? (
-            <RemoteTerminal ptyId={ptyId} />
+            <RemoteTerminal
+              ptyId={ptyId}
+              blocks={current.mode === "blocks"}
+            />
           ) : (
             <p className="p-4 text-sm text-muted-foreground">
               {status === "live"

@@ -1,4 +1,5 @@
 import { TeraxGhostty } from "@terax/ghostty-core/adapted";
+import type { GhosttyTerminalEvent } from "@terax/ghostty-core/protocol";
 import { AdaptedGhosttyTerminalModel } from "@/modules/terminal/ghostty/AdaptedGhosttyTerminalModel";
 import { resolveCursorText } from "@/modules/terminal/ghostty/gpu/cursorText";
 import type {
@@ -31,11 +32,13 @@ export function createRemoteModel(
   ghostty: TeraxGhostty,
   cols: number,
   rows: number,
+  onEvent?: (event: GhosttyTerminalEvent) => void,
 ): AdaptedGhosttyTerminalModel {
   return new AdaptedGhosttyTerminalModel(ghostty, {
     backend: "ghostty-webgl",
     cols,
     rows,
+    onEvent,
   });
 }
 

@@ -8,8 +8,10 @@ import {
   WebGlCellRenderer,
   type WebGlRendererProfile,
 } from "@/modules/terminal/ghostty/webgl/WebGlCellRenderer";
+import { GhosttyBlocks } from "@/modules/terminal/ghostty/GhosttyBlocks";
 import { useEffect, useRef, useState } from "react";
 import { RemoteTerminalFeed } from "./feed";
+import { RemoteBlockOverlay } from "./RemoteBlockOverlay";
 import {
   WEB_TERMINAL_FONT,
   createRemoteModel,
@@ -25,9 +27,20 @@ type Status = "loading" | "live" | "reconnecting" | "closed" | "error";
  * core and the WebGL renderer out. The view is scaled to fit and never resizes
  * the desktop's terminal.
  */
-export function RemoteTerminal({ ptyId }: { ptyId: number }) {
+export function RemoteTerminal({
+  ptyId,
+  blocks = false,
+}: {
+  ptyId: number;
+  blocks?: boolean;
+}) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const [blockSurface, setBlockSurface] = useState<{
+    controller: GhosttyBlocks;
+    model: AdaptedGhosttyTerminalModel;
+    cellHeight: number;
+  } | null>(null);
   const [status, setStatus] = useState<Status>("loading");
   const [message, setMessage] = useState<string | null>(null);
   const [natural, setNatural] = useState({ width: 0, height: 0 });
@@ -96,9 +109,20 @@ export function RemoteTerminal({ ptyId }: { ptyId: number }) {
       try {
         const core = await loadGhosttyCore();
         if (disposed) return;
-        model = createRemoteModel(core, 80, 24);
+        let controller: GhosttyBlocks | null = null;
+        model = createRemoteModel(core, 80, 24, (event) =>
+          controller?.handle(event, ""),
+        );
+        if (blocks) controller = new GhosttyBlocks(model);
         metrics = await measureTerminalFont(WEB_TERMINAL_FONT);
         if (disposed) return;
+        if (controller) {
+          setBlockSurface({
+            controller,
+            model,
+            cellHeight: metrics.cellHeight,
+          });
+        }
         const initial = profile();
         if (!initial) return;
         renderer = new WebGlCellRenderer();
@@ -173,18 +197,16 @@ export function RemoteTerminal({ ptyId }: { ptyId: number }) {
       model?.dispose();
       renderer?.dispose();
     };
-  }, [ptyId]);
+  }, [ptyId, blocks]);
 
-  const fit = viewportWidth && natural.width
-    ? Math.min(1, viewportWidth / natural.width) * zoom
-    : zoom;
+  const fit =
+    viewportWidth && natural.width
+      ? Math.min(1, viewportWidth / natural.width) * zoom
+      : zoom;
 
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col">
-      <div
-        ref={viewportRef}
-        className="min-h-0 flex-1 overflow-auto bg-black"
-      >
+      <div ref={viewportRef} className="min-h-0 flex-1 overflow-auto bg-black">
         <div
           style={{
             width: natural.width ? natural.width * fit : undefined,
@@ -192,14 +214,23 @@ export function RemoteTerminal({ ptyId }: { ptyId: number }) {
           }}
         >
           <div
-            ref={hostRef}
+            className="relative"
             style={{
               width: natural.width || undefined,
               height: natural.height || undefined,
               transform: `scale(${fit})`,
               transformOrigin: "top left",
             }}
-          />
+          >
+            <div ref={hostRef} className="absolute inset-0" />
+            {blockSurface ? (
+              <RemoteBlockOverlay
+                controller={blockSurface.controller}
+                model={blockSurface.model}
+                cellHeight={blockSurface.cellHeight}
+              />
+            ) : null}
+          </div>
         </div>
       </div>
 

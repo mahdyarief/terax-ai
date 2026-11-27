@@ -120,7 +120,7 @@
 - [x] Tests: model state after snapshot plus data, and a reconnect does not duplicate output.
 
 ### Task 12: block mode
-- [ ] Reuse `GhosttyBlocks` and the block overlay for tabs whose `mode` is `blocks`.
+- [x] Reuse `GhosttyBlocks` and the block overlay for tabs whose `mode` is `blocks`.
 
 ### Task 13: tab list
 - [ ] Tabs grouped by workspace (local, WSL, SSH), with agent icon and state (running, waiting, done), updated live.
