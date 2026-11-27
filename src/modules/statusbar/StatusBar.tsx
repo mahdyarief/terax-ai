@@ -16,6 +16,7 @@ import type { WorkspaceEnv } from "@/modules/workspace";
 import { IncognitoIcon } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
 import { CwdBreadcrumb } from "./CwdBreadcrumb";
+import { DevServersPill } from "./DevServersPill";
 import { DiagnosticsBadge } from "./DiagnosticsBadge";
 import { GitBranchPill } from "./GitBranchPill";
 import { WorkspaceEnvSelector } from "./WorkspaceEnvSelector";
@@ -39,6 +40,8 @@ type Props = {
     summary: SourceControlSummary;
     onOpenSourceControl: () => void;
   };
+  /** Opens a dev server a terminal printed the address of in a preview tab. */
+  onOpenPreview: (url: string) => void;
 };
 
 export function StatusBar({
@@ -53,6 +56,7 @@ export function StatusBar({
   privateActive,
   onOpenProblems,
   git,
+  onOpenPreview,
 }: Props) {
   const panelOpen = useChatStore((s) => s.panelOpen);
 
@@ -68,6 +72,7 @@ export function StatusBar({
             onOpenSourceControl={git.onOpenSourceControl}
           />
         ) : null}
+        <DevServersPill onOpenPreview={onOpenPreview} />
         <LspStatusPill filePath={filePath ?? null} />
         <DiagnosticsBadge
           filePath={filePath ?? null}

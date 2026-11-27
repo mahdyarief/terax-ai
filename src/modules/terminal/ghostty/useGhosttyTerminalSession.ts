@@ -54,6 +54,7 @@ import {
 import { getWebGpuTerminalRuntime } from "./gpu/WebGpuTerminalRuntime";
 import { WebGpuTerminalSurface } from "./gpu/WebGpuTerminalSurface";
 import { GhosttyInputController } from "./input/GhosttyInputController";
+import { DevServerUrlScanner, useDevServerStore } from "../lib/devServers";
 import { useTerminalProgressStore } from "../lib/terminalProgress";
 import {
   encodeTerminalSubmission,
@@ -558,6 +559,7 @@ export function disposeGhosttySession(leafId: number): boolean {
   session.pty = null;
   sessions.delete(leafId);
   useTerminalProgressStore.getState().set(leafId, null);
+  useDevServerStore.getState().clear(leafId);
   return true;
 }
 
@@ -588,6 +590,7 @@ async function respawnGhosttySession(
   session.shellExited = false;
   session.promptIntegrated = false;
   session.commandRunning = false;
+  useDevServerStore.getState().clear(leafId);
   session.commandTracked = false;
   session.lastCwd = null;
   session.initialCwd = cwd ?? session.initialCwd;
@@ -767,6 +770,8 @@ async function initializeSessionGeneration(
         useTerminalProgressStore.getState().set(session.leafId, progress);
       },
       onCommandState: (running) => {
+        // A server's address belongs to the command that printed it.
+        useDevServerStore.getState().clear(session.leafId);
         session.promptIntegrated = true;
         session.commandRunning = running;
         session.commandTracked = false;
@@ -941,6 +946,7 @@ async function initializeSessionGeneration(
   const opened = currentWorkspaceEnv();
   const server = opened.kind === "ssh" ? opened.host : null;
   session.workspace = opened;
+  const devServers = new DevServerUrlScanner();
   const pty = await openPty(
     startCols,
     startRows,
@@ -948,13 +954,23 @@ async function initializeSessionGeneration(
       onData: (bytes) => {
         if (!session.disposed && generation === session.generation) {
           mark("firstOutputMs");
+          // Read before the model may take the buffer.
+          const found = devServers.push(bytes);
           model.write(bytes);
           ghosttyBlocks(session.leafId)?.changed();
+          // With shell integration, an address at the prompt is not a
+          // running server (it was typed, or printed by a finished command).
+          if (
+            found.length > 0 &&
+            (!session.promptIntegrated || session.commandRunning)
+          )
+            useDevServerStore.getState().add(session.leafId, found, server);
         }
       },
       onExit: (code) => {
         if (session.disposed || generation !== session.generation) return;
         session.shellExited = true;
+        useDevServerStore.getState().clear(session.leafId);
         session.cancelFocusRetry?.();
         session.writer.detach();
         session.pty = null;

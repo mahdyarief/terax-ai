@@ -2727,6 +2727,7 @@ export default function App() {
                 activeTab?.kind === "terminal" && activeTab.private === true
               }
               onOpenProblems={() => openSidebarView("problems")}
+              onOpenPreview={openPreviewTab}
               git={
                 statusBarGitBranch
                   ? {
