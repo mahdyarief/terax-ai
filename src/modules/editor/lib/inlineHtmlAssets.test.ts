@@ -1,7 +1,11 @@
 import { checkReadable } from "@/modules/ai/lib/security";
 import { previewBoundary } from "@/modules/markdown/lib/assetPath";
 import { describe, expect, it, vi } from "vitest";
-import { inlineRelativeAssets, maybeInlineHtmlAssets } from "./inlineHtmlAssets";
+import {
+  hasRemoteScripts,
+  inlineRelativeAssets,
+  maybeInlineHtmlAssets,
+} from "./inlineHtmlAssets";
 
 const enc = (s: string) =>
   typeof btoa === "function"
@@ -169,5 +173,34 @@ describe("a page in a folder on a server", () => {
     expect(fs.readText).toHaveBeenCalledWith(`${root}/site/css/site.css`);
     expect(fs.readText).not.toHaveBeenCalledWith("/home/dev/other.css");
     expect(fs.readText).not.toHaveBeenCalledWith(`${root}/.ssh/keys.css`);
+  });
+});
+
+describe("script files", () => {
+  it("inlines the folder's scripts as data URLs, keeping their attributes", async () => {
+    const fs = makeFs({ "/proj/app.js": "window.ok = '</script>';" });
+    const html =
+      '<script src="https://cdn.example/lib.js"></script><script src="./app.js?v=2" defer></script>';
+    const out = await inlineRelativeAssets(html, { basePath: "/proj/index.html", ...fs });
+    expect(out).toContain('<script src="https://cdn.example/lib.js">');
+    expect(out).toContain(
+      `<script src="data:text/javascript;charset=utf-8;base64,${enc("window.ok = '</script>';")}" defer>`,
+    );
+  });
+
+  it("inlines no script from outside the folder or with another extension", async () => {
+    const fs = makeFs({ "/proj/x.txt": "alert(1)", "/other.js": "alert(2)" });
+    const html = '<script src="x.txt"></script><script src="../other.js"></script>';
+    const out = await inlineRelativeAssets(html, { basePath: "/proj/index.html", ...fs });
+    expect(out).toBe(html);
+    expect(fs.readText).not.toHaveBeenCalled();
+  });
+});
+
+describe("hasRemoteScripts", () => {
+  it("tells pages that load a library from the web", () => {
+    expect(hasRemoteScripts('<script src="https://cdn.jsdelivr.net/npm/a.js"></script>')).toBe(true);
+    expect(hasRemoteScripts("<script src='//cdn.example/a.js'></script>")).toBe(true);
+    expect(hasRemoteScripts('<script src="./a.js"></script><script>1</script>')).toBe(false);
   });
 });

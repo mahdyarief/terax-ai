@@ -11,7 +11,10 @@ import {
   withScrollBridge,
 } from "./lib/htmlPreview";
 import { isPreviewTrusted, trustPreview } from "./lib/htmlPreviewTrust";
-import { maybeInlineHtmlAssets } from "./lib/inlineHtmlAssets";
+import {
+  hasRemoteScripts,
+  maybeInlineHtmlAssets,
+} from "./lib/inlineHtmlAssets";
 
 type Props = {
   html: string;
@@ -20,6 +23,9 @@ type Props = {
   /** Folder tree local assets may be inlined from; defaults to the doc folder. */
   workspaceRoot?: string | null;
 };
+
+/** Why some of the page's scripts did not run: local files, or the web. */
+type BlockedScripts = "local" | "remote" | null;
 
 type ReadResult =
   | { kind: "text"; content: string }
@@ -59,18 +65,20 @@ async function readBinaryForPreview(path: string): Promise<string> {
  * includes the local files inlined into the document. So scripts run only
  * when nothing local was inlined, or after the user trusted the folder; until
  * then the page is served with scripts off and a bar offers to turn them on.
+ * The folder's own script files and libraries from the web (a CDN) run only
+ * in a trusted folder; a page that needs them shows the same bar.
  */
 export function HtmlPreview({ html, path, workspaceRoot }: Props) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [scriptsBlocked, setScriptsBlocked] = useState(false);
+  const [scriptsBlocked, setScriptsBlocked] = useState<BlockedScripts>(null);
   const publisher = useRef<ReturnType<typeof createHtmlPreviewPublisher> | null>(
     null,
   );
   const frame = useRef<HTMLIFrameElement | null>(null);
   const scroll = useRef<PreviewScroll>({ x: 0, y: 0 });
-  // Whether each published token was served with its scripts held back.
-  const blockedByToken = useRef(new Map<string, boolean>());
+  // Which scripts each published token was served without, if any.
+  const blockedByToken = useRef(new Map<string, BlockedScripts>());
   const pathRef = useRef(path);
   pathRef.current = path;
   const workspaceRootRef = useRef(workspaceRoot);
@@ -97,13 +105,21 @@ export function HtmlPreview({ html, path, workspaceRoot }: Props) {
         );
         // Inlining leaves the markup untouched when it pulled in nothing.
         const usedLocalFiles = inlined !== source;
-        const scripts =
-          !usedLocalFiles || (boundary !== null && isPreviewTrusted(boundary));
+        const trusted = boundary !== null && isPreviewTrusted(boundary);
+        const scripts = !usedLocalFiles || trusted;
         const token = await invoke<string>("fs_publish_html", {
           html: scripts ? withScrollBridge(inlined, scroll.current) : inlined,
           scripts,
+          trusted,
         });
-        blocked.set(token, !scripts && hasActiveContent(inlined));
+        blocked.set(
+          token,
+          !scripts && hasActiveContent(inlined)
+            ? "local"
+            : !trusted && boundary !== null && hasRemoteScripts(inlined)
+              ? "remote"
+              : null,
+        );
         return token;
       },
       drop: async (token) => {
@@ -115,7 +131,7 @@ export function HtmlPreview({ html, path, workspaceRoot }: Props) {
         }
       },
       onReady: (token) => {
-        setScriptsBlocked(blocked.get(token) ?? false);
+        setScriptsBlocked(blocked.get(token) ?? null);
         setSrc(convertFileSrc(token, "terax-doc"));
         setError(null);
       },
@@ -177,8 +193,9 @@ export function HtmlPreview({ html, path, workspaceRoot }: Props) {
       {scriptsBlocked && (
         <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border bg-muted/60 py-1.5 pl-3 pr-44 text-xs text-muted-foreground">
           <span>
-            Scripts are off: this page loads local files, and its scripts could
-            read them and send them out.
+            {scriptsBlocked === "local"
+              ? "Scripts are off: this page loads local files, and its scripts could read them and send them out."
+              : "Scripts from the web are off: this page loads libraries from a CDN."}
           </span>
           <button
             type="button"

@@ -34,6 +34,25 @@ const CSP: &str = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval';
 /// as [`CSP`] with scripts off, so nothing can read those files back out.
 const CSP_STATIC: &str = "default-src 'none'; script-src 'none'; style-src 'unsafe-inline' https:; font-src data: https:; img-src data: blob: https:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'";
 
+/// Policy for a preview whose folder the user trusted: [`CSP`] plus scripts
+/// from `https:` (a page's CDN libraries, such as Tailwind or a chart
+/// library) and `data:` (the folder's own `<script src>` files, which the
+/// renderer inlines as data URLs so `defer` and order still hold). Trust
+/// already lets the page's scripts read the inlined files, so running the
+/// libraries the page names adds no new reach; it is still never granted
+/// without the user's click.
+const CSP_TRUSTED: &str = "default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: data:; style-src 'unsafe-inline' https:; font-src data: https:; img-src data: blob: https:; connect-src 'none'; form-action 'none'; base-uri 'none'; frame-src 'none'; object-src 'none'";
+
+/// The policy for a publish. Both flags are opt-in, so a caller that forgets
+/// them gets the safe policy, and trust without scripts stays static.
+fn policy(scripts: bool, trusted: bool) -> &'static str {
+    match (scripts, trusted) {
+        (false, _) => CSP_STATIC,
+        (true, false) => CSP,
+        (true, true) => CSP_TRUSTED,
+    }
+}
+
 struct Preview {
     owner: String,
     sequence: u64,
@@ -61,13 +80,9 @@ pub async fn fs_publish_html(
     webview: tauri::Webview,
     html: String,
     scripts: Option<bool>,
+    trusted: Option<bool>,
 ) -> Result<String, String> {
-    // Scripts are opt-in, so a caller that forgets the flag gets the safe policy.
-    let csp = if scripts.unwrap_or(false) {
-        CSP
-    } else {
-        CSP_STATIC
-    };
+    let csp = policy(scripts.unwrap_or(false), trusted.unwrap_or(false));
     let bytes = html.into_bytes();
     if bytes.len() > MAX_PREVIEW_BYTES {
         return Err(format!(
@@ -262,6 +277,25 @@ mod tests {
             CSP_STATIC.replace("script-src 'none'", "script-src 'unsafe-inline' 'unsafe-eval'"),
             CSP
         );
+    }
+
+    #[test]
+    fn only_a_trusted_folder_runs_remote_and_inlined_script_files() {
+        assert_eq!(policy(false, false), CSP_STATIC);
+        assert_eq!(policy(false, true), CSP_STATIC);
+        assert_eq!(policy(true, false), CSP);
+        assert_eq!(policy(true, true), CSP_TRUSTED);
+        assert_eq!(
+            CSP.replace(
+                "script-src 'unsafe-inline' 'unsafe-eval'",
+                "script-src 'unsafe-inline' 'unsafe-eval' https: data:"
+            ),
+            CSP_TRUSTED
+        );
+        // Still no network reads, frames or plain-http scripts.
+        assert!(CSP_TRUSTED.contains("connect-src 'none'"));
+        assert!(CSP_TRUSTED.contains("frame-src 'none'"));
+        assert!(!CSP_TRUSTED.contains("http: "));
     }
 
     #[test]

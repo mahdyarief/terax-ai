@@ -381,7 +381,52 @@ export async function inlineRelativeAssets(html: string, options: InlineOptions)
     }
   }
 
+  // 5) <script src="local.js"> -> a data: URL, so `defer`, `async` and the
+  // order of scripts still hold. The preview runs them only once the folder
+  // is trusted (its policy then allows data: scripts).
+  const scripts = [...out.matchAll(/<script\b[^>]*>/gi)].map((s) => ({
+    start: s.index,
+    end: s.index + s[0].length,
+    tag: s[0],
+  }));
+  if (scripts.length) {
+    const repls = await Promise.all(
+      scripts.map(async (item) => {
+        const src = getAttr(item.tag, "src");
+        if (!src || !isLocalRef(src)) return null;
+        const { path: refPath } = splitRef(src.trim());
+        const abs = resolveRelativeAsset(basePath, refPath);
+        if (!abs || !SCRIPT_EXTS.has(extOf(abs)) || !ctx.allowed(abs)) return null;
+        const code = await readText(ctx, abs);
+        if (code == null) return null;
+        const b64 = toBase64Utf8(code);
+        if (!charge(ctx, approxBytesFromB64(b64))) return null;
+        // The query (often a cache buster) means nothing to a data: URL.
+        return {
+          ...item,
+          text: setAttr(item.tag, "src", `data:text/javascript;charset=utf-8;base64,${b64}`),
+        };
+      }),
+    );
+    for (let i = repls.length - 1; i >= 0; i--) {
+      const r = repls[i];
+      if (!r) continue;
+      out = out.slice(0, r.start) + r.text + out.slice(r.end);
+    }
+  }
+
   return out;
+}
+
+const SCRIPT_EXTS = new Set(["js", "mjs", "cjs"]);
+
+/** Whether the page loads a script from the web (a CDN library). */
+export function hasRemoteScripts(html: string): boolean {
+  for (const m of html.matchAll(/<script\b[^>]*>/gi)) {
+    const src = getAttr(m[0], "src")?.trim().toLowerCase();
+    if (src && (src.startsWith("https:") || src.startsWith("//"))) return true;
+  }
+  return false;
 }
 
 export type InlineScope = {
