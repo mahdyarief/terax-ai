@@ -6,7 +6,7 @@ pub(super) const MAX_REPLAY_BYTES: usize = 8 * 1024 * 1024;
 pub(super) const MAX_REPLAY_EVENTS: usize = 65_536;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) enum ReplayEvent {
+pub(crate) enum ReplayEvent {
     Output { bytes: Vec<u8> },
     Resize { cols: u16, rows: u16 },
 }
@@ -22,9 +22,8 @@ impl ReplayEvent {
 
 // Only `replay_after` (kept for tests) builds these now: the rolling log never
 // refuses a push, and handoffs replay the whole retained history.
-#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum ReplayError {
+pub(crate) enum ReplayError {
     /// The requested checkpoint is older than the oldest retained output.
     Truncated,
     InvalidCheckpoint,
@@ -101,11 +100,11 @@ impl ReplayLog {
         self.output_total
     }
 
-    pub(super) fn sequence(&self) -> u64 {
+    pub(crate) fn sequence(&self) -> u64 {
         self.end
     }
 
-    pub(super) fn size(&self) -> (u16, u16) {
+    pub(crate) fn size(&self) -> (u16, u16) {
         self.events
             .iter()
             .rev()
@@ -117,14 +116,13 @@ impl ReplayLog {
     }
 
     /// True while nothing has been evicted since the PTY opened.
-    #[cfg(test)]
-    pub(super) fn is_complete(&self) -> bool {
+    pub(crate) fn is_complete(&self) -> bool {
         self.base == 0
     }
 
     /// Everything retained, led by the size in force at the oldest event once
     /// older output (and the resize that set that size) has been evicted.
-    pub(super) fn replay_all(&self) -> Result<Vec<ReplayEvent>, ReplayError> {
+    pub(crate) fn replay_all(&self) -> Result<Vec<ReplayEvent>, ReplayError> {
         let mut replay = Vec::with_capacity(self.events.len() + 1);
         if self.base > 0 {
             let (cols, rows) = self.base_size;
@@ -134,8 +132,10 @@ impl ReplayLog {
         Ok(replay)
     }
 
-    #[cfg(test)]
-    pub(super) fn replay_after(&self, checkpoint: u64) -> Result<Vec<ReplayEvent>, ReplayError> {
+    pub(crate) fn replay_after(
+        &self,
+        checkpoint: u64,
+    ) -> Result<Vec<ReplayEvent>, ReplayError> {
         if checkpoint > self.end {
             return Err(ReplayError::InvalidCheckpoint);
         }

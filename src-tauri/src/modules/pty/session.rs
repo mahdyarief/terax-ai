@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use super::agent_detect::{
     AgentDetector, AgentLink, AgentSignal, Signal, TerminalNotificationEvent,
@@ -41,6 +41,17 @@ struct InputMessage {
     done: Option<oneshot::Sender<Result<(), String>>>,
 }
 
+/// What a remote viewer applies to a fresh model on (re)connect.
+pub(crate) struct ReplaySnapshot {
+    pub events: Vec<super::replay::ReplayEvent>,
+    /// Sequence after the last retained event; the stream resumes there.
+    pub sequence: u64,
+    pub cols: u16,
+    pub rows: u16,
+    /// Older output was evicted; the snapshot is the newest window only.
+    pub truncated: bool,
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct OutputDiagnostics {
@@ -69,6 +80,11 @@ pub struct Session {
     /// Ordered record of everything the terminal emitted, so a new window can
     /// rebuild its view without the process restarting.
     pub(super) replay: Arc<Mutex<ReplayLog>>,
+    /// Bumped after every replay change and once more at exit, so a remote
+    /// viewer waits on a notification instead of polling the log.
+    pub(super) replay_watch: watch::Sender<u64>,
+    /// Set by the waiter thread once the child exited; `None` while it runs.
+    pub(super) exit_code: Arc<Mutex<Option<i32>>>,
     pub killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
     /// Feeds the per-session writer thread, which keeps input ordered and off
     /// every async worker.
@@ -173,13 +189,58 @@ impl Session {
             .resize(size)
             .map_err(|e| e.to_string());
         if result.is_ok() {
-            let _ = self
+            let seq = self
                 .replay
                 .lock()
                 .unwrap()
                 .push_resize(size.cols, size.rows);
+            if let Ok(seq) = seq {
+                let _ = self.replay_watch.send(seq);
+            }
         }
         result
+    }
+
+    /// Playhead for a viewer that wakes on [`Self::subscribe_replay`].
+    pub(crate) fn subscribe_replay(&self) -> watch::Receiver<u64> {
+        self.replay_watch.subscribe()
+    }
+
+    /// Everything retained plus where live output resumes, for a remote
+    /// viewer's first frame. `truncated` says older output was evicted.
+    pub(crate) fn replay_snapshot(&self) -> ReplaySnapshot {
+        let replay = self.replay.lock().unwrap();
+        let (cols, rows) = replay.size();
+        ReplaySnapshot {
+            events: replay.replay_all().unwrap_or_default(),
+            sequence: replay.sequence(),
+            cols,
+            rows,
+            truncated: !replay.is_complete(),
+        }
+    }
+
+    /// Events after `checkpoint`, for a viewer resuming a dropped stream.
+    pub(crate) fn replay_after(
+        &self,
+        checkpoint: u64,
+    ) -> Result<Vec<super::replay::ReplayEvent>, super::replay::ReplayError> {
+        self.replay.lock().unwrap().replay_after(checkpoint)
+    }
+
+    pub(crate) fn replay_sequence(&self) -> u64 {
+        self.replay.lock().unwrap().sequence()
+    }
+
+    /// The child's exit code, once the waiter has set it.
+    pub(crate) fn exit_status(&self) -> Option<i32> {
+        *self.exit_code.lock().unwrap()
+    }
+
+    /// Remote input shares the ordered writer queue with the desktop's own
+    /// keystrokes but never needs the attachment lease: it takes no lease.
+    pub(crate) async fn write_remote(&self, bytes: Vec<u8>) -> Result<(), String> {
+        self.write(bytes).await
     }
 
     /// The retained history plus the stream offset live output resumes at, for
@@ -492,6 +553,8 @@ pub(super) fn run(host: Host, size: PtySize, parts: Parts) -> Result<Arc<Session
         armed: true,
     };
 
+    let (replay_watch, _replay_watch_rx) = watch::channel(0u64);
+    let exit_code = Arc::new(Mutex::new(None));
     let session = Arc::new(Session {
         #[cfg(unix)]
         reader_control: reader_control.clone(),
@@ -503,6 +566,8 @@ pub(super) fn run(host: Host, size: PtySize, parts: Parts) -> Result<Arc<Session
         link: link.clone(),
         attachment: RwLock::new(Attachment::new(owner.clone(), token)),
         replay: Arc::new(Mutex::new(ReplayLog::new(size.cols, size.rows))),
+        replay_watch: replay_watch.clone(),
+        exit_code: exit_code.clone(),
         killer: Mutex::new(killer),
         input: input.clone(),
         master: Arc::new(Mutex::new(Some(master))),
@@ -534,6 +599,7 @@ pub(super) fn run(host: Host, size: PtySize, parts: Parts) -> Result<Arc<Session
     let spawn_at = Instant::now();
     let output_r = output.clone();
     let replay_r = session.replay.clone();
+    let replay_watch_r = replay_watch.clone();
     let reader_thread = thread::Builder::new()
         .name("terax-pty-reader".into())
         .stack_size(READER_STACK)
@@ -588,7 +654,10 @@ pub(super) fn run(host: Host, size: PtySize, parts: Parts) -> Result<Arc<Session
                         if chunk.is_empty() {
                             continue;
                         }
-                        let _ = replay_r.lock().unwrap().push_output(chunk);
+                        let seq = replay_r.lock().unwrap().push_output(chunk);
+                        if let Ok(seq) = seq {
+                            let _ = replay_watch_r.send(seq);
+                        }
                         if !output_r.push(chunk) {
                             #[cfg(windows)]
                             continue;
@@ -619,6 +688,9 @@ pub(super) fn run(host: Host, size: PtySize, parts: Parts) -> Result<Arc<Session
 
     let output_e = output;
     let finished_w = finished;
+    let replay_e = session.replay.clone();
+    let replay_watch_e = replay_watch.clone();
+    let exit_code_e = exit_code.clone();
     #[cfg(windows)]
     let master_e = session.master.clone();
     thread::Builder::new()
@@ -657,7 +729,11 @@ pub(super) fn run(host: Host, size: PtySize, parts: Parts) -> Result<Arc<Session
             // data frame was acknowledged (or the drain deadline passed).
             output_e.set_exit_code(code);
             output_e.wait_finished();
+            *exit_code_e.lock().unwrap() = Some(code);
             finished_w.store(true, Ordering::Release);
+            // The final value is a wake-up even when the sequence is unchanged.
+            let seq = replay_e.lock().unwrap().sequence();
+            let _ = replay_watch_e.send(seq);
             reap();
         })
         .map_err(|e| spawn_error("waiter", e))?;
@@ -1032,6 +1108,51 @@ mod tests {
         let second = "^[]11;rgb:ffff/ffff/ffff^[\\^[[?62;22;52c";
         assert_eq!(text.trim(), format!("{first}{second}"));
         reaped.recv_timeout(Duration::from_secs(5)).unwrap();
+    }
+
+    #[test]
+    fn replay_changes_wake_a_subscriber_and_resume_exactly_after_the_checkpoint() {
+        let (_hub, session, _frontend, reaped) =
+            start("stty raw -echo; printf one; sleep 0.6; printf two; sleep 30");
+        let mut notices = session.subscribe_replay();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !String::from_utf8_lossy(&joined(&session.replay_snapshot().events)).contains("one")
+        {
+            assert!(Instant::now() < deadline, "no first output");
+            thread::sleep(Duration::from_millis(10));
+        }
+        let checkpoint = session.replay_sequence();
+        assert!(session.replay_after(checkpoint).unwrap().is_empty());
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(10), notices.changed())
+                    .await
+                    .expect("a replay change wakes the subscriber")
+                    .unwrap();
+            });
+        assert!(*notices.borrow() > checkpoint);
+        let resumed = joined(&session.replay_after(checkpoint).unwrap());
+        assert_eq!(
+            String::from_utf8_lossy(&resumed),
+            "two",
+            "exactly the events after the checkpoint"
+        );
+        session.close_output();
+        let _ = session.killer.lock().unwrap().kill();
+        reaped.recv_timeout(Duration::from_secs(10)).unwrap();
+    }
+
+    fn joined(events: &[crate::modules::pty::replay::ReplayEvent]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for event in events {
+            if let crate::modules::pty::replay::ReplayEvent::Output { bytes: chunk } = event {
+                bytes.extend_from_slice(chunk);
+            }
+        }
+        bytes
     }
 
     #[test]

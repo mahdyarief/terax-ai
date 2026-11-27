@@ -37,7 +37,8 @@ use attachment::{AttachToken, LeaseEpoch};
 use hub::{Command, Hub};
 pub use presentation::PresentationClass;
 pub use protocol::stream_protocol;
-use session::Session;
+pub(crate) use replay::{ReplayError, ReplayEvent};
+pub(crate) use session::{ReplaySnapshot, Session};
 use terminal_colors::TerminalColors;
 
 /// Largest `pty_set_presentation` batch accepted; a window never has more

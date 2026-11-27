@@ -49,9 +49,9 @@
 ## Phase 1: Backend (Rust, `src-tauri/src/modules/web_remote/`)
 
 ### Task 1: replay change notification
-- [ ] Add a `tokio::sync::watch::Sender<u64>` to `Session`, holding the replay sequence. The reader bumps it after every `push_output` and `push_resize`; exit sends a final value.
-- [ ] `Session::subscribe_replay() -> watch::Receiver<u64>`.
-- [ ] Test: pushing output wakes a receiver with the new sequence, and `replay_after(old)` returns exactly the new events.
+- [x] Add a `tokio::sync::watch::Sender<u64>` to `Session`, holding the replay sequence. The reader bumps it after every `push_output` and `push_resize`; exit sends a final value.
+- [x] `Session::subscribe_replay() -> watch::Receiver<u64>`.
+- [x] Test: pushing output wakes a receiver with the new sequence, and `replay_after(old)` returns exactly the new events.
 
 ### Task 2: tab registry
 - [ ] Command `remote_publish_tabs(tabs: Vec<RemoteTab>)`. The window label comes from the calling webview, never from the payload. The registry is keyed by window label. A version counter and a `watch` channel go up on every change, and a window's tabs are dropped when the window closes.
