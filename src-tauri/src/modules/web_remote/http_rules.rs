@@ -4,6 +4,8 @@
 
 use std::net::IpAddr;
 
+use hyper::header::{HeaderMap, ORIGIN};
+
 /// Where the web client lives in the bundle, and the only page served.
 pub const WEB_INDEX: &str = "web-index.html";
 pub const WEB_INDEX_PATH: &str = "/web-index.html";
@@ -97,6 +99,52 @@ fn split_host_port(host: &str) -> Option<(&str, Option<u16>)> {
         None => Some((host, None)),
     }
     .filter(|(name, _)| !name.is_empty())
+}
+
+/// The cookie a paired device carries. `HttpOnly` and `SameSite=Strict`, so
+/// page script cannot read it and no other site can send it.
+pub const DEVICE_COOKIE: &str = "terax_remote";
+/// Every POST must carry this, so a plain HTML form cannot reach the API.
+pub const REMOTE_HEADER: &str = "x-terax-remote";
+
+pub fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
+    let header = headers.get(hyper::header::COOKIE)?.to_str().ok()?;
+    header.split(';').find_map(|pair| {
+        let (key, value) = pair.trim().split_once('=')?;
+        (key == name).then(|| value.trim().to_string())
+    })
+}
+
+/// A browser telling us another site made this request.
+pub fn is_cross_site(headers: &HeaderMap) -> bool {
+    headers
+        .get("sec-fetch-site")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("cross-site"))
+}
+
+/// The `Origin` names the same server the `Host` does. The scheme is not
+/// compared: behind `tailscale serve` the browser speaks HTTPS while the
+/// listener behind it speaks HTTP. A cross-site page cannot forge either.
+pub fn same_origin(headers: &HeaderMap) -> bool {
+    let Some(origin) = headers.get(ORIGIN).and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let Some(host) = headers
+        .get(hyper::header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    let origin = origin.trim().to_ascii_lowercase();
+    let rest = origin
+        .strip_prefix("https://")
+        .or_else(|| origin.strip_prefix("http://"));
+    rest.is_some_and(|rest| rest == host.trim().to_ascii_lowercase())
+}
+
+pub fn remote_header_present(headers: &HeaderMap) -> bool {
+    headers.contains_key(REMOTE_HEADER)
 }
 
 /// The bundled file a URL names, or `None` for anything not part of the web
@@ -222,6 +270,36 @@ mod tests {
         ] {
             assert_eq!(asset_key(bad), None, "{bad}");
         }
+    }
+
+    #[test]
+    fn cookies_are_found_by_name_and_post_checks_are_strict() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            hyper::header::COOKIE,
+            "other=1; terax_remote=abc; third=2".parse().unwrap(),
+        );
+        assert_eq!(cookie(&headers, DEVICE_COOKIE).as_deref(), Some("abc"));
+        assert_eq!(cookie(&headers, "missing"), None);
+
+        headers.insert(hyper::header::HOST, "box.tail.ts.net:7600".parse().unwrap());
+        headers.insert(ORIGIN, "https://box.tail.ts.net:7600".parse().unwrap());
+        assert!(same_origin(&headers));
+        headers.insert(ORIGIN, "http://box.tail.ts.net:7600".parse().unwrap());
+        assert!(same_origin(&headers));
+        headers.insert(ORIGIN, "https://evil.example".parse().unwrap());
+        assert!(!same_origin(&headers));
+        assert!(!same_origin(&HeaderMap::new()));
+
+        headers.insert("sec-fetch-site", "cross-site".parse().unwrap());
+        assert!(is_cross_site(&headers));
+        headers.insert("sec-fetch-site", "same-origin".parse().unwrap());
+        assert!(!is_cross_site(&headers));
+
+        let mut post = HeaderMap::new();
+        assert!(!remote_header_present(&post));
+        post.insert(REMOTE_HEADER, "1".parse().unwrap());
+        assert!(remote_header_present(&post));
     }
 
     #[test]

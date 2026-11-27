@@ -68,11 +68,11 @@
 - [x] Tests: Host rejection, traversal and unknown path give 404, and the headers are present.
 
 ### Task 4: pairing and devices
-- [ ] Pairing code from `A-Z2-9` without lookalikes, 6 characters, single use, 10 min TTL, 5 attempts. `remote_pairing_start` returns `{ code, url }` with `url = http(s)://<host>:<port>/web-index.html#pair=<code>`.
-- [ ] `POST /api/pair` with `{ code, deviceName }`. On success it sets the device cookie.
-- [ ] Device store in app data (`remote-devices.json`, 0600 on Unix): `{ id, name, tokenSha256, grant: { input, tabs }, createdAt, lastSeen }`. Tokens are compared in constant time.
-- [ ] Commands `remote_devices_list`, `remote_device_update(grant)`, `remote_device_revoke`. Revoking closes that device's streams.
-- [ ] Tests: expiry, attempt limit, single use, a revoked cookie gets 401, a cross-site POST gets 403, and a missing header gets 403.
+- [x] Pairing code from `A-Z2-9` without lookalikes, 6 characters, single use, 10 min TTL, 5 attempts. `remote_pairing_start` returns `{ code, url }` with `url = http(s)://<host>:<port>/web-index.html#pair=<code>`.
+- [x] `POST /api/pair` with `{ code, deviceName }`. On success it sets the device cookie.
+- [x] Device store in app data (`remote-devices.json`, 0600 on Unix): `{ id, name, tokenSha256, grant: { input, tabs }, createdAt, lastSeen }`. Tokens are compared in constant time.
+- [x] Commands `remote_devices_list`, `remote_device_update(grant)`, `remote_device_revoke`. Revoking closes that device's streams.
+- [x] Tests: expiry, attempt limit, single use, a revoked cookie gets 401, a cross-site POST gets 403, and a missing header gets 403.
 
 ### Task 5: `GET /api/tabs` (SSE)
 - [ ] Event `tabs` carries the full registry snapshot on connect and on every version bump. A heartbeat goes out every 25 s.

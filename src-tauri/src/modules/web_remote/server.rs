@@ -13,16 +13,19 @@ use std::sync::Arc;
 use base64::Engine;
 use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Incoming;
-use hyper::header::{HeaderValue, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, HOST};
+use hyper::header::{HeaderValue, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, HOST, SET_COOKIE};
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tokio::sync::watch;
 
-use super::http_rules::{self, HostPolicy};
+use super::devices::{Caller, DeviceStore, Pairing};
+use super::http_rules::{
+    self, cookie, is_cross_site, remote_header_present, same_origin, HostPolicy, DEVICE_COOKIE,
+};
 use super::tabs::TabRegistry;
 
 /// Where a device reaches the server.
@@ -128,6 +131,11 @@ pub(crate) struct Deps {
     pub tabs: Arc<TabRegistry>,
     pub hosts: HostPolicy,
     pub viewers: Arc<AtomicUsize>,
+    pub devices: Arc<DeviceStore>,
+    pub pairing: Arc<Pairing>,
+    /// Whether browsers reach us over HTTPS (through `tailscale serve`), so
+    /// the device cookie can be `Secure`.
+    pub https: bool,
 }
 
 pub(crate) type Body = BoxBody<Bytes, Infallible>;
@@ -171,13 +179,111 @@ pub(crate) async fn respond(deps: &Deps, request: Request<Incoming>) -> Response
         return secure(text(StatusCode::FORBIDDEN, "This host is not allowed."));
     }
     let path = request.uri().path().to_string();
-    match request.method() {
-        &Method::GET | &Method::HEAD => serve_static(deps, &path, request.method() == Method::HEAD),
-        _ => secure(text(
+    if request.method() == Method::POST {
+        return post(deps, request, &path).await;
+    }
+    if request.method() != Method::GET && request.method() != Method::HEAD {
+        return secure(text(
             StatusCode::METHOD_NOT_ALLOWED,
             "Only GET and HEAD are served here.",
-        )),
+        ));
     }
+    if path == "/api/me" {
+        return match caller(deps, request.headers()) {
+            Some(caller) => secure(json(StatusCode::OK, &device_json(&caller))),
+            None => secure(text(StatusCode::UNAUTHORIZED, "Pair this device first.")),
+        };
+    }
+    serve_static(deps, &path, request.method() == Method::HEAD)
+}
+
+/// Every POST is same-origin, marked by the web client, and not cross-site.
+/// Pairing is not exempt: the page that pairs was served from here.
+async fn post(deps: &Deps, request: Request<Incoming>, path: &str) -> Response<Body> {
+    if is_cross_site(request.headers()) {
+        return secure(text(
+            StatusCode::FORBIDDEN,
+            "Cross-site requests are refused.",
+        ));
+    }
+    if !same_origin(request.headers()) {
+        return secure(text(StatusCode::FORBIDDEN, "This origin is not allowed."));
+    }
+    if !remote_header_present(request.headers()) {
+        return secure(text(
+            StatusCode::FORBIDDEN,
+            "Missing the web client's request header.",
+        ));
+    }
+    match path {
+        "/api/pair" => pair(deps, request).await,
+        _ => secure(text(StatusCode::NOT_FOUND, "Not found.")),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PairRequest {
+    code: String,
+    device_name: String,
+}
+
+async fn pair(deps: &Deps, request: Request<Incoming>) -> Response<Body> {
+    let body = match read_body(request, 4096).await {
+        Ok(body) => body,
+        Err(response) => return response,
+    };
+    let Ok(pairing) = serde_json::from_slice::<PairRequest>(&body) else {
+        return secure(text(StatusCode::BAD_REQUEST, "Expected a code and a name."));
+    };
+    let name = pairing.device_name.trim();
+    if name.is_empty() {
+        return secure(text(StatusCode::BAD_REQUEST, "Give this device a name."));
+    }
+    if let Err(error) = deps.pairing.consume(&pairing.code) {
+        return secure(text(StatusCode::FORBIDDEN, error.message()));
+    }
+    let (info, token) = deps.devices.add(name);
+    let mut response = secure(json(StatusCode::OK, &info));
+    let cookie = cookie_header(&token, deps.https);
+    if let Ok(value) = HeaderValue::from_str(&cookie) {
+        response.headers_mut().insert(SET_COOKIE, value);
+    }
+    log::info!("remote device paired: {}", info.name);
+    response
+}
+
+fn cookie_header(token: &str, secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!("{DEVICE_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000{secure}")
+}
+
+/// The device behind a request, from its cookie. A revoked device's cookie no
+/// longer resolves, and its requests get 401.
+fn caller(deps: &Deps, headers: &hyper::header::HeaderMap) -> Option<Caller> {
+    let token = cookie(headers, DEVICE_COOKIE)?;
+    deps.devices.authenticate(&token)
+}
+
+fn device_json(caller: &Caller) -> serde_json::Value {
+    serde_json::json!({
+        "id": caller.id,
+        "name": caller.name,
+        "grant": { "input": caller.grant.input, "tabs": caller.grant.tabs },
+    })
+}
+
+async fn read_body(request: Request<Incoming>, limit: usize) -> Result<Vec<u8>, Response<Body>> {
+    let collected = Limited::new(request.into_body(), limit)
+        .collect()
+        .await
+        .map_err(|_| {
+            secure(text(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "That request body is too large.",
+            ))
+        })?;
+    Ok(collected.to_bytes().to_vec())
 }
 
 fn serve_static(deps: &Deps, path: &str, head: bool) -> Response<Body> {
@@ -399,6 +505,9 @@ mod tests {
             tabs: Arc::new(TabRegistry::new()),
             hosts: HostPolicy::loopback(port),
             viewers: Arc::new(AtomicUsize::new(0)),
+            devices: Arc::new(super::super::devices::DeviceStore::memory()),
+            pairing: Arc::new(super::super::devices::Pairing::default()),
+            https: false,
         }
     }
 
@@ -415,18 +524,64 @@ mod tests {
         out
     }
 
-    fn serve_for_test() -> (u16, watch::Sender<bool>) {
+    fn serve_for_test() -> (u16, watch::Sender<bool>, Deps) {
         let listener =
             tauri::async_runtime::block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
         let port = listener.local_addr().unwrap().port();
         let (stop, stopped) = watch::channel(false);
-        tauri::async_runtime::spawn(accept_loop(listener, deps(port), stopped));
-        (port, stop)
+        let deps = deps(port);
+        tauri::async_runtime::spawn(accept_loop(listener, deps.clone(), stopped));
+        (port, stop, deps)
+    }
+
+    fn raw_request(port: u16, request: &str) -> String {
+        use std::io::{Read, Write};
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut out = String::new();
+        stream.read_to_string(&mut out).unwrap();
+        out
+    }
+
+    fn post(port: u16, host: &str, path: &str, extra: &[(&str, &str)], body: &str) -> String {
+        let origin = format!("http://{host}");
+        let mut headers = vec![
+            ("Host", host.to_string()),
+            ("Origin", origin),
+            ("x-terax-remote", "1".to_string()),
+            ("Content-Type", "application/json".to_string()),
+            ("Content-Length", body.len().to_string()),
+            ("Connection", "close".to_string()),
+        ];
+        for (name, value) in extra {
+            headers.retain(|(existing, _)| !existing.eq_ignore_ascii_case(name));
+            // An empty value means "leave this header out".
+            if !value.is_empty() {
+                headers.push((name, value.to_string()));
+            }
+        }
+        let headers: String = headers
+            .into_iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect();
+        raw_request(
+            port,
+            &format!("POST {path} HTTP/1.1\r\n{headers}\r\n{body}"),
+        )
+    }
+
+    fn set_cookie(response: &str) -> Option<String> {
+        response.lines().find_map(|line| {
+            if !line.to_ascii_lowercase().starts_with("set-cookie:") {
+                return None;
+            }
+            Some(line[11..].trim().split(';').next()?.to_string())
+        })
     }
 
     #[test]
     fn the_server_serves_the_page_and_assets_to_its_own_host_only() {
-        let (port, stop) = serve_for_test();
+        let (port, stop, _deps) = serve_for_test();
         let page = raw_get(port, &format!("localhost:{port}"), "/web-index.html");
         assert!(page.starts_with("HTTP/1.1 200"), "{page}");
         let lower = page.to_ascii_lowercase();
@@ -453,6 +608,78 @@ mod tests {
             let out = raw_get(port, &format!("localhost:{port}"), missing);
             assert!(out.starts_with("HTTP/1.1 404"), "{missing}: {out}");
         }
+        let _ = stop.send(true);
+    }
+
+    #[test]
+    fn pairing_sets_a_cookie_and_revoking_the_device_ends_its_access() {
+        let (port, stop, deps) = serve_for_test();
+        let host = format!("localhost:{port}");
+        let code = deps.pairing.start();
+        let cookie = format!("{{\"code\":\"{code}\",\"deviceName\":\"phone\"}}");
+        let response = post(port, &host, "/api/pair", &[], &cookie);
+        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        let device_cookie = set_cookie(&response).expect("a device cookie");
+        assert!(device_cookie.starts_with("terax_remote="));
+        assert!(response.contains("HttpOnly") && response.contains("SameSite=Strict"));
+        assert!(!response.contains("Secure"), "plain HTTP cannot set Secure");
+
+        let me = raw_request(
+            port,
+            &format!(
+                "GET /api/me HTTP/1.1\r\nHost: {host}\r\nCookie: {device_cookie}\r\nConnection: close\r\n\r\n"
+            ),
+        );
+        assert!(me.starts_with("HTTP/1.1 200"), "{me}");
+        assert!(me.contains("\"phone\""));
+
+        // The same code cannot pair twice.
+        let again = post(port, &host, "/api/pair", &[], &cookie);
+        assert!(again.starts_with("HTTP/1.1 403"), "{again}");
+
+        for device in deps.devices.list() {
+            deps.devices.revoke(&device.id);
+        }
+        let revoked = raw_request(
+            port,
+            &format!(
+                "GET /api/me HTTP/1.1\r\nHost: {host}\r\nCookie: {device_cookie}\r\nConnection: close\r\n\r\n"
+            ),
+        );
+        assert!(revoked.starts_with("HTTP/1.1 401"), "{revoked}");
+        let _ = stop.send(true);
+    }
+
+    #[test]
+    fn a_post_without_the_client_header_or_from_another_site_is_refused() {
+        let (port, stop, _deps) = serve_for_test();
+        let host = format!("localhost:{port}");
+        let body = "{\"code\":\"AAAAAA\",\"deviceName\":\"phone\"}";
+
+        let no_header = post(port, &host, "/api/pair", &[("x-terax-remote", "")], body);
+        assert!(
+            no_header.starts_with("HTTP/1.1 403"),
+            "missing header: {no_header}"
+        );
+        let cross = post(
+            port,
+            &host,
+            "/api/pair",
+            &[("Sec-Fetch-Site", "cross-site")],
+            body,
+        );
+        assert!(cross.starts_with("HTTP/1.1 403"), "cross-site: {cross}");
+        let wrong_origin = post(
+            port,
+            &host,
+            "/api/pair",
+            &[("Origin", "https://evil.example")],
+            body,
+        );
+        assert!(
+            wrong_origin.starts_with("HTTP/1.1 403"),
+            "origin: {wrong_origin}"
+        );
         let _ = stop.send(true);
     }
 
