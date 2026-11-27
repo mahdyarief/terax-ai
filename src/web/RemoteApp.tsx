@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import type { Device } from "./api";
+import { requestTabAction, type Device } from "./api";
 import {
   activePane,
   panes,
@@ -63,24 +63,38 @@ function TabButton({
   tab,
   active,
   onSelect,
+  onClose,
 }: {
   tab: RemoteTab;
   active: boolean;
   onSelect: () => void;
+  onClose: (() => void) | null;
 }) {
-  const terminal = tab.kind === "terminal";
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      disabled={!terminal}
-      className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs ${
+    <div
+      className={`flex w-full items-center gap-2 rounded pr-1 text-xs ${
         active ? "bg-accent text-accent-foreground" : "hover:bg-accent/50"
-      } ${terminal ? "" : "opacity-60"}`}
+      }`}
     >
-      <span className="min-w-0 flex-1 truncate">{tab.title}</span>
-      {terminal ? <AgentChip tab={tab} /> : <span>tab</span>}
-    </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-left"
+      >
+        <span className="min-w-0 flex-1 truncate">{tab.title}</span>
+        <AgentChip tab={tab} />
+      </button>
+      {onClose ? (
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={`Close ${tab.title}`}
+          className="rounded px-1.5 py-1 text-muted-foreground hover:bg-background hover:text-foreground"
+        >
+          ×
+        </button>
+      ) : null}
+    </div>
   );
 }
 
@@ -88,18 +102,34 @@ function TabList({
   groups,
   currentKey,
   onSelect,
+  onClose,
+  onNew,
 }: {
   groups: Group[];
   currentKey: string | null;
   onSelect: (tab: RemoteTab) => void;
+  onClose: ((tab: RemoteTab) => void) | null;
+  onNew: ((group: Group) => void) | null;
 }) {
   return (
     <div className="flex flex-col gap-3 p-2">
       {groups.map((group) => (
         <section key={group.key}>
-          <h2 className="px-2 pb-1 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
-            {group.label}
-          </h2>
+          <div className="flex items-center gap-1 px-2 pb-1">
+            <h2 className="min-w-0 flex-1 truncate text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">
+              {group.label}
+            </h2>
+            {onNew ? (
+              <button
+                type="button"
+                onClick={() => onNew(group)}
+                aria-label={`New terminal in ${group.label}`}
+                className="rounded px-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+              >
+                +
+              </button>
+            ) : null}
+          </div>
           <ul className="flex flex-col gap-0.5">
             {group.tabs.map((tab) => (
               <li key={`${tab.window}:${tab.id}`}>
@@ -107,6 +137,7 @@ function TabList({
                   tab={tab}
                   active={`${tab.window}:${tab.id}` === currentKey}
                   onSelect={() => onSelect(tab)}
+                  onClose={onClose ? () => onClose(tab) : null}
                 />
               </li>
             ))}
@@ -157,6 +188,15 @@ export default function RemoteApp({ device }: { device: Device }) {
   const [leafByTab, setLeafByTab] = useState<Record<string, number>>({});
   const [drawer, setDrawer] = useState(false);
   const [typing, setTyping] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const manageTabs = device.grant.tabs;
+
+  const act = (action: Parameters<typeof requestTabAction>[0]) => {
+    setActionError(null);
+    void requestTabAction(action).catch((error: unknown) => {
+      setActionError(error instanceof Error ? error.message : String(error));
+    });
+  };
 
   const groups = useMemo(
     () =>
@@ -189,7 +229,26 @@ export default function RemoteApp({ device }: { device: Device }) {
     setDrawer(false);
   };
 
-  const list = <TabList groups={groups} currentKey={key} onSelect={select} />;
+  const list = (
+    <TabList
+      groups={groups}
+      currentKey={key}
+      onSelect={select}
+      onClose={
+        manageTabs ? (tab) => act({ action: "close", tabId: tab.id }) : null
+      }
+      onNew={
+        manageTabs
+          ? (group) => {
+              const spaceId = group.tabs[0]?.spaceId;
+              if (spaceId) {
+                act({ action: "new", spaceId, mode: "terminal" });
+              }
+            }
+          : null
+      }
+    />
+  );
 
   return (
     <main className="flex h-dvh flex-col bg-background text-foreground">
@@ -221,6 +280,15 @@ export default function RemoteApp({ device }: { device: Device }) {
           {device.name}
         </span>
       </header>
+
+      {actionError ? (
+        <p
+          role="alert"
+          className="bg-destructive/10 px-3 py-1 text-xs text-destructive"
+        >
+          {actionError}
+        </p>
+      ) : null}
 
       <div className="relative flex min-h-0 flex-1">
         <nav className="hidden w-56 shrink-0 overflow-y-auto border-r border-border md:block">

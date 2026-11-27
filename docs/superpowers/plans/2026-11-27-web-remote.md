@@ -133,7 +133,7 @@
 - [x] A paste box sends text as one write.
 
 ### Task 15: tab actions
-- [ ] "New terminal" per workspace, and "Close" on a tab, when the device has the grant.
+- [x] "New terminal" per workspace, and "Close" on a tab, when the device has the grant.
 
 ## Phase 3: Desktop controls
 
