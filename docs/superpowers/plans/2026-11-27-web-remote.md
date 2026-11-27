@@ -93,9 +93,9 @@
 - [x] Tests: snapshot then live data, resume by id, lag leads to a snapshot, an unknown id gives 404.
 
 ### Task 7: `POST /api/pty/:id/input`
-- [ ] Requires `grant.input`. The body is raw bytes, at most 64 KiB.
-- [ ] Input goes through a new `Session::write_remote(bytes)` into the same ordered writer queue. It does not need the window's attachment lease, because it never takes the attachment.
-- [ ] Tests: refused without the grant, and the bytes arrive in order.
+- [x] Requires `grant.input`. The body is raw bytes, at most 64 KiB.
+- [x] Input goes through a new `Session::write_remote(bytes)` into the same ordered writer queue. It does not need the window's attachment lease, because it never takes the attachment.
+- [x] Tests: refused without the grant, and the bytes arrive in order.
 
 ### Task 8: remote tab actions
 - [ ] `POST /api/tabs` with `{ action: "new", spaceId, mode }` or `{ action: "close", tabId }`. Requires `grant.tabs`.

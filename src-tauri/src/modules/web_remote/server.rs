@@ -250,6 +250,10 @@ fn tabs_stream(deps: &Deps, headers: &hyper::header::HeaderMap) -> Response<Body
     secure(sse::response(rx))
 }
 
+/// Largest input a browser may take in one write. A paste larger than this
+/// is split by the client.
+pub(crate) const MAX_INPUT_BYTES: usize = 64 * 1024;
+
 /// `/api/pty/<id>/<action>`.
 fn pty_route(path: &str) -> Option<(u32, &str)> {
     let rest = path.strip_prefix("/api/pty/")?;
@@ -307,7 +311,44 @@ async fn post(deps: &Deps, request: Request<Incoming>, path: &str) -> Response<B
     }
     match path {
         "/api/pair" => pair(deps, request).await,
-        _ => secure(text(StatusCode::NOT_FOUND, "Not found.")),
+        _ => match pty_route(path) {
+            Some((id, "input")) => pty_input(deps, request, id).await,
+            _ => secure(text(StatusCode::NOT_FOUND, "Not found.")),
+        },
+    }
+}
+
+/// Raw bytes typed at a browser, written through the session's ordered
+/// writer queue exactly as the desktop's own keystrokes are.
+async fn pty_input(deps: &Deps, request: Request<Incoming>, id: u32) -> Response<Body> {
+    let Some(caller) = caller(deps, request.headers()) else {
+        return secure(text(StatusCode::UNAUTHORIZED, "Pair this device first."));
+    };
+    if !caller.grant.input {
+        return secure(text(
+            StatusCode::FORBIDDEN,
+            "This device may watch but not type.",
+        ));
+    }
+    if !stream::listed(&deps.tabs, id) {
+        return secure(text(StatusCode::NOT_FOUND, "No such terminal."));
+    }
+    let Some(terminal) = deps.sessions.terminal(id) else {
+        return secure(text(StatusCode::NOT_FOUND, "No such terminal."));
+    };
+    let bytes = match read_body(request, MAX_INPUT_BYTES).await {
+        Ok(bytes) => bytes,
+        Err(response) => return response,
+    };
+    match terminal.write_remote(bytes).await {
+        Ok(()) => secure(json(StatusCode::OK, &serde_json::json!({ "ok": true }))),
+        Err(error) => {
+            log::debug!("remote input to pty {id} failed: {error}");
+            secure(text(
+                StatusCode::CONFLICT,
+                "The terminal is not taking input.",
+            ))
+        }
     }
 }
 
@@ -621,13 +662,93 @@ mod tests {
     }
 
     fn serve_for_test() -> (u16, watch::Sender<bool>, Deps) {
+        serve_with(Arc::new(NoSessions))
+    }
+
+    fn serve_with(sessions: Arc<dyn PtySessions>) -> (u16, watch::Sender<bool>, Deps) {
         let listener =
             tauri::async_runtime::block_on(tokio::net::TcpListener::bind("127.0.0.1:0")).unwrap();
         let port = listener.local_addr().unwrap().port();
         let (stop, stopped) = watch::channel(false);
-        let deps = deps(port);
+        let mut deps = deps(port);
+        deps.sessions = sessions;
         tauri::async_runtime::spawn(accept_loop(listener, deps.clone(), stopped));
         (port, stop, deps)
+    }
+
+    #[derive(Default)]
+    struct RecordingTerminal {
+        writes: std::sync::Mutex<Vec<u8>>,
+    }
+
+    impl stream::Terminal for RecordingTerminal {
+        fn subscribe(&self) -> watch::Receiver<u64> {
+            let (_tx, rx) = watch::channel(0u64);
+            rx
+        }
+
+        fn snapshot(&self) -> crate::modules::pty::ReplaySnapshot {
+            crate::modules::pty::ReplaySnapshot {
+                events: Vec::new(),
+                sequence: 0,
+                cols: 80,
+                rows: 24,
+                truncated: false,
+            }
+        }
+
+        fn replay_after(
+            &self,
+            _checkpoint: u64,
+        ) -> Result<Vec<crate::modules::pty::ReplayEvent>, crate::modules::pty::ReplayError>
+        {
+            Ok(Vec::new())
+        }
+
+        fn exit_code(&self) -> Option<i32> {
+            None
+        }
+
+        fn theme(&self) -> Option<crate::modules::pty::TerminalColors> {
+            None
+        }
+
+        fn write_remote<'a>(
+            &'a self,
+            bytes: Vec<u8>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>
+        {
+            self.writes.lock().unwrap().extend_from_slice(&bytes);
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    struct OneTerminal(Arc<RecordingTerminal>);
+
+    impl PtySessions for OneTerminal {
+        fn terminal(&self, _id: u32) -> Option<Arc<dyn stream::Terminal>> {
+            Some(self.0.clone())
+        }
+    }
+
+    fn publish_pty(deps: &Deps, pty_id: u32) {
+        deps.tabs.publish(
+            "main",
+            vec![crate::modules::web_remote::tabs::RemoteTab {
+                id: 1,
+                title: "shell".into(),
+                kind: "terminal".into(),
+                space_id: Some("default".into()),
+                workspace: None,
+                mode: Some("terminal".into()),
+                panes: vec![crate::modules::web_remote::tabs::RemotePane {
+                    leaf_id: 1,
+                    pty_id: Some(pty_id),
+                    active: true,
+                }],
+                agent: None,
+            }],
+        );
     }
 
     fn raw_request(port: u16, request: &str) -> String {
@@ -852,6 +973,54 @@ mod tests {
         }
         let response = read_until(&mut stream, "\r\n\r\n");
         assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+        let _ = stop.send(true);
+    }
+
+    #[test]
+    fn input_needs_the_grant_and_arrives_in_order() {
+        let terminal = Arc::new(RecordingTerminal::default());
+        let (port, stop, deps) = serve_with(Arc::new(OneTerminal(terminal.clone())));
+        let host = format!("localhost:{port}");
+        publish_pty(&deps, 7);
+        let (info, token) = deps.devices.add("phone");
+
+        let refused = post(
+            port,
+            &host,
+            "/api/pty/7/input",
+            &[("Cookie", &format!("terax_remote={token}"))],
+            "abc",
+        );
+        assert!(refused.starts_with("HTTP/1.1 403"), "{refused}");
+        assert!(terminal.writes.lock().unwrap().is_empty());
+
+        assert!(deps.devices.update(
+            &info.id,
+            crate::modules::web_remote::devices::Grant {
+                input: true,
+                tabs: false
+            }
+        ));
+        for chunk in ["abc", "def"] {
+            let response = post(
+                port,
+                &host,
+                "/api/pty/7/input",
+                &[("Cookie", &format!("terax_remote={token}"))],
+                chunk,
+            );
+            assert!(response.starts_with("HTTP/1.1 200"), "{response}");
+        }
+        assert_eq!(&*terminal.writes.lock().unwrap(), b"abcdef");
+
+        let unlisted = post(
+            port,
+            &host,
+            "/api/pty/8/input",
+            &[("Cookie", &format!("terax_remote={token}"))],
+            "x",
+        );
+        assert!(unlisted.starts_with("HTTP/1.1 404"), "{unlisted}");
         let _ = stop.send(true);
     }
 

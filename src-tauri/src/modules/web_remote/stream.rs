@@ -34,6 +34,12 @@ pub(crate) trait Terminal: Send + Sync {
     fn replay_after(&self, checkpoint: u64) -> Result<Vec<ReplayEvent>, ReplayError>;
     fn exit_code(&self) -> Option<i32>;
     fn theme(&self) -> Option<TerminalColors>;
+    /// Typing shares the session's ordered writer queue with the desktop; it
+    /// never takes the attachment lease.
+    fn write_remote<'a>(
+        &'a self,
+        bytes: Vec<u8>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>;
 }
 
 struct SessionTerminal(Arc<Session>);
@@ -57,6 +63,13 @@ impl Terminal for SessionTerminal {
 
     fn theme(&self) -> Option<TerminalColors> {
         self.0.theme()
+    }
+
+    fn write_remote<'a>(
+        &'a self,
+        bytes: Vec<u8>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>> {
+        Box::pin(self.0.write_remote(bytes))
     }
 }
 
@@ -278,6 +291,7 @@ mod tests {
         _keepalive: watch::Receiver<u64>,
         exit: StdMutex<Option<i32>>,
         dimensions: StdMutex<(u16, u16)>,
+        writes: StdMutex<Vec<u8>>,
     }
 
     impl FakeTerminal {
@@ -293,6 +307,7 @@ mod tests {
                 _keepalive: keepalive,
                 exit: StdMutex::new(None),
                 dimensions: StdMutex::new((cols, rows)),
+                writes: StdMutex::new(Vec::new()),
             });
             if !initial.is_empty() {
                 terminal.push(initial);
@@ -421,6 +436,15 @@ mod tests {
         fn theme(&self) -> Option<TerminalColors> {
             None
         }
+
+        fn write_remote<'a>(
+            &'a self,
+            bytes: Vec<u8>,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>> + Send + 'a>>
+        {
+            self.writes.lock().unwrap().extend_from_slice(&bytes);
+            Box::pin(async { Ok(()) })
+        }
     }
 
     fn device() -> (Arc<DeviceStore>, String) {
@@ -530,6 +554,21 @@ mod tests {
         let events = collect(&mut rx);
         assert!(events.contains("event: exit"), "{events}");
         assert!(events.contains("\"code\":3"), "{events}");
+    }
+
+    #[test]
+    fn typed_bytes_reach_the_terminal_in_order() {
+        let terminal = FakeTerminal::new(80, 24, b"");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            let terminal: Arc<dyn Terminal> = terminal.clone();
+            terminal.write_remote(b"one".to_vec()).await.unwrap();
+            terminal.write_remote(b"two".to_vec()).await.unwrap();
+        });
+        assert_eq!(&*terminal.writes.lock().unwrap(), b"onetwo");
     }
 
     #[test]
