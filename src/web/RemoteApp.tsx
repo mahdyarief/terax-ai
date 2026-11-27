@@ -156,6 +156,7 @@ export default function RemoteApp({ device }: { device: Device }) {
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [leafByTab, setLeafByTab] = useState<Record<string, number>>({});
   const [drawer, setDrawer] = useState(false);
+  const [typing, setTyping] = useState(false);
 
   const groups = useMemo(
     () =>
@@ -204,6 +205,18 @@ export default function RemoteApp({ device }: { device: Device }) {
         <h1 className="min-w-0 flex-1 truncate text-sm font-semibold">
           {current?.title ?? "Terax Remote"}
         </h1>
+        {device.grant.input ? (
+          <button
+            type="button"
+            onClick={() => setTyping((on) => !on)}
+            aria-pressed={typing}
+            className={`shrink-0 rounded px-2 py-1 text-xs ${
+              typing ? "bg-primary text-primary-foreground" : "hover:bg-accent"
+            }`}
+          >
+            {typing ? "Typing" : "Type"}
+          </button>
+        ) : null}
         <span className="shrink-0 text-xs text-muted-foreground">
           {device.name}
         </span>
@@ -251,7 +264,11 @@ export default function RemoteApp({ device }: { device: Device }) {
             }}
           />
           {ptyId !== null && current ? (
-            <RemoteTerminal ptyId={ptyId} blocks={current.mode === "blocks"} />
+            <RemoteTerminal
+              ptyId={ptyId}
+              blocks={current.mode === "blocks"}
+              typing={typing && device.grant.input}
+            />
           ) : (
             <p className="p-4 text-sm text-muted-foreground">
               {status === "live"

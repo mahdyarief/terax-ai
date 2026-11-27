@@ -10,8 +10,11 @@ import {
 } from "@/modules/terminal/ghostty/webgl/WebGlCellRenderer";
 import { GhosttyBlocks } from "@/modules/terminal/ghostty/GhosttyBlocks";
 import { useEffect, useRef, useState } from "react";
+import { sendInput } from "../api";
 import { RemoteTerminalFeed } from "./feed";
+import { encodeKeydown, encodePaste } from "./input";
 import { RemoteBlockOverlay } from "./RemoteBlockOverlay";
+import { TypingBar } from "./TypingBar";
 import {
   WEB_TERMINAL_FONT,
   createRemoteModel,
@@ -30,12 +33,18 @@ type Status = "loading" | "live" | "reconnecting" | "closed" | "error";
 export function RemoteTerminal({
   ptyId,
   blocks = false,
+  typing = false,
 }: {
   ptyId: number;
   blocks?: boolean;
+  /** The device may type here: show a keyboard target and the key row. */
+  typing?: boolean;
 }) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const hostRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const modelRef = useRef<AdaptedGhosttyTerminalModel | null>(null);
+  const [ctrl, setCtrl] = useState(false);
   const [blockSurface, setBlockSurface] = useState<{
     controller: GhosttyBlocks;
     model: AdaptedGhosttyTerminalModel;
@@ -130,6 +139,7 @@ export function RemoteTerminal({
         renderer.attach(host);
         model.subscribeDamage(schedule);
 
+        modelRef.current = model;
         const feed = new RemoteTerminalFeed(model);
         const events = new EventSource(`/api/pty/${ptyId}/stream`);
         source = events;
@@ -192,12 +202,35 @@ export function RemoteTerminal({
 
     return () => {
       disposed = true;
+      modelRef.current = null;
       source?.close();
       if (frame) cancelAnimationFrame(frame);
       model?.dispose();
       renderer?.dispose();
     };
   }, [ptyId, blocks]);
+
+  const sendBytes = (bytes: Uint8Array) => {
+    void sendInput(ptyId, bytes).catch(() => undefined);
+  };
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const model = modelRef.current;
+    if (!model || event.nativeEvent.isComposing) return;
+    const bytes = encodeKeydown(model, event.nativeEvent, { ctrl });
+    if (!bytes) return;
+    event.preventDefault();
+    setCtrl(false);
+    sendBytes(bytes);
+  };
+
+  const handlePaste = (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const model = modelRef.current;
+    const text = event.clipboardData.getData("text");
+    if (!model || !text) return;
+    event.preventDefault();
+    sendBytes(encodePaste(model, text));
+  };
 
   const fit =
     viewportWidth && natural.width
@@ -230,6 +263,17 @@ export function RemoteTerminal({
                 cellHeight={blockSurface.cellHeight}
               />
             ) : null}
+            <textarea
+              ref={inputRef}
+              readOnly={!typing}
+              aria-label="Terminal input"
+              autoCapitalize="none"
+              autoCorrect="off"
+              spellCheck={false}
+              onKeyDown={handleKeyDown}
+              onPaste={handlePaste}
+              className="absolute inset-0 size-full resize-none bg-transparent p-0 text-transparent caret-transparent outline-none"
+            />
           </div>
         </div>
       </div>
@@ -246,6 +290,18 @@ export function RemoteTerminal({
                   : (message ?? "The terminal could not be shown.")}
           </span>
         </div>
+      ) : null}
+
+      {typing ? (
+        <TypingBar
+          onBytes={sendBytes}
+          onPasteText={(text) => {
+            const model = modelRef.current;
+            if (model) sendBytes(encodePaste(model, text));
+          }}
+          ctrl={ctrl}
+          onCtrl={setCtrl}
+        />
       ) : null}
 
       <div className="flex items-center justify-end gap-1 border-t border-border bg-card px-2 py-1 text-xs">

@@ -128,9 +128,9 @@
 - [x] Phone layout: the list is a drawer.
 
 ### Task 14: input
-- [ ] A "Type" toggle, only when the device has the grant. Keys are encoded with the Ghostty input encoder.
-- [ ] A phone key row: Esc, Tab, Ctrl, arrows, Enter.
-- [ ] A paste box sends text as one write.
+- [x] A "Type" toggle, only when the device has the grant. Keys are encoded with the Ghostty input encoder.
+- [x] A phone key row: Esc, Tab, Ctrl, arrows, Enter.
+- [x] A paste box sends text as one write.
 
 ### Task 15: tab actions
 - [ ] "New terminal" per workspace, and "Close" on a tab, when the device has the grant.
