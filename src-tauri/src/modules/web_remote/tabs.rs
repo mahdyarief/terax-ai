@@ -176,7 +176,10 @@ impl TabRegistry {
         inner
             .windows
             .iter()
-            .find(|(_, tabs)| tabs.iter().any(|tab| tab.space_id.as_deref() == Some(space_id)))
+            .find(|(_, tabs)| {
+                tabs.iter()
+                    .any(|tab| tab.space_id.as_deref() == Some(space_id))
+            })
             .map(|(window, _)| window.clone())
     }
 
@@ -260,7 +263,10 @@ mod tests {
         );
         assert_eq!(registry.pty_ids(), HashSet::from([11, 12]));
         assert_eq!(registry.window_for_space("b").as_deref(), Some("space-b"));
-        assert_eq!(registry.tab(2).map(|(window, _)| window).as_deref(), Some("space-b"));
+        assert_eq!(
+            registry.tab(2).map(|(window, _)| window).as_deref(),
+            Some("space-b")
+        );
     }
 
     #[test]

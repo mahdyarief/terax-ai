@@ -3,23 +3,60 @@
 //! Off until the user turns it on. Each paired device gets its own token and
 //! grant; the HTTP server (`server.rs`) enforces both on every request.
 
+pub mod http_rules;
+pub mod server;
 pub mod tabs;
 
-use tauri::Manager;
+use std::sync::atomic::AtomicUsize;
+use std::sync::{Arc, Mutex};
 
+use tauri::{Emitter, Manager};
+use tokio::sync::watch;
+
+pub use server::{RemoteAccessInfo, RemoteBind};
 pub use tabs::{RemoteTab, TabRegistry};
+
+use server::{Deps, Running};
+
+/// The port the Settings UI offers and the server uses when none is given.
+pub const DEFAULT_PORT: u16 = 7681;
 
 /// Everything remote access keeps while Terax runs.
 pub struct WebRemoteState {
-    pub(crate) tabs: TabRegistry,
+    pub(crate) tabs: Arc<TabRegistry>,
+    pub(crate) running: Mutex<Option<Running>>,
 }
 
 impl Default for WebRemoteState {
     fn default() -> Self {
         Self {
-            tabs: TabRegistry::new(),
+            tabs: Arc::new(TabRegistry::new()),
+            running: Mutex::new(None),
         }
     }
+}
+
+impl WebRemoteState {
+    pub(crate) fn status(&self) -> RemoteAccessInfo {
+        self.running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(Running::info)
+            .unwrap_or_else(RemoteAccessInfo::off)
+    }
+
+    pub(crate) fn port(&self) -> Option<u16> {
+        self.running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|found| found.port)
+    }
+}
+
+fn emit_status(app: &tauri::AppHandle, info: &RemoteAccessInfo) {
+    let _ = app.emit("terax:remote-access", info);
 }
 
 /// A window reports its tabs. The window label is the caller's, never the
@@ -35,6 +72,72 @@ pub fn remote_publish_tabs(
     if state.tabs.pty_ids() != before {
         state.tabs.note_pty_change();
     }
+}
+
+/// Turns remote access on. The listener only binds where the chosen policy
+/// allows; binding every interface over plain HTTP needs `allowPlainLan`.
+#[tauri::command]
+pub async fn remote_access_start(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, WebRemoteState>,
+    bind: RemoteBind,
+    port: Option<u16>,
+    allow_plain_lan: Option<bool>,
+) -> Result<RemoteAccessInfo, String> {
+    let port = port.unwrap_or(DEFAULT_PORT);
+    let allow_plain_lan = allow_plain_lan.unwrap_or(false);
+    if let Some(running) = state.running.lock().unwrap().as_ref() {
+        if running.bind == bind
+            && running.port == port
+            && running.allow_plain_lan == allow_plain_lan
+        {
+            return Ok(running.info());
+        }
+    }
+    // Restarting: every existing stream ends with the old listener.
+    if let Some(old) = state.running.lock().unwrap().take() {
+        let _ = old.stop.send(true);
+    }
+    let bound = server::bind(bind, port, allow_plain_lan, Vec::new(), false).await?;
+    let (stop, stopped) = watch::channel(false);
+    let viewers = Arc::new(AtomicUsize::new(0));
+    let deps = Deps {
+        assets: Arc::new(server::BundledAssets(app.clone())),
+        tabs: state.tabs.clone(),
+        hosts: bound.hosts.clone(),
+        viewers: viewers.clone(),
+    };
+    let running = Running {
+        bind,
+        port: bound.port,
+        hosts: bound.hosts,
+        urls: bound.urls,
+        allow_plain_lan,
+        https: false,
+        viewers,
+        stop,
+        _serve: None,
+    };
+    let info = running.info();
+    tauri::async_runtime::spawn(server::accept_loop(bound.listener, deps, stopped));
+    *state.running.lock().unwrap() = Some(running);
+    log::info!("remote access listening on port {}", info.port.unwrap_or(0));
+    emit_status(&app, &info);
+    Ok(info)
+}
+
+#[tauri::command]
+pub fn remote_access_stop(app: tauri::AppHandle, state: tauri::State<'_, WebRemoteState>) {
+    if let Some(running) = state.running.lock().unwrap().take() {
+        let _ = running.stop.send(true);
+    }
+    let info = state.status();
+    emit_status(&app, &info);
+}
+
+#[tauri::command]
+pub fn remote_access_status(state: tauri::State<'_, WebRemoteState>) -> RemoteAccessInfo {
+    state.status()
 }
 
 /// Forgets a window's tabs when it closes.

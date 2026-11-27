@@ -60,12 +60,12 @@
 - [x] Tests: merging two windows, dropping a closed window, and no publish when nothing changed.
 
 ### Task 3: server skeleton
-- [ ] hyper 1 (as in `live_server`) on a tokio listener. Commands `remote_access_start({ bind: "loopback"|"tailscale"|"all", port, allowPlainLan })`, `remote_access_stop` and `remote_access_status`.
-- [ ] Bind resolution: for `tailscale`, find this machine's `100.x` address. The listener refuses `all` without `allowPlainLan`.
-- [ ] Host allowlist: localhost, bound IPs, MagicDNS name, configured extras.
-- [ ] Static files: only `web-index.html` and `assets/*`, read through `app.asset_resolver()`. GET/HEAD only, `immutable` cache for hashed assets, `no-store` for HTML.
-- [ ] Security headers and CSP.
-- [ ] Tests: Host rejection, traversal and unknown path give 404, and the headers are present.
+- [x] hyper 1 (as in `live_server`) on a tokio listener. Commands `remote_access_start({ bind: "loopback"|"tailscale"|"all", port, allowPlainLan })`, `remote_access_stop` and `remote_access_status`.
+- [x] Bind resolution: for `tailscale`, find this machine's `100.x` address. The listener refuses `all` without `allowPlainLan`.
+- [x] Host allowlist: localhost, bound IPs, MagicDNS name, configured extras.
+- [x] Static files: only `web-index.html` and `assets/*`, read through `app.asset_resolver()`. GET/HEAD only, `immutable` cache for hashed assets, `no-store` for HTML.
+- [x] Security headers and CSP.
+- [x] Tests: Host rejection, traversal and unknown path give 404, and the headers are present.
 
 ### Task 4: pairing and devices
 - [ ] Pairing code from `A-Z2-9` without lookalikes, 6 characters, single use, 10 min TTL, 5 attempts. `remote_pairing_start` returns `{ code, url }` with `url = http(s)://<host>:<port>/web-index.html#pair=<code>`.
