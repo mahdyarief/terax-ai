@@ -3,24 +3,26 @@ import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { AgentIcon } from "@/modules/agents/lib/agentIcon";
 import {
-  AGENT_LAUNCHERS,
   type AgentInstanceCount,
-  type AgentLaunchCommands,
-  type AgentLauncherId,
   type AgentLaunchRequest,
-  DEFAULT_AGENT_LAUNCH_COMMANDS,
-  findAgentLauncher,
   validateAgentLaunchCommand,
 } from "@/modules/agents/lib/launcher";
+import {
+  builtinAgent,
+  enabledAgentProfiles,
+  updateAgent,
+} from "@/modules/agents/lib/profiles";
+import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
 import { usePreferencesStore } from "@/modules/settings/preferences";
-import { setAgentLaunchCommands } from "@/modules/settings/store";
+import { setAgentSettings } from "@/modules/settings/store";
 import {
   ArrowLeft01Icon,
   PlayIcon,
   Refresh01Icon,
+  Settings01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type Props = {
   onBack: () => void;
@@ -30,69 +32,60 @@ type Props = {
 const INSTANCE_COUNTS: AgentInstanceCount[] = [1, 2, 3, 4];
 
 export function AgentLauncherPanel({ onBack, onLaunch }: Props) {
-  const storedCommands = usePreferencesStore((s) => s.agentLaunchCommands);
+  const settings = usePreferencesStore((s) => s.agents);
   const hydrated = usePreferencesStore((s) => s.hydrated);
-  const [agentId, setAgentId] = useState<AgentLauncherId>("claude");
+  const agents = useMemo(() => enabledAgentProfiles(settings), [settings]);
+  const [picked, setPicked] = useState<string | null>(null);
   const [instances, setInstances] = useState<AgentInstanceCount>(2);
-  const [drafts, setDrafts] = useState<AgentLaunchCommands>(storedCommands);
-  const hydratedRef = useRef(hydrated);
-  const persistedRef = useRef(storedCommands);
-  const command = drafts[agentId];
+  const agent = agents.find((a) => a.id === picked) ?? agents[0] ?? null;
+  const [draft, setDraft] = useState(agent?.command ?? "");
+  const command = draft;
   const validation = validateAgentLaunchCommand(command);
-  const launcher = findAgentLauncher(agentId);
+  const defaultCommand = agent ? builtinAgent(agent.id)?.command : undefined;
 
+  // Show the stored command whenever another agent is picked, or it changes
+  // in Settings.
+  const agentId = agent?.id;
+  const storedCommand = agent?.command ?? "";
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset the draft when another agent is picked.
   useEffect(() => {
-    if (!hydrated || hydratedRef.current) return;
-    hydratedRef.current = true;
-    persistedRef.current = storedCommands;
-    setDrafts(storedCommands);
-  }, [hydrated, storedCommands]);
+    setDraft(storedCommand);
+  }, [agentId, storedCommand]);
 
-  const save = (next: AgentLaunchCommands) => {
-    const changed = AGENT_LAUNCHERS.some(
-      ({ id }) => next[id] !== persistedRef.current[id],
-    );
-    if (!changed) return;
-    const previous = persistedRef.current;
-    persistedRef.current = next;
-    void setAgentLaunchCommands(next).catch((error) => {
-      persistedRef.current = previous;
-      console.error("[terax] failed to save agent launch commands:", error);
-    });
-  };
-
-  const persist = (
-    id: AgentLauncherId,
-    value: string,
-  ): AgentLaunchCommands | null => {
+  const persist = (value: string): string | null => {
+    if (!agent) return null;
     const result = validateAgentLaunchCommand(value);
     if (!result.ok) return null;
-    const next = { ...drafts, [id]: result.command };
-    setDrafts(next);
-    save(next);
-    return next;
+    if (result.command !== agent.command) {
+      void setAgentSettings(
+        updateAgent(settings, agent.id, { command: result.command }),
+      ).catch((error) => {
+        console.error("[terax] failed to save the agent command:", error);
+      });
+    }
+    return result.command;
   };
 
-  const selectAgent = (id: AgentLauncherId) => {
-    persist(agentId, command);
-    setAgentId(id);
+  const selectAgent = (id: string) => {
+    persist(command);
+    setPicked(id);
   };
 
   const resetCommand = () => {
-    const next = {
-      ...drafts,
-      [agentId]: DEFAULT_AGENT_LAUNCH_COMMANDS[agentId],
-    };
-    setDrafts(next);
-    save(next);
+    if (!agent || !defaultCommand) return;
+    setDraft(defaultCommand);
+    persist(defaultCommand);
   };
 
   const submit = () => {
-    const next = persist(agentId, command);
+    if (!agent) return;
+    const next = persist(command);
     if (!next) return;
     onLaunch({
-      agent: agentId,
-      command: next[agentId],
+      agent: agent.id,
+      label: agent.label,
+      command: next,
+      integration: agent.integration,
       instances,
     });
   };
@@ -126,16 +119,22 @@ export function AgentLauncherPanel({ onBack, onLaunch }: Props) {
         </div>
       </div>
 
+      {agents.length === 0 ? (
+        <div className="mt-1 border-t border-border/60 px-1 pt-3 text-xs text-muted-foreground">
+          No agents are turned on. Turn one on, or add your own, in Settings.
+        </div>
+      ) : null}
       <div className="mt-1 grid grid-cols-2 gap-1 border-t border-border/60 pt-1.5">
-        {AGENT_LAUNCHERS.map((agent) => {
-          const selected = agent.id === agentId;
+        {agents.map((option) => {
+          const selected = option.id === agent?.id;
           return (
             <button
-              key={agent.id}
+              key={option.id}
               type="button"
               disabled={!hydrated}
               aria-pressed={selected}
-              onClick={() => selectAgent(agent.id)}
+              title={option.command}
+              onClick={() => selectAgent(option.id)}
               className={cn(
                 "flex min-w-0 items-center gap-2 rounded-xl border px-2.5 py-2 text-left transition-colors outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25 disabled:pointer-events-none disabled:opacity-50",
                 selected
@@ -144,7 +143,7 @@ export function AgentLauncherPanel({ onBack, onLaunch }: Props) {
               )}
             >
               <AgentIcon
-                agent={agent.id}
+                agent={option.icon}
                 size={16}
                 className={cn(
                   "shrink-0",
@@ -152,7 +151,7 @@ export function AgentLauncherPanel({ onBack, onLaunch }: Props) {
                 )}
               />
               <span className="truncate text-xs font-medium">
-                {agent.label}
+                {option.label}
               </span>
             </button>
           );
@@ -198,10 +197,10 @@ export function AgentLauncherPanel({ onBack, onLaunch }: Props) {
             type="button"
             onClick={resetCommand}
             disabled={
-              !hydrated || command === DEFAULT_AGENT_LAUNCH_COMMANDS[agentId]
+              !hydrated || !defaultCommand || command === defaultCommand
             }
             className="ml-auto flex items-center gap-1 rounded-md px-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground disabled:pointer-events-none disabled:opacity-40"
-            title={`Reset to ${launcher.defaultCommand}`}
+            title={defaultCommand ? `Reset to ${defaultCommand}` : undefined}
           >
             <HugeiconsIcon icon={Refresh01Icon} size={11} strokeWidth={1.75} />
             Reset
@@ -209,21 +208,16 @@ export function AgentLauncherPanel({ onBack, onLaunch }: Props) {
         </div>
         <Input
           id="agent-start-command"
-          disabled={!hydrated}
+          disabled={!hydrated || !agent}
           value={command}
           spellCheck={false}
           autoCapitalize="off"
           autoCorrect="off"
           aria-invalid={!validation.ok}
-          onChange={(event) =>
-            setDrafts((current) => ({
-              ...current,
-              [agentId]: event.target.value,
-            }))
-          }
-          onBlur={() => persist(agentId, command)}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={() => persist(command)}
           className="h-8 rounded-xl bg-input/40 px-2.5 font-mono text-xs"
-          placeholder={launcher.defaultCommand}
+          placeholder={defaultCommand}
         />
         <div
           className={cn(
@@ -241,11 +235,19 @@ export function AgentLauncherPanel({ onBack, onLaunch }: Props) {
         type="submit"
         size="sm"
         className="mt-1 w-full rounded-xl"
-        disabled={!hydrated || !validation.ok}
+        disabled={!hydrated || !agent || !validation.ok}
       >
         <HugeiconsIcon icon={PlayIcon} size={13} strokeWidth={2} />
         Launch {instances} {instances === 1 ? "agent" : "agents"}
       </Button>
+      <button
+        type="button"
+        onClick={() => void openSettingsWindow("cli-agents")}
+        className="mt-1.5 flex w-full items-center justify-center gap-1 rounded-md py-1 text-[10px] text-muted-foreground transition-colors hover:text-foreground"
+      >
+        <HugeiconsIcon icon={Settings01Icon} size={11} strokeWidth={1.75} />
+        Manage agents…
+      </button>
     </form>
   );
 }

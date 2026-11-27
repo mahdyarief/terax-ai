@@ -7,6 +7,7 @@ import { usePreferencesStore } from "@/modules/settings/preferences";
 import { WindowActivityBridge } from "@/modules/theme";
 import {
   AiScanIcon,
+  ComputerTerminal02Icon,
   InformationCircleIcon,
   KeyboardIcon,
   PaintBoardIcon,
@@ -19,6 +20,7 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { type JSX, useEffect, useState } from "react";
 import { AboutSection } from "./sections/AboutSection";
 import { AgentsSection } from "./sections/AgentsSection";
+import { CliAgentsSection } from "./sections/CliAgentsSection";
 import { EditorSection } from "./sections/EditorSection";
 import { GeneralSection } from "./sections/GeneralSection";
 import { ModelsSection } from "./sections/ModelsSection";
@@ -63,6 +65,12 @@ const TABS: {
     component: AgentsSection,
   },
   {
+    id: "cli-agents",
+    label: "CLI Agents",
+    icon: ComputerTerminal02Icon,
+    component: CliAgentsSection,
+  },
+  {
     id: "about",
     label: "About",
     icon: InformationCircleIcon,
@@ -77,6 +85,7 @@ const VALID_TABS: SettingsTab[] = [
   "shortcuts",
   "models",
   "agents",
+  "cli-agents",
   "about",
 ];
 

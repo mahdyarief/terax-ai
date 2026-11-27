@@ -16,7 +16,6 @@ import { MARKDOWN_FIND_EVENT, type MarkdownViewMode } from "@/modules/markdown";
 import {
   type AgentLaunchRequest,
   AgentNotificationsBridge,
-  findAgentLauncher,
   nextAttentionTarget,
   validateAgentLaunchCommand,
 } from "@/modules/agents";
@@ -810,22 +809,23 @@ export default function App() {
     (request: AgentLaunchRequest) => {
       const command = validateAgentLaunchCommand(request.command);
       if (!command.ok) return;
-      const launcher = findAgentLauncher(request.agent);
       const title =
         request.instances === 1
-          ? launcher.label
-          : `${launcher.label} × ${request.instances}`;
+          ? request.label
+          : `${request.label} × ${request.instances}`;
       const { leafIds: agentLeafIds } = newAgentGroupTab(
         inheritedCwdForNewTab(),
         title,
         request.instances,
       );
-      const hooksReady = launcher.supportsHooks
+      // A custom agent that wraps a known CLI gets that CLI's hooks.
+      const integration = request.integration;
+      const hooksReady = integration
         ? invoke("agent_enable_hooks", {
-            agent: request.agent,
+            agent: integration,
           }).catch((error) => {
             console.warn(
-              `[terax] could not enable ${request.agent} notifications:`,
+              `[terax] could not enable ${integration} notifications:`,
               error,
             );
           })

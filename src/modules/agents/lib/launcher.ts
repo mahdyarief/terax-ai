@@ -1,58 +1,17 @@
 import type { PaneNode } from "@/modules/terminal";
+import type { AgentIntegration } from "./profiles";
 
-export const AGENT_LAUNCHERS = [
-  {
-    id: "claude",
-    label: "Claude",
-    defaultCommand: "claude",
-    supportsHooks: true,
-  },
-  {
-    id: "codex",
-    label: "Codex",
-    defaultCommand: "codex",
-    supportsHooks: true,
-  },
-  {
-    id: "gemini",
-    label: "Gemini",
-    defaultCommand: "gemini",
-    supportsHooks: true,
-  },
-  {
-    id: "pi",
-    label: "Pi",
-    defaultCommand: "pi",
-    supportsHooks: true,
-  },
-  {
-    id: "opencode",
-    label: "OpenCode",
-    defaultCommand: "opencode",
-    supportsHooks: false,
-  },
-  {
-    id: "grok",
-    label: "Grok",
-    defaultCommand: "grok",
-    supportsHooks: false,
-  },
-] as const;
-
-export type AgentLauncherId = (typeof AGENT_LAUNCHERS)[number]["id"];
 export type AgentInstanceCount = 1 | 2 | 3 | 4;
-export type AgentLaunchCommands = Record<AgentLauncherId, string>;
 
 export type AgentLaunchRequest = {
-  agent: AgentLauncherId;
+  /** The agent profile's id. */
+  agent: string;
+  label: string;
   command: string;
+  /** The CLI whose hooks to install first, if any. */
+  integration: AgentIntegration | null;
   instances: AgentInstanceCount;
 };
-
-export const DEFAULT_AGENT_LAUNCH_COMMANDS: AgentLaunchCommands =
-  Object.fromEntries(
-    AGENT_LAUNCHERS.map((agent) => [agent.id, agent.defaultCommand]),
-  ) as AgentLaunchCommands;
 
 const MAX_AGENT_COMMAND_LENGTH = 256;
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f]/;
@@ -79,28 +38,6 @@ export function validateAgentLaunchCommand(
     return { ok: false, error: "Use a single-line command." };
   }
   return { ok: true, command };
-}
-
-export function normalizeAgentLaunchCommands(
-  value: unknown,
-): AgentLaunchCommands {
-  const stored =
-    typeof value === "object" && value !== null
-      ? (value as Record<string, unknown>)
-      : {};
-  return Object.fromEntries(
-    AGENT_LAUNCHERS.map((agent) => {
-      const result = validateAgentLaunchCommand(stored[agent.id]);
-      return [
-        agent.id,
-        result.ok ? result.command : agent.defaultCommand,
-      ] as const;
-    }),
-  ) as AgentLaunchCommands;
-}
-
-export function findAgentLauncher(id: AgentLauncherId) {
-  return AGENT_LAUNCHERS.find((agent) => agent.id === id) ?? AGENT_LAUNCHERS[0];
 }
 
 export type AgentPanePlan = {
