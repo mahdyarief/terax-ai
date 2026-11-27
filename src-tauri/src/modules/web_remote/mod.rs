@@ -57,14 +57,6 @@ impl WebRemoteState {
             .unwrap_or_else(RemoteAccessInfo::off)
     }
 
-    pub(crate) fn port(&self) -> Option<u16> {
-        self.running
-            .lock()
-            .unwrap()
-            .as_ref()
-            .map(|found| found.port)
-    }
-
     pub(crate) fn devices(&self) -> Arc<DeviceStore> {
         self.devices.lock().unwrap().clone()
     }

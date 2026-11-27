@@ -103,9 +103,9 @@
 - [x] Tests: the action is routed to the right window and refused without the grant.
 
 ### Task 9: wiring
-- [ ] Manage the state and register the commands in `lib.rs`.
-- [ ] Add entries to `ssh_commands_guard_tests.rs` for any command that takes a `WorkspaceEnv`.
-- [ ] Learning note.
+- [x] Manage the state and register the commands in `lib.rs`.
+- [x] Add entries to `ssh_commands_guard_tests.rs` for any command that takes a `WorkspaceEnv`.
+- [x] Learning note.
 
 ## Phase 2: Web client (`web-index.html`, `src/web/`)
 

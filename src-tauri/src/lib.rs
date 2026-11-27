@@ -316,6 +316,11 @@ pub fn run() {
             modules::bench::guard(_app.handle())?;
             #[cfg(target_os = "macos")]
             modules::window_presentation::macos::install(_app.handle());
+            if let Some(remote) = _app.try_state::<modules::web_remote::WebRemoteState>() {
+                remote.attach_device_store(modules::web_remote::devices::store_path(
+                    _app.handle(),
+                ));
+            }
             if let Err(error) = control::start(_app.handle().clone(), control_for_setup.clone()) {
                 log::warn!("could not start Terax control server: {error}");
             }
@@ -360,6 +365,7 @@ pub fn run() {
         .manage(fs::assets::AssetGrants::default())
         .manage(fs::preview::HtmlPreviews::default())
         .manage(modules::live_server::LiveServers::default())
+        .manage(modules::web_remote::WebRemoteState::default())
         .manage(git::watch::GitWatchState::default())
         .manage(history::HistoryState::default())
         .manage(lsp::LspState::default())
@@ -376,6 +382,14 @@ pub fn run() {
         .manage(LaunchDir(Mutex::new(cli_dir)))
         .manage(LaunchFiles(Mutex::new(launch.files)))
         .invoke_handler(tauri::generate_handler![
+            modules::web_remote::remote_publish_tabs,
+            modules::web_remote::remote_access_start,
+            modules::web_remote::remote_access_stop,
+            modules::web_remote::remote_access_status,
+            modules::web_remote::remote_pairing_start,
+            modules::web_remote::remote_devices_list,
+            modules::web_remote::remote_device_update,
+            modules::web_remote::remote_device_revoke,
             pty::pty_open,
             pty::pty_write,
             pty::pty_stream_open,
@@ -563,6 +577,9 @@ pub fn run() {
                         if let Some(state) = app.try_state::<pty::PtyState>() {
                             state.destroy_webview(&label);
                         }
+                        // A closed window's tabs leave the browser's list at once;
+                        // its PTYs may still be alive until the window's own cleanup.
+                        modules::web_remote::forget_window(app, &label);
                         if let Some(state) = app.try_state::<control::ControlState>() {
                             state.hooks().broker.set_window_ready(&label, false);
                             state.control_frontend_ready(&label, false);

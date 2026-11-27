@@ -224,7 +224,7 @@ fn tabs_stream(deps: &Deps, headers: &hyper::header::HeaderMap) -> Response<Body
         let mut device_updates = devices.subscribe();
         let mut heartbeat = tokio::time::interval(sse::HEARTBEAT);
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-        let mut send_snapshot = |tx: &mpsc::Sender<sse::Item>| {
+        let send_snapshot = |tx: &mpsc::Sender<sse::Item>| {
             let snapshot = tabs.snapshot();
             if let Ok(data) = serde_json::to_string(&*snapshot) {
                 sse::send(tx, sse::event(None, "tabs", &data));
