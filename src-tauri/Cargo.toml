@@ -81,7 +81,13 @@ reqwest = { version = "0.13", default-features = false, features = [
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 bytes = "1"
 futures-util = "0.3"
-tokio = { version = "1", default-features = false, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1", default-features = false, features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+# The live server (modules/live_server): already in the tree through reqwest
+# and the workspace core.
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+notify = "8"
 tempfile = "3"
 which = "8.0.4"
 

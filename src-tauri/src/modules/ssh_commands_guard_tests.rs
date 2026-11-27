@@ -53,6 +53,11 @@ const COMMANDS: &[(&str, &str, Ssh)] = &[
         Works("an_image_and_a_pdf_on_the_server_are_served_to_their_view"),
     ),
     (
+        "live_server/mod.rs",
+        "live_server_start",
+        Works("a_folder_on_the_server_is_served_from_this_machine"),
+    ),
+    (
         "fs/copy.rs",
         "fs_copy",
         Works("files_from_this_machine_are_uploaded_into_the_folder"),

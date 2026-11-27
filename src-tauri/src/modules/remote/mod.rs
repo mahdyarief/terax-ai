@@ -37,6 +37,8 @@ mod watch_tests;
 
 #[cfg(test)]
 mod assets_tests;
+#[cfg(test)]
+mod live_server_tests;
 
 #[cfg(test)]
 mod git_tests;

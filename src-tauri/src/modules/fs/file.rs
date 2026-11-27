@@ -2,7 +2,7 @@ use std::io::ErrorKind;
 
 use serde::Serialize;
 use base64::Engine;
-use tauri::Emitter;
+use tauri::{Emitter, Manager};
 
 use super::blocking;
 use super::index::FileIndexState;
@@ -312,8 +312,9 @@ pub async fn fs_write_file(
     index: tauri::State<'_, FileIndexState>,
 ) -> Result<u64, String> {
     let index = index.inner().clone();
+    let workspace = WorkspaceEnv::from_option(workspace);
+    let written_in = workspace.clone();
     let (path, mtime) = blocking(move || {
-        let workspace = WorkspaceEnv::from_option(workspace);
         let written = backend_for(&workspace)
             .write_atomic(&path, content.as_bytes())
             .map_err(|e| {
@@ -327,6 +328,10 @@ pub async fn fs_write_file(
         Ok((path, written.mtime_ms))
     })
     .await?;
+    // A live server of the folder reloads its pages, also on a server where
+    // nothing else watches the folder.
+    app.state::<crate::modules::live_server::LiveServers>()
+        .note_written(&path, &written_in);
     let _ = app.emit("fs:file-written", FileWrittenEvent { path, source });
 
     Ok(mtime)

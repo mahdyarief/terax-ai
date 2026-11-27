@@ -51,6 +51,7 @@ import {
   parentDir as parentOf,
 } from "./lib/clipboardPaste";
 import { useWorkspaceEnvStore } from "@/modules/workspace";
+import { isLiveServerPage } from "@/modules/live-server/liveServer";
 import { COMPACT_CONTENT, COMPACT_ITEM } from "./lib/menuItemClass";
 import { useExplorerDnd } from "./lib/useExplorerDnd";
 import { useExplorerFileDrop } from "./lib/useExplorerFileDrop";
@@ -81,6 +82,8 @@ type Props = {
   onRevealInTerminal?: (path: string) => void;
   onOpenInSourceControl?: (path: string) => void;
   onOpenGitHistory?: (path: string) => void;
+  /** Serves a folder, or an HTML file's folder, with the Live Server. */
+  onServeLive?: (path: string) => void;
   onAttachToAgent?: (path: string) => void;
   pathDropTarget?: TerminalPathDropTarget;
   gitStatus?: GitStatusSnapshot | null;
@@ -227,6 +230,7 @@ export const FileExplorer = memo(
       onRevealInTerminal,
       onOpenInSourceControl,
       onOpenGitHistory,
+      onServeLive,
       onAttachToAgent,
       pathDropTarget,
       gitStatus,
@@ -1004,6 +1008,15 @@ export const FileExplorer = memo(
                       Open Git History
                     </ContextMenuItem>
                   )}
+                  {onServeLive &&
+                    (menuTarget.isDir || isLiveServerPage(menuTarget.path)) && (
+                      <ContextMenuItem
+                        className={COMPACT_ITEM}
+                        onSelect={() => onServeLive(menuTarget.path)}
+                      >
+                        Serve with Live Server
+                      </ContextMenuItem>
+                    )}
                   <ContextMenuItem
                     className={COMPACT_ITEM}
                     onSelect={() => void revealInFinder(menuTarget.path)}
@@ -1132,6 +1145,14 @@ export const FileExplorer = memo(
                       onSelect={() => onOpenGitHistory(rootPath)}
                     >
                       Open Git History
+                    </ContextMenuItem>
+                  )}
+                  {rootPath && onServeLive && (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => onServeLive(rootPath)}
+                    >
+                      Serve with Live Server
                     </ContextMenuItem>
                   )}
                   {rootPath && (

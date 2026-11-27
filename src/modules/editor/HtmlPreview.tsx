@@ -1,8 +1,15 @@
+import { openExternalUrl } from "@/lib/external-link";
 import { checkReadable } from "@/modules/ai/lib/security";
+import {
+  liveServerUrl,
+  useLiveServerStore,
+} from "@/modules/live-server/liveServer";
 import { previewBoundary } from "@/modules/markdown/lib/assetPath";
+import { openUrlInPreview } from "@/modules/preview/lib/navigator";
 import { currentWorkspaceEnv } from "@/modules/workspace";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import {
   createHtmlPreviewPublisher,
   hasActiveContent,
@@ -167,6 +174,22 @@ export function HtmlPreview({ html, path, workspaceRoot }: Props) {
     publisher.current?.request(html);
   }, [html, path, workspaceRoot]);
 
+  // The page as a browser sees it: served from its folder over http, where
+  // fetch, modules and storage work too.
+  const serveLive = () => {
+    if (!path) return;
+    void useLiveServerStore
+      .getState()
+      .start(path)
+      .then((server) => {
+        const url = liveServerUrl(server, path);
+        if (!openUrlInPreview(url)) void openExternalUrl(url);
+      })
+      .catch((e: unknown) =>
+        toast.error("Live Server", { description: String(e) }),
+      );
+  };
+
   const allowScripts = () => {
     if (!path) return;
     trustPreview(previewBoundary(path, workspaceRoot ?? null));
@@ -197,13 +220,25 @@ export function HtmlPreview({ html, path, workspaceRoot }: Props) {
               ? "Scripts are off: this page loads local files, and its scripts could read them and send them out."
               : "Scripts from the web are off: this page loads libraries from a CDN."}
           </span>
-          <button
-            type="button"
-            onClick={allowScripts}
-            className="shrink-0 rounded border border-border bg-background px-2 py-0.5 text-foreground hover:bg-accent"
-          >
-            Run scripts for this folder
-          </button>
+          <span className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={allowScripts}
+              className="shrink-0 rounded border border-border bg-background px-2 py-0.5 text-foreground hover:bg-accent"
+            >
+              Run scripts for this folder
+            </button>
+            {path ? (
+              <button
+                type="button"
+                onClick={serveLive}
+                title="Serve the folder at http://localhost and open the page in a preview tab"
+                className="shrink-0 rounded border border-border bg-background px-2 py-0.5 text-foreground hover:bg-accent"
+              >
+                Open with Live Server
+              </button>
+            ) : null}
+          </span>
         </div>
       )}
       <iframe

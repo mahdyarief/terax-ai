@@ -30,6 +30,15 @@ where
         .map_err(|e| e.to_string())?
 }
 
+/// The secret-path policy for a workspace path, for servers of files outside
+/// this module (the live server).
+pub(crate) fn readable_in_workspace(
+    path: &str,
+    workspace: &crate::modules::workspace::WorkspaceEnv,
+) -> Result<(), String> {
+    read_policy::readable_in(path, workspace)
+}
+
 pub(crate) use terax_workspace_core::paths::display_path;
 pub use terax_workspace_core::paths::to_canon;
 #[cfg_attr(not(windows), allow(unused_imports))]

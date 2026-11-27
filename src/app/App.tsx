@@ -54,6 +54,10 @@ import {
   type SearchTarget,
 } from "@/modules/header";
 import { setLspNavigator } from "@/modules/lsp";
+import {
+  liveServerUrl,
+  useLiveServerStore,
+} from "@/modules/live-server/liveServer";
 import { setPreviewNavigator } from "@/modules/preview";
 import { isAllowedPreviewUrl } from "@/modules/preview/lib/previewUrl";
 import type { PreviewPaneHandle } from "@/modules/preview";
@@ -1049,6 +1053,19 @@ export default function App() {
       return id;
     },
     [newPreviewTab],
+  );
+
+  const serveWithLiveServer = useCallback(
+    (path: string) => {
+      void useLiveServerStore
+        .getState()
+        .start(path)
+        .then((server) => openPreviewTab(liveServerUrl(server, path)))
+        .catch((e: unknown) =>
+          toast.error("Live Server", { description: String(e) }),
+        );
+    },
+    [openPreviewTab],
   );
 
   const splitActivePaneInActiveTab = useCallback(
@@ -2628,6 +2645,7 @@ export default function App() {
                             handleOpenRepositoryInSourceControl
                           }
                           onOpenGitHistory={handleOpenGitHistoryForPath}
+                          onServeLive={serveWithLiveServer}
                           onAttachToAgent={handleAttachFileToAgent}
                           pathDropTarget={terminalPathDropTarget}
                           visible={!sidebarCollapsed}

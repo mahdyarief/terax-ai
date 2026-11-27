@@ -359,6 +359,7 @@ pub fn run() {
         .manage(modules::remote::git_watch::RemoteGitWatches::default())
         .manage(fs::assets::AssetGrants::default())
         .manage(fs::preview::HtmlPreviews::default())
+        .manage(modules::live_server::LiveServers::default())
         .manage(git::watch::GitWatchState::default())
         .manage(history::HistoryState::default())
         .manage(lsp::LspState::default())
@@ -408,6 +409,9 @@ pub fn run() {
             fs::assets::asset_revoke,
             fs::preview::fs_publish_html,
             fs::preview::fs_drop_html,
+            modules::live_server::live_server_start,
+            modules::live_server::live_server_stop,
+            modules::live_server::live_server_list,
             fs::project_memory::fs_read_project_memory,
             fs::file::fs_write_file,
             fs::file::fs_stat,
