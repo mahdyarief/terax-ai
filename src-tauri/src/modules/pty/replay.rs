@@ -12,7 +12,8 @@ pub(crate) enum ReplayEvent {
 }
 
 impl ReplayEvent {
-    fn sequence_len(&self) -> u64 {
+    /// Sequences this event occupies: one per output byte, one per resize.
+    pub(crate) fn sequence_len(&self) -> u64 {
         match self {
             Self::Output { bytes } => bytes.len() as u64,
             Self::Resize { .. } => 1,

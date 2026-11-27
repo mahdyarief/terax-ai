@@ -237,6 +237,12 @@ impl Session {
         *self.exit_code.lock().unwrap()
     }
 
+    /// The theme the desktop last pushed, so a remote model can draw the way
+    /// this terminal does.
+    pub(crate) fn theme(&self) -> Option<super::terminal_colors::TerminalColors> {
+        self.colors.snapshot()
+    }
+
     /// Remote input shares the ordered writer queue with the desktop's own
     /// keystrokes but never needs the attachment lease: it takes no lease.
     pub(crate) async fn write_remote(&self, bytes: Vec<u8>) -> Result<(), String> {

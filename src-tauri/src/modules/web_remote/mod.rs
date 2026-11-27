@@ -7,6 +7,7 @@ pub mod devices;
 pub mod http_rules;
 pub mod server;
 pub mod sse;
+pub mod stream;
 pub mod tabs;
 
 use std::path::PathBuf;
@@ -128,12 +129,13 @@ pub async fn remote_access_start(
         viewers: viewers.clone(),
         devices: state.devices(),
         pairing: state.pairing.clone(),
+        sessions: Arc::new(stream::AppSessions(app.clone())),
+        limits: Arc::new(stream::StreamLimits::default()),
         https: false,
     };
     let running = Running {
         bind,
         port: bound.port,
-        hosts: bound.hosts,
         urls: bound.urls,
         allow_plain_lan,
         https: false,

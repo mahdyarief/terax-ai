@@ -11,7 +11,7 @@ use std::sync::{Mutex, PoisonError};
 
 pub type Rgb = [u8; 3];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TerminalColors {
     pub foreground: Rgb,

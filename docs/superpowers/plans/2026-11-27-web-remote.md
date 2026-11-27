@@ -79,18 +79,18 @@
 - [x] Test: a publish reaches a connected stream.
 
 ### Task 6: `GET /api/pty/:id/stream` (SSE)
-- [ ] On connect, or when `Last-Event-ID` is older than the log:
+- [x] On connect, or when `Last-Event-ID` is older than the log:
   - `meta { cols, rows, truncated }`;
   - `snapshot`: the base64 of `replay_all`, applied to a fresh model.
-- [ ] Afterwards:
+- [x] Afterwards:
   - `data { seq }` carrying base64 output;
   - `resize { cols, rows }`;
   - `exit { code }`.
-- [ ] The event id is the replay sequence, so a reconnect resumes with `replay_after`.
-- [ ] A viewer that falls behind the log, or has more than 2 MiB queued, gets a new snapshot instead of the backlog.
-- [ ] Limits: 16 streams per device.
-- [ ] The PTY must be in the registry; ids that are not listed give 404.
-- [ ] Tests: snapshot then live data, resume by id, lag leads to a snapshot, an unknown id gives 404.
+- [x] The event id is the replay sequence, so a reconnect resumes with `replay_after`.
+- [x] A viewer that falls behind the log, or has more than 2 MiB queued, gets a new snapshot instead of the backlog.
+- [x] Limits: 16 streams per device.
+- [x] The PTY must be in the registry; ids that are not listed give 404.
+- [x] Tests: snapshot then live data, resume by id, lag leads to a snapshot, an unknown id gives 404.
 
 ### Task 7: `POST /api/pty/:id/input`
 - [ ] Requires `grant.input`. The body is raw bytes, at most 64 KiB.

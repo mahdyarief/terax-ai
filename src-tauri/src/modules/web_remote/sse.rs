@@ -93,11 +93,6 @@ pub(crate) fn send(tx: &mpsc::Sender<Item>, bytes: Bytes) {
     let _ = tx.try_send(Ok(Frame::data(bytes)));
 }
 
-/// Awaits one item so the stream task yields between bursts.
-pub(crate) async fn reserve(tx: &mpsc::Sender<Item>) -> bool {
-    tx.reserve().await.is_ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

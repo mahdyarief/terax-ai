@@ -39,7 +39,7 @@ pub use presentation::PresentationClass;
 pub use protocol::stream_protocol;
 pub(crate) use replay::{ReplayError, ReplayEvent};
 pub(crate) use session::{ReplaySnapshot, Session};
-use terminal_colors::TerminalColors;
+pub(crate) use terminal_colors::TerminalColors;
 
 /// Largest `pty_set_presentation` batch accepted; a window never has more
 /// terminals than this, so anything larger is a malformed request.
@@ -193,6 +193,11 @@ impl PtyState {
                 host: session.host(),
                 link: session.link.clone(),
             })
+    }
+
+    /// A live session by id, for the remote server's viewer streams.
+    pub(crate) fn session(&self, id: u32) -> Option<Arc<Session>> {
+        self.sessions.read().unwrap().get(&id).cloned()
     }
 
     /// The window's page navigated away (reload, HMR): its stream token dies

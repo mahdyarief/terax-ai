@@ -26,6 +26,7 @@ use super::http_rules::{
     self, cookie, is_cross_site, remote_header_present, same_origin, HostPolicy, DEVICE_COOKIE,
 };
 use super::sse;
+use super::stream::{self, PtySessions, StreamLimits};
 use super::tabs::TabRegistry;
 
 /// Where a device reaches the server.
@@ -82,7 +83,6 @@ impl RemoteAccessInfo {
 pub(crate) struct Running {
     pub bind: RemoteBind,
     pub port: u16,
-    pub hosts: HostPolicy,
     pub urls: Vec<String>,
     pub allow_plain_lan: bool,
     pub https: bool,
@@ -133,6 +133,8 @@ pub(crate) struct Deps {
     pub viewers: Arc<AtomicUsize>,
     pub devices: Arc<DeviceStore>,
     pub pairing: Arc<Pairing>,
+    pub sessions: Arc<dyn PtySessions>,
+    pub limits: Arc<StreamLimits>,
     /// Whether browsers reach us over HTTPS (through `tailscale serve`), so
     /// the device cookie can be `Secure`.
     pub https: bool,
@@ -197,6 +199,9 @@ pub(crate) async fn respond(deps: &Deps, request: Request<Incoming>) -> Response
     if path == "/api/tabs" {
         return tabs_stream(deps, request.headers());
     }
+    if let Some((id, "stream")) = pty_route(&path) {
+        return pty_stream(deps, request.headers(), id);
+    }
     serve_static(deps, &path, request.method() == Method::HEAD)
 }
 
@@ -241,6 +246,43 @@ fn tabs_stream(deps: &Deps, headers: &hyper::header::HeaderMap) -> Response<Body
                 }
             }
         }
+    });
+    secure(sse::response(rx))
+}
+
+/// `/api/pty/<id>/<action>`.
+fn pty_route(path: &str) -> Option<(u32, &str)> {
+    let rest = path.strip_prefix("/api/pty/")?;
+    let (id, action) = rest.split_once('/')?;
+    Some((id.parse().ok()?, action))
+}
+
+/// One terminal's output. Only a PTY some published tab lists can be
+/// streamed, and only by a paired device.
+fn pty_stream(deps: &Deps, headers: &hyper::header::HeaderMap, id: u32) -> Response<Body> {
+    let Some(caller) = caller(deps, headers) else {
+        return secure(text(StatusCode::UNAUTHORIZED, "Pair this device first."));
+    };
+    if !stream::listed(&deps.tabs, id) {
+        return secure(text(StatusCode::NOT_FOUND, "No such terminal."));
+    }
+    let Some(terminal) = deps.sessions.terminal(id) else {
+        return secure(text(StatusCode::NOT_FOUND, "No such terminal."));
+    };
+    let Some(slot) = deps.limits.acquire(&caller.id) else {
+        return secure(text(
+            StatusCode::TOO_MANY_REQUESTS,
+            "Too many open terminals on this device.",
+        ));
+    };
+    let resume = sse::last_event_id(headers);
+    let (tx, rx) = mpsc::channel(sse::STREAM_BUFFER);
+    let devices = deps.devices.clone();
+    let device_id = caller.id.clone();
+    let guard = sse::ViewerGuard::open(&deps.viewers);
+    tauri::async_runtime::spawn(async move {
+        let _guard = guard;
+        stream::run(terminal, resume, tx, devices, device_id, slot).await;
     });
     secure(sse::response(rx))
 }
@@ -417,10 +459,6 @@ pub(crate) fn full(bytes: Vec<u8>) -> Body {
     Full::new(Bytes::from(bytes)).boxed()
 }
 
-pub(crate) fn empty() -> Body {
-    full(Vec::new())
-}
-
 /// A base64 body, for replay snapshots and terminal output.
 pub(crate) fn base64(bytes: &[u8]) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
@@ -547,14 +585,24 @@ mod tests {
         }
     }
 
+    struct NoSessions;
+
+    impl PtySessions for NoSessions {
+        fn terminal(&self, _id: u32) -> Option<Arc<dyn stream::Terminal>> {
+            None
+        }
+    }
+
     fn deps(port: u16) -> Deps {
         Deps {
             assets: Arc::new(Files),
             tabs: Arc::new(TabRegistry::new()),
             hosts: HostPolicy::loopback(port),
             viewers: Arc::new(AtomicUsize::new(0)),
-            devices: Arc::new(super::super::devices::DeviceStore::memory()),
-            pairing: Arc::new(super::super::devices::Pairing::default()),
+            devices: Arc::new(crate::modules::web_remote::devices::DeviceStore::memory()),
+            pairing: Arc::new(crate::modules::web_remote::devices::Pairing::default()),
+            sessions: Arc::new(NoSessions),
+            limits: Arc::new(StreamLimits::default()),
             https: false,
         }
     }
@@ -783,6 +831,28 @@ mod tests {
             }
         }
         seen
+    }
+
+    #[test]
+    fn an_unlisted_or_missing_terminal_is_not_found() {
+        let (port, stop, deps) = serve_for_test();
+        let host = format!("localhost:{port}");
+        let (_info, token) = deps.devices.add("phone");
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        {
+            use std::io::Write;
+            write!(
+                stream,
+                "GET /api/pty/9/stream HTTP/1.1\r\nHost: {host}\r\nCookie: terax_remote={token}\r\n\r\n"
+            )
+            .unwrap();
+        }
+        let response = read_until(&mut stream, "\r\n\r\n");
+        assert!(response.starts_with("HTTP/1.1 404"), "{response}");
+        let _ = stop.send(true);
     }
 
     #[test]
