@@ -114,10 +114,10 @@
 - [x] Guard test: nothing reachable from `src/web/main.tsx` imports `@tauri-apps/*`.
 
 ### Task 11: remote terminal view
-- [ ] `useRemoteTerminal(ptyId)`: an EventSource feeds the Ghostty model. A snapshot resets the model, data is written, and a resize sets the size.
-- [ ] Renders at the PTY size, scaled to fit the width, with pinch or zoom controls. WebGL by default; WebGPU when available.
-- [ ] Theme colors are sent in `meta`.
-- [ ] Tests: model state after snapshot plus data, and a reconnect does not duplicate output.
+- [x] `RemoteTerminal` + `RemoteTerminalFeed`: an EventSource feeds the Ghostty model. A snapshot resets the model, data is written, and a resize sets the size.
+- [x] Renders at the PTY size, scaled to fit the width, with zoom controls. WebGL only: the WebGPU surface imports the desktop's window-focus code, so it stays out of the web graph.
+- [x] Theme colors are sent in `meta`.
+- [x] Tests: model state after snapshot plus data, and a reconnect does not duplicate output.
 
 ### Task 12: block mode
 - [ ] Reuse `GhosttyBlocks` and the block overlay for tabs whose `mode` is `blocks`.
