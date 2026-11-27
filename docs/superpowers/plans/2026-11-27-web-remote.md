@@ -123,9 +123,9 @@
 - [x] Reuse `GhosttyBlocks` and the block overlay for tabs whose `mode` is `blocks`.
 
 ### Task 13: tab list
-- [ ] Tabs grouped by workspace (local, WSL, SSH), with agent icon and state (running, waiting, done), updated live.
-- [ ] Split panes show as a pane picker.
-- [ ] Phone layout: the list is a drawer.
+- [x] Tabs grouped by workspace (local, WSL, SSH), with agent icon and state (running, waiting, done), updated live.
+- [x] Split panes show as a pane picker.
+- [x] Phone layout: the list is a drawer.
 
 ### Task 14: input
 - [ ] A "Type" toggle, only when the device has the grant. Keys are encoded with the Ghostty input encoder.
