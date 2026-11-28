@@ -202,6 +202,9 @@ pub(crate) async fn respond(deps: &Deps, request: Request<Incoming>) -> Response
     if path == "/api/tabs" {
         return tabs_stream(deps, request.headers());
     }
+    if path == "/api/app/callbacks" {
+        return super::app::callbacks::handle_callbacks(deps, request);
+    }
     if let Some((id, "stream")) = pty_route(&path) {
         return pty_stream(deps, request.headers(), id);
     }

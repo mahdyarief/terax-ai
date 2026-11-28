@@ -175,8 +175,8 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] Tests with a mock runtime where possible; otherwise the live test in Task 9.
 
 ### Task 5: `GET /api/app/callbacks` (SSE)
-- [ ] Stream the session's relayed callbacks as `event: callback`, `data: {id, payload}`, with `id:` as a sequence number.
-- [ ] Reconnect with `Last-Event-ID` replays a bounded buffer (1,000 events / 4 MiB); beyond that, `event: reset` makes the client reload.
+- [x] Stream the session's relayed callbacks as `event: callback`, `data: {id, payload}`, with `id:` as a sequence number.
+- [x] Reconnect with `Last-Event-ID` replays a bounded buffer (1,000 events / 4 MiB); beyond that, `event: reset` makes the client reload.
 
 ### Task 6: scheme routes
 - [ ] Refactor the cores of `pty::stream_protocol`, `fs::assets::serve` and `fs::preview::serve` to take `(label, request)` instead of the Tauri context. The scheme handlers become thin wrappers.
