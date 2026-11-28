@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { requestTabAction, type Device } from "./api";
+import { requestTabAction, type Device, type Grant } from "./api";
 import {
   activePane,
   panes,
@@ -182,6 +182,16 @@ function PanePicker({
  * The paired view: every window's tabs, grouped by workspace, and the selected
  * terminal. On a phone the list is a drawer.
  */
+/** The mirror is the light view; a device with full app access can switch. */
+export function FullAppLink({ grant }: { grant: Grant }) {
+  if (!grant.app) return null;
+  return (
+    <a href="/app/" className="shrink-0 rounded px-2 py-1 text-xs hover:bg-accent">
+      Open full app
+    </a>
+  );
+}
+
 export default function RemoteApp({ device }: { device: Device }) {
   const { snapshot, status } = useTabsSnapshot();
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
@@ -276,6 +286,7 @@ export default function RemoteApp({ device }: { device: Device }) {
             {typing ? "Typing" : "Type"}
           </button>
         ) : null}
+        <FullAppLink grant={device.grant} />
         <span className="shrink-0 text-xs text-muted-foreground">
           {device.name}
         </span>

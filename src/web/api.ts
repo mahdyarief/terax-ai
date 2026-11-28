@@ -3,7 +3,12 @@
  * endpoints. Nothing here touches Tauri.
  */
 
-export type Grant = { input: boolean; tabs: boolean };
+export type Grant = {
+  input: boolean;
+  tabs: boolean;
+  /** May open the full app at `/app/`. Absent from older servers. */
+  app?: boolean;
+};
 
 export type Device = { id: string; name: string; grant: Grant };
 

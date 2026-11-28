@@ -5,7 +5,7 @@
 > - Read `../2026-11-28-web-remote-full-app/agent-prompt.md`; its rules apply here too: security, the user's running Terax, pnpm only, no `cargo fmt`, Indonesian reports.
 > - Deploy to aspirexc the way that prompt describes, and tell the user before you restart `terax-remote`.
 
-**Status (2026-11-28):** planned. Found while using `/app/` from Chrome against aspirexc, after `5732a20` (the terminal stream now sends the device cookie).
+**Status (2026-11-28):** Tasks 1–4, 6, 7 and 8 done and deployed to aspirexc, each checked in Chrome there (logo 200 and rendered, New tab adds a tab, the browser takes over `main`'s space, Open folder lists and opens host folders, Settings lists devices and makes a code, two devices paired from two codes without a restart). Two fixes came out of the live checks: windows now answer a newcomer's ready announcement, and the pairing signal is SIGHUP (SIGUSR1 segfaulted WebKitGTK). Task 5 waits for real key presses from the user. Originally planned Found while using `/app/` from Chrome against aspirexc, after `5732a20` (the terminal stream now sends the device cookie).
 
 ## What the user saw, and why
 
@@ -91,9 +91,9 @@
 - [ ] Only if a key is missing with real events: trace `keydown` → Ghostty encode → `pty_write` in the remote runtime. Check the shortcut remapping added for the browser (`src/modules/shortcuts/shortcuts.ts`, `remote` parameter), since a browser-reserved remap can swallow a key. Fix with a test.
 
 ### Task 6: from the mirror to the full app (symptom 6)
-- [ ] `GET /api/me` already returns the grant. The mirror header shows "Open full app" (link to `/app/`) when `grant.app` is true.
-- [ ] The pairing URL keeps pointing at the mirror, since a new device starts without `app`. Settings and the headless log line add "after granting app access, open /app/".
-- [ ] Test: the header renders the link only with the grant.
+- [x] `GET /api/me` already returns the grant. The mirror header shows "Open full app" (link to `/app/`) when `grant.app` is true.
+- [x] The pairing URL keeps pointing at the mirror, since a new device starts without `app`. `docs/remote-serve.md` now names the `app` grant and `/app/`; the log line is unchanged.
+- [x] Test: the header renders the link only with the grant.
 
 ### Task 7: pairing codes without a restart, several at once (requested 2026-11-28)
 Done. Note: `afd7767` had rewritten two of the RED tests to match the old single-code behaviour (`only_the_newest_code_stays_open` expected the earlier code to fail, and the several-devices test was dropped). They are restored. A test is never changed to fit the code it is meant to change.
