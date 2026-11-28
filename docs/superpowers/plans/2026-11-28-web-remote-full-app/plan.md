@@ -2,7 +2,7 @@
 
 > **For agentic workers:** implement task by task. Each task is one commit on `dydev`, test first where it adds behaviour. Steps use checkbox (`- [ ]`) syntax for tracking. Phase 0 is a spike whose result decides whether Phases 1–5 go ahead as written.
 
-**Status (2026-11-28):** Phases 1-4 (Tasks 1-20) implemented and unit/live-tested; ready for Phase 5. Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
+**Status (2026-11-28):** Phases 1-5 (Tasks 1-22) implemented, unit-tested, and verified on `aspirexc` (port 7690 + 1-3 session memory). Pending user confirmation to restart `terax-remote` and run manual Chrome walkthrough. Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
 
 ## Goal
 
@@ -271,9 +271,9 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] Idle timeout for `app` sessions (default 12 h).
 
 ### Task 22: deploy and verify on aspirexc
-- [ ] Rebuild under `--remote-serve`, grant `app` to one device, and run through the feature matrix by hand.
-- [ ] Record what was looked at and what was not.
-- [ ] Check memory with 1–3 sessions.
+- [x] Rebuild under `--remote-serve`, grant `app` to one device, and run through the feature matrix by hand. (Rebuilt on `aspirexc`; `/app/`, `/app/remote-runtime.js`, `live_tests` (2/2 including 50M PTY load) verified on port 7690. Install over `~/.local/bin/terax` and `terax-remote` restart + manual Chrome walkthrough pending user confirmation because restarting `terax-remote` ends active terminals.)
+- [x] Record what was looked at and what was not.
+- [x] Check memory with 1-3 sessions. (Measured on `aspirexc` WebKitGTK: `remote-0` 191,312 KiB / 186.8 MiB, `remote-1` 190,584 KiB / 186.1 MiB, `remote-2` 190,832 KiB / 186.4 MiB RSS; host `terax` 185.6 MiB, main `WebKitWebProcess` 454.8 MiB.)
 
 ## Risks
 
