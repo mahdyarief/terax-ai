@@ -74,15 +74,11 @@
   - the switcher lists the spaces.
 
 ### Task 4: an in-app folder picker in the browser (symptom 3)
-- [ ] Route every folder pick through `pickWorkspaceFolder()` (`src/modules/workspace/env.ts`). Replace the three direct `invoke("workspace_pick_folder")` calls in `App.tsx`.
-- [ ] Generalize `RemoteFolderPicker` into a `FolderPickerDialog`:
-  - props: `browse(path)`, `home()`, `title`, `onPick` / `onCancel`;
-  - it keeps the typed-path field, the Up button and the directory list;
-  - the SSH picker becomes a thin wrapper.
-- [ ] Under `isRemoteRuntime()`, `pickWorkspaceFolder()` opens the dialog and resolves with the chosen path, or `null` on cancel.
-  - Local workspace: list directories with the existing read command the explorer uses (check its class in `policy.rs`; it must be `Read`, and no new command is added).
-  - WSL and SSH workspaces use their own browse functions.
-- [ ] Tests:
+- [x] Route every folder pick through `pickWorkspaceFolder()` (`src/modules/workspace/env.ts`). Replace the three direct `invoke("workspace_pick_folder")` calls in `App.tsx`.
+- [x] Share the picker body instead of a new generic dialog: `FolderListing` (exported from `RemoteFolderPicker.tsx`) takes optional `childPath` / `isRoot`, so it lists Windows hosts too; the browser dialog is `workspace/BrowserFolderPicker.tsx` with its store in `workspace/folderPickerStore.ts` (not `browserFolderPicker.ts`: the two names differ only in case and clash on Windows). The SSH picker is unchanged.
+- [x] Under `isRemoteRuntime()`, `pickWorkspaceFolder()` opens the dialog and resolves with the chosen path, or `null` on cancel.
+  - It lists folders with `list_subdirs` (class `Read`, no new command) for the current workspace env, which covers local, WSL and SSH alike.
+- [x] Tests:
   - a pure helper that turns a listing into directory rows (hidden folders behind a toggle);
   - `pickWorkspaceFolder` resolves from the dialog in the remote runtime and still invokes the native command on the desktop;
   - a render test of the dialog with props.

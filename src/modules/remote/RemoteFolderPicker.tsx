@@ -153,12 +153,17 @@ export function FolderListing({
   onUp,
   onEnter,
   onRetry,
+  childPath: join = childPath,
+  isRoot = (path: string) => path === "/",
 }: {
   listing: Listing;
   state: RemoteState | undefined;
   onUp: (path: string) => void;
   onEnter: (path: string) => void;
   onRetry: () => void;
+  /** Path rules of the machine listed; a server's are POSIX. */
+  childPath?: (path: string, name: string) => string;
+  isRoot?: (path: string) => boolean;
 }) {
   const frame =
     "h-72 overflow-auto rounded-md border bg-muted/30 p-1 text-[12px]";
@@ -193,7 +198,7 @@ export function FolderListing({
       <div className="truncate px-2 py-1 font-mono text-muted-foreground" title={browse.path}>
         {browse.path}
       </div>
-      {browse.path !== "/" ? (
+      {!isRoot(browse.path) ? (
         <Row icon={ArrowUp01Icon} label=".." onClick={() => onUp(browse.path)} />
       ) : null}
       {browse.dirs.length === 0 ? (
@@ -204,7 +209,7 @@ export function FolderListing({
             key={name}
             icon={Folder01Icon}
             label={name}
-            onClick={() => onEnter(childPath(browse.path, name))}
+            onClick={() => onEnter(join(browse.path, name))}
           />
         ))
       )}

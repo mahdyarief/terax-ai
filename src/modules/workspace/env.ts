@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { create } from "zustand";
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
 import { setLastWslDistro } from "@/modules/settings/store";
+import { useBrowserFolderPicker } from "./folderPickerStore";
 
 export type WorkspaceEnv =
   | { kind: "local" }
@@ -96,6 +98,11 @@ export async function getWslHome(distro: string): Promise<string> {
 export async function pickWorkspaceFolder(
   defaultPath?: string | null,
 ): Promise<string | null> {
+  // A browser session cannot show the host's native dialog (it is Native in
+  // the bridge policy): pick in the app instead.
+  if (isRemoteRuntime()) {
+    return useBrowserFolderPicker.getState().open(defaultPath ?? null);
+  }
   return invoke<string | null>("workspace_pick_folder", {
     defaultPath: defaultPath ?? null,
   });

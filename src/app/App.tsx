@@ -191,6 +191,7 @@ import {
   WindowVibrancyBridge,
 } from "@/modules/theme";
 import { UpdaterDialog } from "@/modules/updater";
+import { BrowserFolderPicker } from "@/modules/workspace/BrowserFolderPicker";
 import { DesktopTabsPanel } from "@/modules/web-remote/DesktopTabsPanel";
 import {
   AskpassDialog,
@@ -200,6 +201,7 @@ import {
   useRemoteStore,
 } from "@/modules/remote";
 import {
+  pickWorkspaceFolder,
   useWorkspaceEnvStore,
   type WorkspaceEnv,
   workspaceScopeKey,
@@ -1503,9 +1505,9 @@ export default function App() {
     async (targetPath?: string) => {
       const chosen =
         targetPath ??
-        (await invoke<string | null>("workspace_pick_folder", {
-          defaultPath: activeSpaceRoot ?? activeCwd ?? launchCwd ?? home ?? null,
-        }));
+        (await pickWorkspaceFolder(
+          activeSpaceRoot ?? activeCwd ?? launchCwd ?? home ?? null,
+        ));
       if (!chosen) return;
 
       await native.workspaceAuthorize(chosen);
@@ -1535,9 +1537,9 @@ export default function App() {
       if (isSpaceWindow(windowLabel)) return null;
       const chosen =
         targetPath ??
-        (await invoke<string | null>("workspace_pick_folder", {
-          defaultPath: activeSpaceRoot ?? activeCwd ?? launchCwd ?? home ?? null,
-        }));
+        (await pickWorkspaceFolder(
+          activeSpaceRoot ?? activeCwd ?? launchCwd ?? home ?? null,
+        ));
       if (!chosen) return null;
 
       await native.workspaceAuthorize(chosen);
@@ -1592,9 +1594,9 @@ export default function App() {
   const handlePickFolderForSpace = useCallback(
     async (spaceId: string) => {
       const space = useSpaces.getState().spaces.find((s) => s.id === spaceId);
-      const chosen = await invoke<string | null>("workspace_pick_folder", {
-        defaultPath: space?.root ?? activeSpaceRoot ?? launchCwd ?? home ?? null,
-      });
+      const chosen = await pickWorkspaceFolder(
+        space?.root ?? activeSpaceRoot ?? launchCwd ?? home ?? null,
+      );
       if (!chosen) return;
 
       await native.workspaceAuthorize(chosen);
@@ -2948,6 +2950,7 @@ export default function App() {
           ) : null}
 
           <AskpassDialog />
+          {isRemoteRuntime() && <BrowserFolderPicker />}
           <RemoteConnections />
 
           <CloseDialogs
