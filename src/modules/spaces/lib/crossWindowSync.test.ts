@@ -3,6 +3,7 @@ import {
   applyHostChanged,
   type HostChangedPayload,
   reclaimHost,
+  shouldAnswerWindowReady,
 } from "./crossWindowSync";
 import type { SpaceMeta } from "./store";
 
@@ -64,6 +65,17 @@ describe("applyHostChanged", () => {
     const once = applyHostChanged(spaces(), payload);
     const twice = applyHostChanged(once, payload);
     expect(twice).toEqual(once);
+  });
+});
+
+describe("shouldAnswerWindowReady", () => {
+  it("answers a newcomer's announcement, but not answers or its own", () => {
+    expect(shouldAnswerWindowReady({ window: "remote-a1" }, "main")).toBe(true);
+    expect(
+      shouldAnswerWindowReady({ window: "remote-a1", reply: true }, "main"),
+    ).toBe(false);
+    expect(shouldAnswerWindowReady({ window: "main" }, "main")).toBe(false);
+    expect(shouldAnswerWindowReady(undefined, "main")).toBe(false);
   });
 });
 

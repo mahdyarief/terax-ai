@@ -18,7 +18,24 @@ export const SPACE_TABS_ATTACHED_EVENT = "spaces:tabs-attached";
 /** A space window announces that its cross-window listeners are mounted. */
 export const SPACE_WINDOW_READY_EVENT = "spaces:window-ready";
 
-export type WindowReadyPayload = { window: string };
+export type WindowReadyPayload = {
+  window: string;
+  /** Set on the answer to another window's announcement, never answered. */
+  reply?: boolean;
+};
+
+/**
+ * A window announces readiness once, at boot, so a window that opens later
+ * (a browser session joining a running host) would never learn about the
+ * windows already there. Each of them answers a fresh announcement directly;
+ * answers are not answered, so it never loops.
+ */
+export function shouldAnswerWindowReady(
+  payload: WindowReadyPayload | undefined,
+  windowLabel: string,
+): boolean {
+  return Boolean(payload?.window) && payload?.window !== windowLabel && !payload?.reply;
+}
 
 export type TabsAttachedPayload = {
   handoffId: string;

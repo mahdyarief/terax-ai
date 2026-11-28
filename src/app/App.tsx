@@ -103,6 +103,7 @@ import {
 } from "@/modules/spaces/lib/spaceTransfers";
 import {
   reclaimHost,
+  shouldAnswerWindowReady,
   SPACE_RECLAIM_REQUEST_EVENT,
   SPACE_TABS_ATTACHED_EVENT,
   SPACE_WINDOW_READY_EVENT,
@@ -2153,7 +2154,14 @@ export default function App() {
           })();
         }),
         listen<WindowReadyPayload>(SPACE_WINDOW_READY_EVENT, (event) => {
-          if (event.payload?.window) noteWindowReady(event.payload.window);
+          const payload = event.payload;
+          if (payload?.window) noteWindowReady(payload.window);
+          if (shouldAnswerWindowReady(payload, windowLabel)) {
+            void emitTo(payload.window, SPACE_WINDOW_READY_EVENT, {
+              window: windowLabel,
+              reply: true,
+            } satisfies WindowReadyPayload).catch(() => undefined);
+          }
         }),
         listen<{ spaceId: string }>(SPACE_DELETED_EVENT, (event) => {
           const id = event.payload?.spaceId;
