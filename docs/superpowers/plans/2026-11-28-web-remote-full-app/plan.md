@@ -2,7 +2,14 @@
 
 > **For agentic workers:** implement task by task. Each task is one commit on `dydev`, test first where it adds behaviour. Steps use checkbox (`- [ ]`) syntax for tracking. Phase 0 is a spike whose result decides whether Phases 1–5 go ahead as written.
 
-**Status (2026-11-28):** Phases 1-5 (Tasks 1-22) implemented, unit-tested, and verified on `aspirexc` (port 7690 + 1-3 session memory). Pending user confirmation to restart `terax-remote` and run manual Chrome walkthrough. Review fixes after Task 22: the `remote_*` management commands and `remote_report_ports` are `Native` (a browser could widen grants, pair devices, move the listener, or aim `/proxy/` at any local port), and `Transport::Loopback` comes from the peer address instead of the client's `Host` header. Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
+**Status (2026-11-28):** Phases 1-5 (Tasks 1-22) implemented, unit-tested, and verified on `aspirexc` (port 7690 + 1-3 session memory). Pending user confirmation to restart `terax-remote` and run manual Chrome walkthrough. Review fixes after Task 22: the `remote_*` management commands and `remote_report_ports` are `Native` (a browser could widen grants, pair devices, move the listener, or aim `/proxy/` at any local port), and `Transport::Loopback` comes from the peer address instead of the client's `Host` header. Deployed `d779d3c` to `terax-remote` on aspirexc. The Lenovo laptop's Chrome has the `app` grant. Checked over the API with a temporary device, removed afterwards:
+- `/app/` serves `remote-runtime.js` with no invoke key in it;
+- `pty_list_shells` and `remote_access_status` answer;
+- `remote_device_update`, `remote_report_ports`, `remote_pairing_start`, `secrets_get_all`, and `secrets_has` from a tailnet peer (also with `Host: 127.0.0.1`) answer 403;
+- `/proxy/6768/` answers 403;
+- without the grant, `/api/app/session` answers 403.
+
+The manual Chrome walkthrough is still pending. Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
 
 ## Goal
 
