@@ -2,7 +2,7 @@
 
 > **For agentic workers:** implement task by task. Each task is one commit on `dydev`, test first where it adds behaviour. Steps use checkbox (`- [ ]`) syntax for tracking. Phase 0 is a spike whose result decides whether Phases 1–5 go ahead as written.
 
-**Status (2026-11-28):** planned, nothing implemented. Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
+**Status (2026-11-28):** Phase 0 (spike) verified on aspirexc; awaiting go-ahead for Phase 1. Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
 
 ## Goal
 
@@ -94,12 +94,43 @@ So the server does not re-implement 159 commands. It forwards an allowlisted sub
 
 ### Task 0: prove dispatch, callbacks, channels and schemes
 The spike lives on `dydev` (the user wants a single branch), behind `TERAX_REMOTE_SPIKE=1` because its route has no auth. Task 3 replaces it. The findings go into this plan's "Spike result" section.
-- [ ] Create a hidden window `remote-0` loading a minimal `remote-relay.html`. Add `remote-*` to `capabilities/default.json`, `desktop.json` and `clipboard.json`.
-- [ ] From an HTTP handler, run `pty_list` (or any read command) through `Webview::on_message` with `app.invoke_key()` and the webview's own URL. Confirm the JSON response reaches the HTTP response through `OwnedInvokeResponder`, and that ACL denial works for a command the capability lacks.
-- [ ] Register `plugin:event|listen` through the same path with a callback id. Confirm that `app.emit("fs:changed", …)` runs that callback id inside the relay page, and that the relay can forward it, by overriding `__TAURI_INTERNALS__.runCallback` or whatever 2.12.2 uses; record which.
-- [ ] Do the same for a `Channel` argument (the LSP transport's shape), including a payload large enough to take Tauri's fetch path for channel data.
-- [ ] Call `pty::stream_protocol`'s core from an HTTP route with the relay label. If it is tied to `UriSchemeContext`, note the refactor needed.
-- [ ] Measure the relay webview's memory on aspirexc (WebKitGTK) and on Windows (WebView2).
+- [x] Create a hidden window `remote-0` loading a minimal `remote-relay.html`. Add `remote-*` to `capabilities/default.json`, `desktop.json` and `clipboard.json`.
+- [x] From an HTTP handler, run `pty_list` (or any read command) through `Webview::on_message` with `app.invoke_key()` and the webview's own URL. Confirm the JSON response reaches the HTTP response through `OwnedInvokeResponder`, and that ACL denial works for a command the capability lacks.
+- [x] Register `plugin:event|listen` through the same path with a callback id. Confirm that `app.emit("fs:changed", …)` runs that callback id inside the relay page, and that the relay can forward it, by overriding `__TAURI_INTERNALS__.runCallback` or whatever 2.12.2 uses; record which.
+- [x] Do the same for a `Channel` argument (the LSP transport's shape), including a payload large enough to take Tauri's fetch path for channel data.
+- [x] Call `pty::stream_protocol`'s core from an HTTP route with the relay label. If it is tied to `UriSchemeContext`, note the refactor needed.
+- [ ] Measure the relay webview's memory on aspirexc (WebKitGTK) and on Windows (WebView2). (aspirexc measured; Windows skipped per `resume.md`.)
+
+### Spike result
+
+Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) with `TERAX_REMOTE_SPIKE=1 src-tauri/target/release/terax --remote-serve --bind loopback --port 7690` and `GET /spike/check`:
+
+1. **Checks (5/5 passed, `"all_passed": true`):**
+   - `check1_window`: `passed: true`, `url: "tauri://localhost/remote-relay.html"`.
+   - `check2_invoke_and_acl`: `passed: true`. `pty_list_shells` returned `Ok((true, Array [...]))` (9 shells), and `plugin:window|set_always_on_top` returned `Ok((false, "Command plugin:window|set_always_on_top not allowed by ACL"))`.
+   - `check3_event_relay`: `passed: true`. `plugin:event|listen` returned `Ok((true, Number(46)))`, and `app.emit("fs:changed", {"spike":"event-ok"})` delivered `{"event":"fs:changed","id":46,"payload":{"spike":"event-ok"}}` to `spike_relay_push`.
+   - `check4_channel`: `passed: true`. `spike_test_channel` delivered both small (`small_hits: 2`, including `{ end: true }`) and 12 KB (`large_hits: 2`, `large_len: 12000`) payloads through the relay.
+   - `check5_pty_scheme`: `passed: true`. `pty::protocol::dispatch_for_label` for `"remote-0"` with `POST /ack` (empty body) returned `Ok(Ok((400, ...)))` (`"request is shorter than its header"`), proving admission and label routing without `UriSchemeContext`.
+
+   Raw `/spike/check` JSON:
+   ```json
+   {"all_passed":true,"check1_window":{"passed":true,"url":"tauri://localhost/remote-relay.html"},"check2_invoke_and_acl":{"acl_denied":"Ok((false, String(\"Command plugin:window|set_always_on_top not allowed by ACL\")))","passed":true,"pty_list_shells":"Ok((true, Array [Object {\"integrated\": Bool(true), \"name\": String(\"bash\"), \"path\": String(\"/bin/bash\")}, Object {\"integrated\": Bool(false), \"name\": String(\"sh\"), \"path\": String(\"/bin/sh\")}, Object {\"integrated\": Bool(false), \"name\": String(\"sh\"), \"path\": String(\"/usr/bin/sh\")}, Object {\"integrated\": Bool(true), \"name\": String(\"bash\"), \"path\": String(\"/usr/bin/bash\")}, Object {\"integrated\": Bool(false), \"name\": String(\"rbash\"), \"path\": String(\"/bin/rbash\")}, Object {\"integrated\": Bool(false), \"name\": String(\"rbash\"), \"path\": String(\"/usr/bin/rbash\")}, Object {\"integrated\": Bool(false), \"name\": String(\"dash\"), \"path\": String(\"/usr/bin/dash\")}, Object {\"integrated\": Bool(false), \"name\": String(\"screen\"), \"path\": String(\"/usr/bin/screen\")}, Object {\"integrated\": Bool(false), \"name\": String(\"tmux\"), \"path\": String(\"/usr/bin/tmux\")}]))"},"check3_event_relay":{"hits":[{"event":"fs:changed","id":46,"payload":{"spike":"event-ok"}}],"listen":"Ok((true, Number(46)))","passed":true},"check4_channel":{"large_hits":2,"large_len":12000,"passed":true,"small_hits":2},"check5_pty_scheme":{"passed":true,"result":"Ok(Ok((400, [114, 101, 113, 117, 101, 115, 116, 32, 105, 115, 32, 115, 104, 111, 114, 116, 101, 114, 32, 116, 104, 97, 110, 32, 105, 116, 115, 32, 104, 101, 97, 100, 101, 114])))"}}
+   ```
+
+2. **How Tauri 2.12.2 runs callbacks and large `Channel` payloads:**
+   - In `tauri-2.12.2/scripts/core.js`, `window.__TAURI_INTERNALS__.runCallback` is defined with `Object.defineProperty(..., { value: runCallback })` (non-writable, non-configurable), so it cannot be overwritten directly.
+   - `runCallback(id, data)` looks up `callbacks.get(id)` on the `callbacks` `Map` (`Object.defineProperty(..., { value: callbacks })`). Overriding `callbacks.get` on that `Map` instance (as `remote-relay.html` does) intercepts any callback id not registered locally in the relay page and forwards `(id, payload)` via `invoke("spike_relay_push", ...)`.
+   - In `tauri-2.12.2/src/ipc/channel.rs`, small `Channel` messages (`< MAX_JSON_DIRECT_EXECUTE_THRESHOLD` / `MAX_RAW_DIRECT_EXECUTE_THRESHOLD`) are evaluated directly via `webview.eval("window.__TAURI_INTERNALS__.runCallback(id, { message: ..., index: ... })")`. Larger payloads (such as the 12 KB test) are queued in `ChannelDataIpcQueue`, and `webview.eval` runs `window.__TAURI_INTERNALS__.invoke('plugin:core|__FETCH_CHANNEL_DATA__', null, { headers: { 'Tauri-Channel-Data-Id': '<data_id>' } }).then((response) => window.__TAURI_INTERNALS__.runCallback(id, { message: response, index: ... }))`. The relay webview performs that fetch itself and then hits `callbacks.get(id)` with the resolved payload.
+
+3. **Memory measurement (aspirexc, WebKitGTK 4.1):**
+   - Before `/spike/check` (no `remote-0`): `terax` RSS 188,388 KiB (184.0 MiB); main `WebKitWebProcess` RSS 457,916 KiB (447.2 MiB).
+   - After `/spike/check` (`remote-0` open): `terax` RSS 187,776 KiB (183.4 MiB); main `WebKitWebProcess` RSS 463,552 KiB (452.7 MiB); new `remote-0` `WebKitWebProcess` RSS **191,484 KiB (187.0 MiB)**.
+   - Note: 187.0 MiB RSS on WebKitGTK is above the 150 MiB exit-criteria target (RSS includes shared library mappings; PSS was not measured).
+   - Windows (WebView2) memory was not measured (skipped per `resume.md`).
+
+4. **Refactor needed for `stream_protocol` (and asset/preview schemes):**
+   - `pty::protocol::stream_protocol` was decoupled into `dispatch_for_label(app, label, method, path, origin, body, reply: Box<dyn Reply>)` and `dispatch(hub, origins, incoming, reply)`. For Task 6, the `/scheme/terax-pty/*` HTTP route only needs to map `Reply`'s `(status, body)` to an Axum/Hyper response with `Content-Type` (`application/octet-stream` on 200, `text/plain` otherwise), `Cache-Control: no-store`, and `X-Content-Type-Options: nosniff`.
+   - `fs::assets::serve` and `fs::preview::serve` still take `UriSchemeContext<'_, R>` and `UriSchemeResponder`, so Task 6 needs the same `dispatch_for_label` split for both.
 
 **Exit criteria:**
 - All five checks pass, and one relay costs under about 150 MiB.
