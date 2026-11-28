@@ -59,6 +59,22 @@ function isRawBody(args: unknown): args is Uint8Array | ArrayBuffer {
   return args instanceof Uint8Array || args instanceof ArrayBuffer;
 }
 
+export function decodeRelayPayload(payload: unknown): unknown {
+  if (!payload || typeof payload !== "object") return payload;
+  const obj = payload as Record<string, unknown>;
+  if (obj.__rawPayload === true && Array.isArray(obj.data)) {
+    return new Uint8Array(obj.data as number[]).buffer;
+  }
+  if (obj.__rawMessage === true && Array.isArray(obj.message)) {
+    const { __rawMessage: _, ...rest } = obj;
+    return {
+      ...rest,
+      message: new Uint8Array(obj.message as number[]).buffer,
+    };
+  }
+  return payload;
+}
+
 export function createTauriInternals(options: {
   getSession: () => RemoteSessionState;
   waitForSession: () => Promise<RemoteSessionState>;

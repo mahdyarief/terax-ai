@@ -17,7 +17,10 @@ interface TauriInternals {
 
   function sanitize(val: unknown): unknown {
     if (val instanceof ArrayBuffer) {
-      return Array.from(new Uint8Array(val));
+      return {
+        __rawPayload: true,
+        data: Array.from(new Uint8Array(val)),
+      };
     }
     if (
       val &&
@@ -26,7 +29,11 @@ interface TauriInternals {
       (val as { message: unknown }).message instanceof ArrayBuffer
     ) {
       const obj = val as { message: ArrayBuffer };
-      return { ...obj, message: Array.from(new Uint8Array(obj.message)) };
+      return {
+        ...obj,
+        __rawMessage: true,
+        message: Array.from(new Uint8Array(obj.message)),
+      };
     }
     return val;
   }

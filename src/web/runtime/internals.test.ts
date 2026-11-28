@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTauriInternals } from "./internals";
+import { createTauriInternals, decodeRelayPayload } from "./internals";
 
 describe("createTauriInternals", () => {
   it("dispatches JSON and raw invokes to /api/app/invoke", async () => {
@@ -89,5 +89,24 @@ describe("createTauriInternals", () => {
         }),
       }),
     );
+  });
+
+  it("reconstructs binary ArrayBuffer payloads for relayed Channels", () => {
+    const encoded = Array.from(new TextEncoder().encode('{"jsonrpc":"2.0"}'));
+    const decoded = decodeRelayPayload({
+      __rawMessage: true,
+      index: 0,
+      message: encoded,
+    }) as { index: number; message: ArrayBuffer };
+    expect(decoded.index).toBe(0);
+    expect(decoded.message).toBeInstanceOf(ArrayBuffer);
+    expect(new TextDecoder().decode(decoded.message)).toBe('{"jsonrpc":"2.0"}');
+
+    const raw = decodeRelayPayload({
+      __rawPayload: true,
+      data: [1, 2, 3],
+    }) as ArrayBuffer;
+    expect(raw).toBeInstanceOf(ArrayBuffer);
+    expect(Array.from(new Uint8Array(raw))).toEqual([1, 2, 3]);
   });
 });

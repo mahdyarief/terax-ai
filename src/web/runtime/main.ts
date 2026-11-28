@@ -1,4 +1,8 @@
-import { createTauriInternals, type RemoteSessionState } from "./internals";
+import {
+  createTauriInternals,
+  decodeRelayPayload,
+  type RemoteSessionState,
+} from "./internals";
 
 const SESSION_STORAGE_KEY = "terax:remote-session";
 const BANNER_ID = "terax-remote-reconnect-banner";
@@ -91,7 +95,7 @@ async function bootstrap(): Promise<void> {
           id: number;
           payload: unknown;
         };
-        tauriInternals.runCallback(msg.id, msg.payload);
+        tauriInternals.runCallback(msg.id, decodeRelayPayload(msg.payload));
       } catch (err) {
         console.error("remote-runtime: invalid callback payload", err);
       }

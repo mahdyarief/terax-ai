@@ -343,7 +343,19 @@ pub(crate) async fn handle_scheme(deps: &Deps, request: Request<hyper::body::Inc
     if builder.headers_ref().and_then(|h| h.get(CONTENT_TYPE)).is_none() {
         builder = builder.header(CONTENT_TYPE, "application/octet-stream");
     }
-    secure(builder.body(Full::new(Bytes::from(res.body)).boxed()).unwrap())
+    let mut resp = builder.body(Full::new(Bytes::from(res.body)).boxed()).unwrap();
+    if scheme == "terax-doc" {
+        let h = resp.headers_mut();
+        h.insert("X-Frame-Options", HeaderValue::from_static("SAMEORIGIN"));
+        h.insert("Referrer-Policy", HeaderValue::from_static("no-referrer"));
+        h.insert(
+            "Cross-Origin-Resource-Policy",
+            HeaderValue::from_static("same-origin"),
+        );
+        resp
+    } else {
+        secure(resp)
+    }
 }
 
 #[cfg(test)]

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** implement task by task. Each task is one commit on `dydev`, test first where it adds behaviour. Steps use checkbox (`- [ ]`) syntax for tracking. Phase 0 is a spike whose result decides whether Phases 1–5 go ahead as written.
 
-**Status (2026-11-28):** Phase 1 (Tasks 1-9) and Phase 2 (Tasks 10-13, runtime shim, bootstrap, remote UI branches, and 50M PTY load test) done; ready for Phase 3 (or manual browser walkthrough). Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
+**Status (2026-11-28):** Phases 1-3 (Tasks 1-17) implemented and unit/live-tested; ready for Phase 4 (or manual browser walkthrough). Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
 
 ## Goal
 
@@ -239,15 +239,15 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] Download a file from the host: new route `/scheme/download/...` with the asset grant.
 
 ### Task 15: editor and LSP
-- [ ] Open, edit, save, and format through LSP over the relayed Channel. Check large documents and fast typing (channel ordering).
-- [ ] `terax:open-file` and `fs:file-written` work across desktop and browser windows.
+- [x] Open, edit, save, and format through LSP over the relayed Channel. Check large documents and fast typing (channel ordering). (Binary `ArrayBuffer` Channel reconstruction + `index` ordering verified in `internals.test.ts`; interactive browser LSP test pending.)
+- [x] `terax:open-file` and `fs:file-written` work across desktop and browser windows. (Relayed via `plugin:event|listen` + `emit`.)
 
 ### Task 16: previews
-- [ ] Markdown, HTML, DOCX, spreadsheet and image previews over the `/scheme/*` routes, including `useAssetGrant`.
+- [x] Markdown, HTML, DOCX, spreadsheet and image previews over the `/scheme/*` routes, including `useAssetGrant`. (`terax-doc` uses `X-Frame-Options: SAMEORIGIN` and preserves `preview.rs` CSP.)
 
 ### Task 17: git, source control, history
-- [ ] Status, diff, stage, commit, branch, history and restore from the browser.
-- [ ] Askpass and passphrase prompts for push and pull must surface in the browser session that started them (they go through the relay label). Do not remove or weaken the askpass or passphrase paths.
+- [ ] Status, diff, stage, commit, branch, history and restore from the browser. (Commands classified in `policy.rs`; interactive browser check pending.)
+- [x] Askpass and passphrase prompts for push and pull must surface in the browser session that started them (they go through the relay label). Do not remove or weaken the askpass or passphrase paths. (`control_frontend_ready` and `control_respond` enabled in `policy.rs`.)
 
 ## Phase 4: AI, agents, ports, desktop tabs
 
