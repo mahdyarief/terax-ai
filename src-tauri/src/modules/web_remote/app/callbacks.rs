@@ -64,6 +64,13 @@ pub(crate) fn handle_callbacks(deps: &Deps, request: Request<Incoming>) -> Respo
     let last_id = sse::last_event_id(request.headers());
     let sub = match relay.subscribe(&session_id, &caller.id, last_id) {
         Ok(sub) => sub,
+        Err(SessionError::NotFound) if relay.was_superseded(&session_id) => {
+            // The page reconnected after another tab took over: say so once,
+            // so it stops instead of opening a session of its own.
+            let (tx, rx) = mpsc::channel(sse::STREAM_BUFFER);
+            sse::send(&tx, sse::event(None, "superseded", "{}"));
+            return secure(sse::response(rx));
+        }
         Err(SessionError::NotFound) => {
             return secure(text(StatusCode::NOT_FOUND, "Session not found."));
         }
@@ -121,7 +128,12 @@ pub(crate) fn handle_callbacks(deps: &Deps, request: Request<Incoming>) -> Respo
                             sse::send(&tx, sse::event(None, "reset", "{}"));
                             break;
                         }
-                        Err(broadcast::error::RecvError::Closed) => break,
+                        Err(broadcast::error::RecvError::Closed) => {
+                            if _unsub.relay.was_superseded(&_unsub.session_id) {
+                                sse::send(&tx, sse::event(None, "superseded", "{}"));
+                            }
+                            break;
+                        }
                     }
                 }
                 _ = device_updates.changed() => {
@@ -192,6 +204,92 @@ mod tests {
     struct NoEvents;
     impl TabEvents for NoEvents {
         fn emit(&self, _: &str, _: &crate::modules::web_remote::server::TabAction) {}
+    }
+
+    async fn read_for(stream: &mut tokio::net::TcpStream, needle: &str) -> String {
+        let mut buf = vec![0u8; 4096];
+        let mut collected = String::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        while tokio::time::Instant::now() < deadline && !collected.contains(needle) {
+            let Ok(Ok(n)) = tokio::time::timeout(
+                std::time::Duration::from_millis(500),
+                stream.read(&mut buf),
+            )
+            .await
+            else {
+                break;
+            };
+            if n == 0 {
+                break;
+            }
+            collected.push_str(&String::from_utf8_lossy(&buf[..n]));
+        }
+        collected
+    }
+
+    #[tokio::test]
+    async fn a_superseded_session_is_told_so_live_and_on_reconnect() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let devices = Arc::new(DeviceStore::memory());
+        let (info, token) = devices.add("browser");
+        assert!(devices.update(
+            &info.id,
+            Grant {
+                input: false,
+                tabs: false,
+                app: true,
+            }
+        ));
+        let relay = Arc::new(SessionManager::new(Arc::new(DummyHost)));
+        let first = relay.create_or_reuse(&info.id, None).await.unwrap();
+
+        let (_stop_tx, stop_rx) = watch::channel(false);
+        let deps = Deps {
+            assets: Arc::new(NoAssets),
+            tabs: Arc::new(TabRegistry::new()),
+            hosts: HostPolicy::loopback(port),
+            viewers: Arc::new(AtomicUsize::new(0)),
+            devices: devices.clone(),
+            pairing: Arc::new(Pairing::default()),
+            sessions: Arc::new(NoPtys),
+            limits: Arc::new(StreamLimits::default()),
+            events: Arc::new(NoEvents),
+            https: false,
+            relay: Some(relay.clone()),
+            schemes: None,
+            ports: None,
+            audit: None,
+            rate_limit: None,
+        };
+        tokio::spawn(accept_loop(listener, deps, stop_rx));
+        let request = format!(
+            "GET /api/app/callbacks?session={} HTTP/1.1
+Host: localhost:{port}
+Cookie: terax_remote={token}
+
+",
+            first.id
+        );
+
+        let mut live = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        live.write_all(request.as_bytes()).await.unwrap();
+        let opened = read_for(&mut live, "200 OK").await;
+        assert!(opened.contains("200 OK"), "{opened}");
+
+        relay.create_or_reuse(&info.id, None).await.unwrap();
+        let told = read_for(&mut live, "event: superseded").await;
+        assert!(told.contains("event: superseded"), "{told}");
+
+        let mut again = tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .unwrap();
+        again.write_all(request.as_bytes()).await.unwrap();
+        let reconnect = read_for(&mut again, "event: superseded").await;
+        assert!(reconnect.contains("200 OK"), "{reconnect}");
+        assert!(reconnect.contains("event: superseded"), "{reconnect}");
     }
 
     #[tokio::test]

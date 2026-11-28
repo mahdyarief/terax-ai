@@ -6,6 +6,7 @@ import {
 
 const SESSION_STORAGE_KEY = "terax:remote-session";
 const BANNER_ID = "terax-remote-reconnect-banner";
+const SUPERSEDED_ID = "terax-remote-superseded";
 
 let currentSession: RemoteSessionState = { id: "", label: "remote-0" };
 let resolveSession!: (s: RemoteSessionState) => void;
@@ -57,6 +58,46 @@ function setReconnectBanner(visible: boolean): void {
   document.body.appendChild(banner);
 }
 
+/** Another tab of this device opened the app and took over its session. */
+function showSupersededNotice(): void {
+  if (typeof document === "undefined" || !document.body) return;
+  setReconnectBanner(false);
+  if (document.getElementById(SUPERSEDED_ID)) return;
+  const overlay = document.createElement("div");
+  overlay.id = SUPERSEDED_ID;
+  Object.assign(overlay.style, {
+    position: "fixed",
+    inset: "0",
+    zIndex: "100000",
+    display: "flex",
+    flexDirection: "column",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: "12px",
+    background: "rgba(0, 0, 0, 0.75)",
+    color: "#fff",
+    fontFamily: "system-ui, sans-serif",
+    fontSize: "14px",
+  });
+  const message = document.createElement("p");
+  message.textContent = "Terax was opened in another tab on this device.";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Use it here";
+  Object.assign(button.style, {
+    padding: "6px 14px",
+    borderRadius: "6px",
+    border: "0",
+    background: "#fff",
+    color: "#111",
+    fontWeight: "600",
+    cursor: "pointer",
+  });
+  button.addEventListener("click", () => window.location.reload());
+  overlay.append(message, button);
+  document.body.appendChild(overlay);
+}
+
 async function bootstrap(): Promise<void> {
   const savedId = sessionStorage.getItem(SESSION_STORAGE_KEY) ?? undefined;
   const res = await fetch("/api/app/session", {
@@ -102,6 +143,17 @@ async function bootstrap(): Promise<void> {
     });
     source.addEventListener("reset", () => {
       window.location.reload();
+    });
+    source.addEventListener("superseded", () => {
+      // Stop here: reconnecting would open a session and take it back.
+      // "Use it here" reloads without the old id, which takes over again.
+      source.close();
+      sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      showSupersededNotice();
+      if (!opened) {
+        opened = true;
+        resolve();
+      }
     });
     source.onerror = () => {
       if (opened) {

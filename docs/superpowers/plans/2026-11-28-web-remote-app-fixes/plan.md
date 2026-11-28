@@ -47,15 +47,15 @@
 - [ ] After deploy: in `/app/`, open a block tab and confirm the watermark logo loads (network 200), and that an agent notification plays its sound.
 
 ### Task 2: a stable per-device window label (symptom 2, part 1)
-- [ ] Rust, `app/sessions.rs`: the relay label is `remote-<device id>`.
+- [x] Rust, `app/sessions.rs`: the relay label is `remote-<device id>`.
   - When a session for that device is already open, it is closed first: the relay webview is destroyed, and its callbacks SSE ends with `event: superseded`.
   - The session id stays random and per session. Only the label is stable.
-- [ ] Revoking a device, or removing its `app` grant, still closes the session (existing behaviour, keep its test).
-- [ ] Tests:
+- [x] Revoking a device, or removing its `app` grant, still closes the session (existing behaviour, keep its test).
+- [x] Tests:
   - two sessions from one device: the first is superseded, and the label is reused;
   - two devices get different labels;
   - a label never holds a character outside `[a-z0-9-]`.
-- [ ] Shim (`src/web/runtime/main.ts`): on `superseded`, show "This app was opened in another tab" with a Reload button instead of the reconnect banner.
+- [x] Shim (`src/web/runtime/main.ts`): on `superseded`, show "Terax was opened in another tab on this device" with a "Use it here" button (reload, which takes the session back) instead of the reconnect banner. The stream also answers `superseded` when the old page reconnects after the takeover, so it never opens a session of its own and the two tabs do not take turns. `open_relay` destroys a window still under the label and waits for it to go, since labels are now reused.
 
 ### Task 3: a browser session always shows a space (symptoms 1 and 2)
 - [ ] `POST /api/app/session` reports `headless` (true under `--remote-serve`). The runtime exposes it as `__TERAX_REMOTE_HEADLESS__`.

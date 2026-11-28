@@ -1,6 +1,10 @@
-//! Hidden relay webview sessions (`remote-<n>`) for `/app/` browser clients.
+//! Hidden relay webview sessions (`remote-<device id>`) for `/app/` browser
+//! clients.
 //!
-//! Each session owns one hidden `remote-<n>` webview loading `remote-relay.html`,
+//! Each session owns one hidden `remote-<device id>` webview loading
+//! `remote-relay.html`. The label is stable per device so spaces it hosts
+//! survive reconnects and restarts, as `space-*` windows do; a second session
+//! from the same device supersedes the first. Each session
 //! forwards callbacks (`remote_relay_push`) into a bounded replay buffer + live
 //! broadcast channel, and closes after 60 s without an SSE subscriber, on device
 //! revocation / `app` grant removal, or when the listener stops.
@@ -8,7 +12,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -26,6 +30,22 @@ pub const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(12 * 60 * 60);
 pub const REPLAY_MAX_EVENTS: usize = 1_000;
 pub const REPLAY_MAX_BYTES: usize = 4 * 1024 * 1024;
 const BROADCAST_CAP: usize = 256;
+const SUPERSEDED_MEMORY: usize = 32;
+
+/// The relay window label for a device: `remote-` plus the device id, kept to
+/// `[a-z0-9-]` so it is always a valid, predictable window label.
+pub fn relay_label(device_id: &str) -> String {
+    let mut label = String::from("remote-");
+    for c in device_id.chars() {
+        let c = c.to_ascii_lowercase();
+        label.push(if c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' {
+            c
+        } else {
+            '-'
+        });
+    }
+    label
+}
 
 #[derive(Clone, Debug)]
 pub enum InvokeRequestBody {
@@ -67,7 +87,20 @@ impl RelayHost for AppRelayHost {
         label: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<(), String>> + Send + 'a>> {
         Box::pin(async move {
-            if self.0.get_webview_window(label).is_none() {
+            // Labels are reused per device. A window still under this label
+            // belongs to a replaced or expired session: destroy it and wait
+            // until it is gone, so the new session never inherits it.
+            if let Some(stale) = self.0.get_webview_window(label) {
+                let _ = stale.destroy();
+                let deadline = Instant::now() + Duration::from_secs(3);
+                while self.0.get_webview_window(label).is_some() {
+                    if Instant::now() >= deadline {
+                        return Err(format!("old {label} did not close"));
+                    }
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            }
+            {
                 WebviewWindowBuilder::new(
                     &self.0,
                     label,
@@ -215,7 +248,9 @@ pub struct SessionManager {
     host: Arc<dyn RelayHost>,
     sessions: Mutex<HashMap<String, SessionEntry>>,
     label_to_id: Mutex<HashMap<String, String>>,
-    next_label_index: AtomicUsize,
+    /// Sessions another session of the same device replaced, newest last, so
+    /// their callback stream can say so instead of reconnecting.
+    superseded: Mutex<VecDeque<String>>,
     next_callback_id: AtomicU32,
 }
 
@@ -225,7 +260,7 @@ impl SessionManager {
             host,
             sessions: Mutex::new(HashMap::new()),
             label_to_id: Mutex::new(HashMap::new()),
-            next_label_index: AtomicUsize::new(0),
+            superseded: Mutex::new(VecDeque::new()),
             next_callback_id: AtomicU32::new(100),
         }
     }
@@ -253,14 +288,27 @@ impl SessionManager {
             }
         }
 
-        let label = {
-            let guard = self.sessions.lock().unwrap();
+        let label = relay_label(device_id);
+        // One app session per device: a new one replaces the old, whose
+        // stream is told it was superseded.
+        let replaced = {
+            let mut guard = self.sessions.lock().unwrap();
+            let mut label_map = self.label_to_id.lock().unwrap();
+            let old = label_map.remove(&label).and_then(|id| guard.remove(&id));
             if guard.len() >= MAX_RELAY_SESSIONS {
+                if let Some(entry) = old {
+                    label_map.insert(label.clone(), entry.id.clone());
+                    guard.insert(entry.id.clone(), entry);
+                }
                 return Err(SessionError::TooManySessions);
             }
-            let idx = self.next_label_index.fetch_add(1, Ordering::Relaxed);
-            format!("remote-{idx}")
+            old
         };
+        if let Some(entry) = replaced {
+            self.mark_superseded(&entry.id);
+            drop(entry);
+            self.host.close_relay(&label);
+        }
 
         self.host
             .open_relay(&label)
@@ -295,6 +343,19 @@ impl SessionManager {
         }
 
         Ok(SessionInfo { id, label })
+    }
+
+    fn mark_superseded(&self, session_id: &str) {
+        let mut list = self.superseded.lock().unwrap();
+        list.push_back(session_id.to_string());
+        while list.len() > SUPERSEDED_MEMORY {
+            list.pop_front();
+        }
+    }
+
+    /// Whether this session was replaced by a newer one from the same device.
+    pub fn was_superseded(&self, session_id: &str) -> bool {
+        self.superseded.lock().unwrap().iter().any(|id| id == session_id)
     }
 
     pub fn lookup(&self, session_id: &str, device_id: &str) -> Option<String> {
@@ -590,26 +651,65 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn caps_at_three_sessions_and_reuses_owned_session() {
+    async fn caps_at_three_devices_and_reuses_owned_session() {
         let host = Arc::new(FakeHost::default());
         let mgr = SessionManager::new(host.clone());
 
         let s0 = mgr.create_or_reuse("dev-a", None).await.unwrap();
-        let s1 = mgr.create_or_reuse("dev-a", None).await.unwrap();
-        let s2 = mgr.create_or_reuse("dev-b", None).await.unwrap();
-        assert_eq!(s0.label, "remote-0");
-        assert_eq!(s1.label, "remote-1");
-        assert_eq!(s2.label, "remote-2");
+        let s1 = mgr.create_or_reuse("dev-b", None).await.unwrap();
+        let s2 = mgr.create_or_reuse("dev-c", None).await.unwrap();
+        assert_eq!(s0.label, "remote-dev-a");
+        assert_eq!(s1.label, "remote-dev-b");
+        assert_eq!(s2.label, "remote-dev-c");
 
         // Reusing an owned session succeeds even at cap.
         let reused = mgr.create_or_reuse("dev-a", Some(&s0.id)).await.unwrap();
         assert_eq!(reused.id, s0.id);
 
-        // Fourth distinct session is rejected.
+        // A fourth device is rejected; a known device replaces its own.
         assert_eq!(
-            mgr.create_or_reuse("dev-c", None).await.unwrap_err(),
+            mgr.create_or_reuse("dev-d", None).await.unwrap_err(),
             SessionError::TooManySessions
         );
+        let again = mgr.create_or_reuse("dev-b", None).await.unwrap();
+        assert_eq!(again.label, "remote-dev-b");
+        assert_eq!(mgr.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_second_session_from_one_device_supersedes_the_first_and_keeps_its_label() {
+        let host = Arc::new(FakeHost::default());
+        let mgr = SessionManager::new(host.clone());
+        let first = mgr.create_or_reuse("dev-a", None).await.unwrap();
+        let other = mgr.create_or_reuse("dev-b", None).await.unwrap();
+        let second = mgr.create_or_reuse("dev-a", None).await.unwrap();
+
+        assert_ne!(first.id, second.id, "the session id is per session");
+        assert_eq!(first.label, second.label, "the label is per device");
+        assert_ne!(first.label, other.label);
+        assert!(mgr.lookup(&first.id, "dev-a").is_none());
+        assert!(mgr.lookup(&second.id, "dev-a").is_some());
+        assert!(mgr.was_superseded(&first.id));
+        assert!(!mgr.was_superseded(&second.id));
+        assert_eq!(host.closed.lock().unwrap().as_slice(), &["remote-dev-a"]);
+
+        // Callbacks for the label reach the new session only.
+        assert!(mgr.push_callback(&second.label, 7, serde_json::json!(1)));
+        assert!(matches!(
+            mgr.subscribe(&first.id, "dev-a", None),
+            Err(SessionError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn relay_labels_only_hold_lowercase_letters_digits_and_dashes() {
+        assert_eq!(relay_label("a1b2c3d4e5f6a7b8"), "remote-a1b2c3d4e5f6a7b8");
+        assert_eq!(relay_label("AB_cd/../x y"), "remote-ab-cd----x-y");
+        for label in [relay_label("Zz9-"), relay_label("é:\\0")] {
+            assert!(label
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'));
+        }
     }
 
     #[tokio::test]
@@ -672,7 +772,7 @@ mod tests {
         assert!(mgr.lookup(&s3.id, "dev-d").is_none());
         assert_eq!(
             host.closed.lock().unwrap().as_slice(),
-            &["remote-1", "remote-0", "remote-2", "remote-3"]
+            &["remote-dev-b", "remote-dev-a", "remote-dev-c", "remote-dev-d"]
         );
     }
 }
