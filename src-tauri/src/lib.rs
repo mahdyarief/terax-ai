@@ -361,6 +361,7 @@ pub fn run() {
                 ));
             }
             if serve.enabled {
+                modules::web_remote::set_headless(true);
                 // Nobody is at this machine: the browser is the only window.
                 if let Some(main) = _app.get_webview_window("main") {
                     let _ = main.hide();

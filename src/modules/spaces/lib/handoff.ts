@@ -11,6 +11,20 @@ export function spaceIdFromWindowLabel(label: string): string | null {
   return id.length > 0 ? id : null;
 }
 
+/** Browser sessions of the full app use `remote-<device id>` windows. */
+export function isRemoteWindowLabel(label: string): boolean {
+  return label.startsWith("remote-");
+}
+
+/**
+ * Windows that can bring a space hosted elsewhere back to themselves: the
+ * desktop's main window, and a browser session, which is the only window a
+ * person sees on a headless host.
+ */
+export function isHomeWindow(label: string): boolean {
+  return label === "main" || isRemoteWindowLabel(label);
+}
+
 /** True for the window dedicated to one space (as opposed to "main"). */
 export function isSpaceWindow(label: string): boolean {
   return spaceIdFromWindowLabel(label) !== null;

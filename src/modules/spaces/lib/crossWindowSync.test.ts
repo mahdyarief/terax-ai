@@ -77,6 +77,12 @@ describe("reclaimHost", () => {
     expect(reclaimHost({}, "main")).toBeNull();
   });
 
+  it("lets a browser session take a space from main", () => {
+    expect(reclaimHost({ hostWindowLabel: "main" }, "remote-a1")).toBe("main");
+    expect(reclaimHost({}, "remote-a1")).toBe("main");
+    expect(reclaimHost({ hostWindowLabel: "remote-a1" }, "remote-a1")).toBeNull();
+  });
+
   it("is unavailable from space windows", () => {
     expect(reclaimHost({ hostWindowLabel: "space-b" }, "space-a")).toBeNull();
   });

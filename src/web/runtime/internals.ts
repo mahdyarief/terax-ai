@@ -1,6 +1,10 @@
 export interface RemoteSessionState {
   id: string;
   label: string;
+  /** The host runs `--remote-serve`: nobody uses its own window. */
+  headless?: boolean;
+  /** The paired device's name, for the space a browser session creates. */
+  deviceName?: string;
 }
 
 export interface TauriInternalsLike {

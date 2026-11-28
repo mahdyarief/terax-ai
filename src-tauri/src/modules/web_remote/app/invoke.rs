@@ -88,7 +88,16 @@ pub(crate) async fn handle_session(deps: &Deps, request: Request<Incoming>) -> R
             .and_then(|r| r.session)
     };
     match relay.create_or_reuse(&caller.id, requested.as_deref()).await {
-        Ok(info) => secure(json(StatusCode::OK, &info)),
+        Ok(info) => secure(json(
+            StatusCode::OK,
+            &serde_json::json!({
+                "id": info.id,
+                "label": info.label,
+                // Nobody is at the host: the browser takes over its spaces.
+                "headless": super::super::is_headless(),
+                "deviceName": caller.name,
+            }),
+        )),
         Err(SessionError::TooManySessions) => secure(text(
             StatusCode::TOO_MANY_REQUESTS,
             "Too many active remote app sessions.",
@@ -421,6 +430,9 @@ mod tests {
         assert_eq!(status, 200);
         let sess: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let session_id = sess["id"].as_str().unwrap().to_string();
+        assert!(sess["label"].as_str().unwrap().starts_with("remote-"), "{sess}");
+        assert_eq!(sess["headless"], serde_json::json!(false), "{sess}");
+        assert!(sess["deviceName"].is_string(), "{sess}");
 
         // Native command -> 403
         let native_body = serde_json::json!({

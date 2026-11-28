@@ -1,6 +1,7 @@
 import type { PtyHandoffCheckpoint, PtyReplayPayload } from "@/modules/terminal/lib/ptyHandoff";
 import type { SerializedTab } from "./serialize";
 import type { SpaceMeta } from "./store";
+import { isHomeWindow } from "./handoff";
 import { loadAll } from "./store";
 import { mergeSpacesByUpdatedAt } from "./sync";
 
@@ -70,7 +71,7 @@ export function reclaimHost(
   space: Pick<SpaceMeta, "hostWindowLabel"> | undefined,
   windowLabel: string,
 ): string | null {
-  if (windowLabel !== "main") return null;
+  if (!isHomeWindow(windowLabel)) return null;
   const host = space?.hostWindowLabel ?? "main";
   return host === windowLabel ? null : host;
 }

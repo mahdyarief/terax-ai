@@ -27,7 +27,11 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { InlineRename } from "./components/InlineRename";
-import { isSpaceWindow, visibleSpacesForWindow } from "./lib/handoff";
+import {
+  isHomeWindow,
+  isSpaceWindow,
+  visibleSpacesForWindow,
+} from "./lib/handoff";
 import { accentFor } from "./lib/spaceColor";
 import { useSpaceTransfers } from "./lib/spaceTransfers";
 import type { SpaceMeta } from "./lib/store";
@@ -663,7 +667,7 @@ function SpaceRow({
                   disabled={transfer !== undefined}
                 />
               )}
-              {!hostedHere && windowLabel === "main" && (
+              {!hostedHere && isHomeWindow(windowLabel) && (
                 <RowAction
                   icon={ArrowLeft02Icon}
                   label="Bring back to this window"

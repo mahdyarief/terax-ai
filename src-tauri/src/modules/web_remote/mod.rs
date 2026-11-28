@@ -359,6 +359,18 @@ pub fn remote_device_revoke(
 }
 
 /// Forgets a window's tabs when it closes.
+static HEADLESS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// `--remote-serve`: nobody sits at this machine, so a browser session takes
+/// over the spaces the hidden main window holds.
+pub fn set_headless(headless: bool) {
+    HEADLESS.store(headless, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn is_headless() -> bool {
+    HEADLESS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 pub fn forget_window(app: &tauri::AppHandle, label: &str) {
     if let Some(state) = app.try_state::<WebRemoteState>() {
         state.tabs.remove_window(label);

@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { consumeLaunchFiles, getLaunchDir } from "@/lib/launchDir";
 import { IS_MAC } from "@/lib/platform";
-import { isRemoteRuntime } from "@/lib/remoteRuntime";
+import { isRemoteRuntime, remoteSessionInfo } from "@/lib/remoteRuntime";
 import { quoteShellArg } from "@/lib/shellQuote";
 import { usePresence } from "@/lib/usePresence";
 import { useZoom } from "@/lib/useZoom";
@@ -95,6 +95,7 @@ import {
   useSpaces,
   useSpacesBoot,
 } from "@/modules/spaces";
+import { planRemoteSpaces } from "@/modules/spaces/lib/remoteSpaces";
 import { selectHostedSpaces } from "@/modules/spaces/lib/useSpaces";
 import {
   spaceTransferToastId,
@@ -2317,6 +2318,50 @@ export default function App() {
     },
     [windowLabel],
   );
+
+  // A browser session that hosts no space would put every new tab in a space
+  // nothing shows. Take the hidden main window's spaces on a headless host,
+  // otherwise make one for this browser.
+  const remoteSpacesPlannedRef = useRef(false);
+  useEffect(() => {
+    if (!spacesHydrated || remoteSpacesPlannedRef.current) return;
+    const session = remoteSessionInfo();
+    if (!session) return;
+    remoteSpacesPlannedRef.current = true;
+    const plan = planRemoteSpaces({
+      spaces: useSpaces.getState().spaces,
+      windowLabel,
+      headless: session.headless,
+      deviceName: session.deviceName,
+    });
+    const createOwnSpace = (name: string) => {
+      const { create, setActive } = useSpaces.getState();
+      const meta = create({ name, root: home ?? null, env: workspaceEnv });
+      setActiveSpaceForNewTabs(meta.id);
+      newTab(home ?? undefined);
+      setActive(meta.id);
+    };
+    if (plan.kind === "none") return;
+    if (plan.kind === "create") {
+      createOwnSpace(plan.name);
+      return;
+    }
+    for (const spaceId of plan.spaceIds) handleBringSpaceToWindow(spaceId);
+    // Main may never answer (or may keep tabs that cannot move): the browser
+    // still gets a space of its own instead of an empty window.
+    window.setTimeout(() => {
+      const hosted = selectHostedSpaces(useSpaces.getState().spaces, windowLabel);
+      if (hosted.length === 0) createOwnSpace(session.deviceName ?? "Browser");
+    }, 20_000);
+  }, [
+    spacesHydrated,
+    windowLabel,
+    home,
+    workspaceEnv,
+    newTab,
+    setActiveSpaceForNewTabs,
+    handleBringSpaceToWindow,
+  ]);
 
   const handleReorderTab = useCallback(
     (tabId: number, targetTabId: number, edge: "top" | "bottom") => {

@@ -58,15 +58,14 @@
 - [x] Shim (`src/web/runtime/main.ts`): on `superseded`, show "Terax was opened in another tab on this device" with a "Use it here" button (reload, which takes the session back) instead of the reconnect banner. The stream also answers `superseded` when the old page reconnects after the takeover, so it never opens a session of its own and the two tabs do not take turns. `open_relay` destroys a window still under the label and waits for it to go, since labels are now reused.
 
 ### Task 3: a browser session always shows a space (symptoms 1 and 2)
-- [ ] `POST /api/app/session` reports `headless` (true under `--remote-serve`). The runtime exposes it as `__TERAX_REMOTE_HEADLESS__`.
-- [ ] `useSpacesBoot`, under `isRemoteRuntime()`, when `hosted` is empty:
-  - headless: move every space hosted by `main` to this label, using the same functions that bring a space to a window (`spaceTransfers.ts`). Their tabs and live PTYs come along by the existing handoff path. If `main` does not answer within the handoff timeout, reassign the registry entries and hydrate from the saved state.
+- [x] `POST /api/app/session` reports `headless` (true under `--remote-serve`). It also reports `deviceName`. The runtime keeps the reply on `__TERAX_REMOTE_SESSION__`, read through `remoteSessionInfo()`.
+- [x] `useSpacesBoot`, under `isRemoteRuntime()`, when `hosted` is empty:
+  - headless: move every space hosted by `main` to this label through the existing "bring back to this window" path (`handleBringSpaceToWindow`, which `main` answers for any target window). Their tabs and live PTYs come along. Done in `App.tsx` once spaces are hydrated (`planRemoteSpaces` in `spaces/lib/remoteSpaces.ts`). `reclaimHost` and the switcher's "Bring back" now accept browser windows (`isHomeWindow`). If after 20 s the browser still hosts nothing, it makes its own space instead of reassigning the registry by hand.
   - desktop host: create a space `{ name: <device name>, root: home, hostWindowLabel: <label> }` and make it active.
   - Either way, `setActiveSpaceForNewTabs` gets a real id, never `""`.
-- [ ] Guard in `newTab` (all runtimes): if `activeSpaceIdRef.current` is empty, use the active space from `useSpaces`. If there is none, create the default one. A tab must never be created with `spaceId: ""`.
-- [ ] Tests:
+- [x] Guard in `newTab`: not added. App already syncs `activeSpaceIdRef` from the active space (`App.tsx`, the `setActiveSpaceForNewTabs(activeSpaceId)` effect), so a fallback to `useSpaces.activeId` would add nothing; the empty id only happened because the browser hosted no space, which the adoption above removes.
+- [x] Tests:
   - `resolveBootTargets` and boot under the remote runtime for headless and desktop hosts;
-  - `newTab` with an empty active space id;
   - pure functions for the adoption choice.
 - [ ] After deploy, on aspirexc:
   - the browser shows the `default` space with its tabs;

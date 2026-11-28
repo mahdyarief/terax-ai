@@ -116,6 +116,8 @@ async function bootstrap(): Promise<void> {
   sessionStorage.setItem(SESSION_STORAGE_KEY, session.id);
   tauriInternals.metadata.currentWindow.label = session.label;
   tauriInternals.metadata.currentWebview.label = session.label;
+  (globalThis as { __TERAX_REMOTE_SESSION__?: RemoteSessionState })
+    .__TERAX_REMOTE_SESSION__ = session;
   resolveSession(session);
 
   await new Promise<void>((resolve) => {
