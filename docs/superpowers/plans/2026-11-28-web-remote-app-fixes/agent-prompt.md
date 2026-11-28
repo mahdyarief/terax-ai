@@ -59,7 +59,7 @@ You are working in the Terax repo (Tauri 2: Rust in `src-tauri/`, React/TS in `s
   - The plan's "Verification notes" list what that tool can and cannot do.
   - Evidence comes from the network log and from side effects on aspirexc.
   - Unit tests alone are not enough: the cookie bug passed every unit and live test.
-- For an API test device: pair one from the stderr pairing URL (or a `SIGUSR1` code once Task 7 lands), grant it in `remote-devices.json` while the service is stopped, then remove it and its cookie file afterwards.
+- For an API test device: pair one from the stderr pairing URL (or `systemctl --user reload terax-remote` for a new one, which sends `SIGHUP` to terax), grant it in `remote-devices.json` while the service is stopped, then remove it and its cookie file afterwards.
 
 ## Tests
 - `cargo test --lib` from `src-tauri/`: last run 1132 passed.

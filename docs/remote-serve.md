@@ -6,12 +6,17 @@ browser. Pair a device from that browser: open `http://<host>:<port>/web-index.h
 with a pairing code. On start, `--remote-serve` prints one pairing URL to
 stderr (`journalctl --user -u terax-remote` under systemd). Each code works
 once and expires after 10 minutes. For another code, without a restart, send
-the process `SIGUSR1`; it prints a new URL the same way:
+the `terax` process `SIGHUP`; it prints a new URL the same way. Under systemd,
+add `ExecReload` to the unit (see the unit below), then:
 
 ```sh
-systemctl --user kill -s USR1 terax-remote
+systemctl --user reload terax-remote
 journalctl --user -u terax-remote | grep "pair a browser" | tail -1
 ```
+
+Send the signal to `terax` only. `systemctl kill` signals every process of the
+unit, and `xvfb-run` exits on it. `SIGUSR1` is not used because WebKitGTK
+needs it for garbage collection.
 
 Up to 8 codes can be open at once, so several devices can pair; a new code
 does not end the earlier ones. Five wrong codes in a row end every open code.
@@ -69,6 +74,8 @@ Wants=network-online.target
 Type=simple
 Environment=DISPLAY=:99
 ExecStart=/usr/bin/xvfb-run -a -s "-screen 0 1280x800x24" /usr/local/bin/terax --remote-serve --bind tailscale --port 7681
+# `systemctl --user reload` prints a new pairing code to the journal.
+ExecReload=/usr/bin/pkill -HUP -P $MAINPID -x terax
 Restart=on-failure
 RestartSec=3
 

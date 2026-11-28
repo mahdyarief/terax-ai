@@ -99,15 +99,18 @@ fn print_pairing_url(state: &modules::web_remote::WebRemoteState) {
     }
 }
 
+/// SIGHUP, not SIGUSR1: WebKitGTK's JavaScriptCore uses SIGUSR1 (SIGUSR2 in
+/// older releases) to suspend threads for garbage collection, and taking it
+/// over segfaults the process.
 #[cfg(unix)]
-fn reprint_pairing_on_sigusr1(handle: tauri::AppHandle) {
+fn reprint_pairing_on_sighup(handle: tauri::AppHandle) {
     use tauri::Manager;
     tauri::async_runtime::spawn(async move {
         use tokio::signal::unix::{signal, SignalKind};
-        let mut signals = match signal(SignalKind::user_defined1()) {
+        let mut signals = match signal(SignalKind::hangup()) {
             Ok(signals) => signals,
             Err(error) => {
-                log::warn!("SIGUSR1 pairing unavailable: {error}");
+                log::warn!("SIGHUP pairing unavailable: {error}");
                 return;
             }
         };
@@ -383,12 +386,11 @@ pub fn run() {
                             // No window can show a pairing code here, so the
                             // first one goes to stderr (the user's journal).
                             print_pairing_url(&state);
-                            // `kill -USR1` (or `systemctl --user kill -s USR1`)
-                            // prints another code without a restart. Only the
-                            // process owner can send it; a terminal's control
-                            // token cannot.
+                            // `kill -HUP` prints another code without a
+                            // restart. Only the process owner can send it; a
+                            // terminal's control token cannot.
                             #[cfg(unix)]
-                            reprint_pairing_on_sigusr1(handle.clone());
+                            reprint_pairing_on_sighup(handle.clone());
                         }
                         Err(error) => log::error!("remote serve could not start: {error}"),
                     }
