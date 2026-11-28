@@ -265,25 +265,31 @@ pub struct PairingInfo {
     pub expires_in_sec: u64,
 }
 
-/// A one-time code, valid for ten minutes and five attempts. Remote access
-/// must be on: the URL points at the running listener.
+impl WebRemoteState {
+    /// A one-time code, valid for ten minutes and five attempts. Remote
+    /// access must be on: the URL points at the running listener.
+    pub fn start_pairing(&self) -> Result<PairingInfo, String> {
+        let url = self
+            .running
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|running| running.urls.first().cloned())
+            .ok_or("Turn remote access on first.")?;
+        let code = self.pairing.start();
+        Ok(PairingInfo {
+            url: format!("{url}#pair={code}"),
+            code,
+            expires_in_sec: PAIRING_TTL.as_secs(),
+        })
+    }
+}
+
 #[tauri::command]
 pub fn remote_pairing_start(
     state: tauri::State<'_, WebRemoteState>,
 ) -> Result<PairingInfo, String> {
-    let url = state
-        .running
-        .lock()
-        .unwrap()
-        .as_ref()
-        .and_then(|running| running.urls.first().cloned())
-        .ok_or("Turn remote access on first.")?;
-    let code = state.pairing.start();
-    Ok(PairingInfo {
-        url: format!("{url}#pair={code}"),
-        code,
-        expires_in_sec: PAIRING_TTL.as_secs(),
-    })
+    state.start_pairing()
 }
 
 #[tauri::command]
@@ -355,6 +361,12 @@ mod tests {
         let joined = parse_serve_args(args(&["--remote-serve", "--bind=all", "--port=9000"]));
         assert_eq!(joined.bind, RemoteBind::All);
         assert_eq!(joined.port, 9000);
+    }
+
+    #[test]
+    fn pairing_needs_a_running_listener() {
+        let state = WebRemoteState::default();
+        assert!(state.start_pairing().is_err());
     }
 
     #[test]

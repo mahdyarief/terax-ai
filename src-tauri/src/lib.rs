@@ -335,11 +335,22 @@ pub fn run() {
                     )
                     .await
                     {
-                        Ok(info) => log::info!(
-                            "remote serve listening on {} for {}",
-                            info.port.unwrap_or(0),
-                            info.urls.first().cloned().unwrap_or_default()
-                        ),
+                        Ok(info) => {
+                            log::info!(
+                                "remote serve listening on {} for {}",
+                                info.port.unwrap_or(0),
+                                info.urls.first().cloned().unwrap_or_default()
+                            );
+                            // No window can show a pairing code here, so the
+                            // first one goes to stderr (the user's journal).
+                            if let Ok(pairing) = state.start_pairing() {
+                                eprintln!(
+                                    "terax: pair a browser within {} minutes: {}",
+                                    pairing.expires_in_sec / 60,
+                                    pairing.url
+                                );
+                            }
+                        }
                         Err(error) => log::error!("remote serve could not start: {error}"),
                     }
                 });

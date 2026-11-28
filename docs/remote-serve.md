@@ -3,9 +3,10 @@
 `--remote-serve` starts Terax with remote access already on and the main
 window hidden, so a machine nobody sits at still serves its terminals to a
 browser. Pair a device from that browser: open `http://<host>:<port>/web-index.html`
-and use a pairing code. Codes are created from Settings → Remote on a desktop
-that has a window, so on a headless host start it once with a window (or keep
-one pairing code from the first run).
+with a pairing code. On start, `--remote-serve` prints one pairing URL to
+stderr (`journalctl --user -u terax-remote` under systemd). It works once and
+expires after 10 minutes; restart the service for a new one. Desktops with a
+window can also create codes from Settings → Remote.
 
 ```sh
 terax --remote-serve --bind tailscale --port 7681
