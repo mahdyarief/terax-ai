@@ -2,7 +2,7 @@
 
 > **For agentic workers:** implement task by task. Each task is one commit on `dydev`, test first where it adds behaviour. Steps use checkbox (`- [ ]`) syntax for tracking. Phase 0 is a spike whose result decides whether Phases 1–5 go ahead as written.
 
-**Status (2026-11-28):** Phase 0 (spike) verified on aspirexc; awaiting go-ahead for Phase 1. Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
+**Status (2026-11-28):** Phase 1 (backend bridge, Tasks 1-9) done and verified on aspirexc; ready for Phase 2. Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
 
 ## Goal
 
@@ -195,7 +195,7 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] Keep the ACL as narrow as `main`'s, not wider.
 
 ### Task 9: live backend test
-- [ ] Add `web_remote/app/live_tests.rs`, `#[ignore]` by default, run with a flag:
+- [x] Add `web_remote/app/live_tests.rs`, `#[ignore]` by default, run with a flag:
   - start the app in `--remote-serve` under `xvfb-run` on Linux CI-less (aspirexc);
   - invoke `pty_list` and a store read;
   - subscribe to callbacks and see `fs:changed` after touching a file.
