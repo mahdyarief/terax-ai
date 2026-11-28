@@ -142,6 +142,7 @@ pub(crate) struct Deps {
     pub https: bool,
     pub relay: Option<Arc<super::app::sessions::SessionManager>>,
     pub schemes: Option<Arc<dyn super::app::schemes::SchemeHandler>>,
+    pub ports: Option<Arc<dyn super::app::proxy::PortAllowlist>>,
 }
 
 pub(crate) type Body = BoxBody<Bytes, Infallible>;
@@ -167,7 +168,8 @@ pub(crate) async fn accept_loop(
                 async move { Ok::<_, Infallible>(respond(&deps, request).await) }
             });
             let connection = hyper::server::conn::http1::Builder::new()
-                .serve_connection(TokioIo::new(stream), service);
+                .serve_connection(TokioIo::new(stream), service)
+                .with_upgrades();
             tokio::select! {
                 _ = connection => {}
                 _ = stopped.changed() => {}
@@ -187,6 +189,9 @@ pub(crate) async fn respond(deps: &Deps, request: Request<Incoming>) -> Response
     let path = request.uri().path().to_string();
     if path.starts_with("/scheme/") {
         return super::app::schemes::handle_scheme(deps, request).await;
+    }
+    if path == "/proxy" || path.starts_with("/proxy/") {
+        return super::app::proxy::handle_proxy(deps, request).await;
     }
     if request.method() == Method::POST {
         return post(deps, request, &path).await;
@@ -774,6 +779,7 @@ mod tests {
             https: false,
             relay: None,
             schemes: None,
+            ports: None,
         }
     }
 

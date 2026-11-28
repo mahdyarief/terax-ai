@@ -1,3 +1,5 @@
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
+
 const RESERVED_HOSTS = new Set([
   "asset.localhost",
   "tauri.localhost",
@@ -5,10 +7,30 @@ const RESERVED_HOSTS = new Set([
   "terax-pty.localhost",
 ]);
 
+export function remoteProxyUrl(rawUrl: string): string {
+  if (!isRemoteRuntime()) return rawUrl;
+  try {
+    const url = new URL(rawUrl, location.origin);
+    if (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (url.hostname === "localhost" || url.hostname === "127.0.0.1") &&
+      url.port
+    ) {
+      return `/proxy/${url.port}${url.pathname}${url.search}${url.hash}`;
+    }
+  } catch {
+    // Fall through.
+  }
+  return rawUrl;
+}
+
 export function isAllowedPreviewUrl(
   rawUrl: string,
   appOrigin = typeof location === "undefined" ? "" : location.origin,
 ): boolean {
+  if (isRemoteRuntime() && rawUrl.startsWith("/proxy/")) {
+    return true;
+  }
   try {
     const url = new URL(rawUrl);
     return (

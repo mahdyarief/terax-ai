@@ -227,6 +227,7 @@ mod tests {
             https: false,
             relay: Some(relay.clone()),
             schemes: None,
+            ports: None,
         };
         tokio::spawn(accept_loop(listener, deps, stop_rx));
 

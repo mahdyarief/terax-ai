@@ -37,6 +37,7 @@ pub struct WebRemoteState {
     devices: Mutex<Arc<DeviceStore>>,
     pairing: Arc<Pairing>,
     relay_sessions: Mutex<Option<Arc<app::sessions::SessionManager>>>,
+    pub(crate) reported_ports: app::proxy::ReportedPorts,
 }
 
 impl Default for WebRemoteState {
@@ -47,6 +48,7 @@ impl Default for WebRemoteState {
             devices: Mutex::new(Arc::new(DeviceStore::memory())),
             pairing: Arc::new(Pairing::default()),
             relay_sessions: Mutex::new(None),
+            reported_ports: app::proxy::ReportedPorts::default(),
         }
     }
 }
@@ -232,6 +234,7 @@ pub async fn start_listener(
         https,
         relay: Some(relay),
         schemes: Some(Arc::new(app::schemes::AppSchemeHandler(app.clone()))),
+        ports: Some(Arc::new(app::proxy::AppPortAllowlist(app.clone()))),
     };
     let running = Running {
         bind,

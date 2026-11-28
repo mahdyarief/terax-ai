@@ -178,6 +178,7 @@ mod tests {
             https: false,
             relay: None,
             schemes: None,
+            ports: None,
         };
         tokio::spawn(accept_loop(listener, deps, stop_rx));
 

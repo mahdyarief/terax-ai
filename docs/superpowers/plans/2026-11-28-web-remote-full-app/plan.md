@@ -256,8 +256,8 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] The agents launcher (per-workspace commands, PATH hint), agent signals and the status pill. (Commands/events classified and relayed.)
 
 ### Task 19: port proxy for previews and dev servers
-- [ ] `/proxy/<port>/…`: a reverse proxy to `127.0.0.1:<port>` for ports Terax itself reports (live server, detected dev servers), with WebSocket upgrade for HMR.
-- [ ] Off unless the device has `app`. Never an arbitrary host.
+- [x] `/proxy/<port>/...`: a reverse proxy to `127.0.0.1:<port>` for ports Terax itself reports (live server, detected dev servers), with WebSocket upgrade for HMR.
+- [x] Off unless the device has `app`. Never an arbitrary host.
 
 ### Task 20: desktop tabs inside the full app
 - [ ] A "Desktop" sidebar section listing other windows' tabs from the registry, rendered with the mirror's `RemoteTerminal` (read-only unless `input`).

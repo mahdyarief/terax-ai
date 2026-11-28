@@ -9,7 +9,10 @@ import {
 import { statusMenuClass, statusMenuScrollClass } from "@/components/ui/menu";
 import { writeClipboardText } from "@/lib/clipboard";
 import { openExternalUrl } from "@/lib/external-link";
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
 import { cn } from "@/lib/utils";
+import { remoteProxyUrl } from "@/modules/preview/lib/previewUrl";
+import { invoke } from "@tauri-apps/api/core";
 import {
   type LiveServer,
   liveServerName,
@@ -29,7 +32,7 @@ import {
   Wifi01Icon,
 } from "@hugeicons/core-free-icons";
 import { HugeiconsIcon } from "@hugeicons/react";
-import { Fragment, useMemo } from "react";
+import { Fragment, useEffect, useMemo } from "react";
 import { toast } from "sonner";
 
 type Props = {
@@ -111,7 +114,18 @@ export function DevServersPill({ onOpenPreview }: Props) {
     }
     return out;
   }, [byLeaf, live]);
-  return <DevServersMenu entries={entries} onOpenPreview={onOpenPreview} />;
+  useEffect(() => {
+    const ports = Array.from(
+      new Set(entries.filter((e) => !e.remoteHost).map((e) => e.port)),
+    );
+    void invoke("remote_report_ports", { ports }).catch(() => {});
+  }, [entries]);
+  const openPreview = useMemo(
+    () => (url: string) =>
+      onOpenPreview(isRemoteRuntime() ? remoteProxyUrl(url) : url),
+    [onOpenPreview],
+  );
+  return <DevServersMenu entries={entries} onOpenPreview={openPreview} />;
 }
 
 export function DevServersMenu({

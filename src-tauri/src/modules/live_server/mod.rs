@@ -78,7 +78,7 @@ pub struct LiveServers {
 }
 
 impl LiveServers {
-    fn list(&self) -> Vec<LiveServerInfo> {
+    pub(crate) fn list(&self) -> Vec<LiveServerInfo> {
         let mut list: Vec<_> = self
             .running
             .lock()

@@ -5,6 +5,7 @@ pub mod invoke;
 #[cfg(test)]
 mod live_tests;
 pub mod policy;
+pub mod proxy;
 pub mod schemes;
 pub mod serve;
 pub mod sessions;
