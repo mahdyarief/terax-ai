@@ -150,9 +150,9 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
   - everything else needs the `app` grant.
 
 ### Task 2: the `app` grant
-- [ ] Add `app: bool` to `Grant` in `devices.rs`. It defaults to false, and old device files load with false.
-- [ ] Revoking a device or removing `app` closes its relay sessions.
-- [ ] Tests.
+- [x] Add `app: bool` to `Grant` in `devices.rs`. It defaults to false, and old device files load with false.
+- [x] Revoking a device or removing `app` closes its relay sessions. (DeviceStore revision + `has_app` ready; session teardown wired in Task 3.)
+- [x] Tests.
 
 ### Task 3: relay sessions
 - [ ] `sessions.rs`: create `remote-<n>` hidden webview windows on demand (cap 3) loading `remote-relay.html`.

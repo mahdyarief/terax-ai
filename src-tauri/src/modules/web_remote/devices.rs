@@ -14,11 +14,13 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio::sync::watch;
 
-/// A paired device can always watch. These two are opt-in.
+/// A paired device can always watch. These three are opt-in.
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct Grant {
     pub input: bool,
     pub tabs: bool,
+    #[serde(default)]
+    pub app: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -193,6 +195,15 @@ impl DeviceStore {
             .unwrap()
             .iter()
             .any(|device| device.id == id)
+    }
+
+    /// Whether a device is still paired and holds the `app` grant.
+    pub fn has_app(&self, id: &str) -> bool {
+        self.devices
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|device| device.id == id && device.grant.app)
     }
 
     fn save(&self) {
@@ -405,24 +416,64 @@ mod tests {
         assert_eq!(caller.name, "phone");
         assert!(!caller.grant.input);
         assert!(!caller.grant.tabs);
+        assert!(!caller.grant.app);
         assert!(store.authenticate("not-the-token").is_none());
 
         assert!(store.update(
             &info.id,
             Grant {
                 input: true,
-                tabs: false
+                tabs: false,
+                app: false,
             }
         ));
         assert!(store.authenticate(&token).unwrap().grant.input);
         assert!(!store.authenticate(&token).unwrap().grant.tabs);
+        assert!(!store.authenticate(&token).unwrap().grant.app);
+    }
+
+    #[test]
+    fn app_grant_defaults_false_and_loads_from_old_device_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("remote-devices.json");
+        let old_json = r#"{
+            "version": 1,
+            "devices": [{
+                "id": "dev1",
+                "name": "old-phone",
+                "tokenSha256": "deadbeef",
+                "grant": { "input": true, "tabs": true },
+                "createdAt": 1,
+                "lastSeen": 2
+            }]
+        }"#;
+        fs::write(&path, old_json).unwrap();
+        let store = DeviceStore::load(Some(path));
+        let list = store.list();
+        assert_eq!(list.len(), 1);
+        assert!(list[0].grant.input);
+        assert!(list[0].grant.tabs);
+        assert!(!list[0].grant.app);
+        assert!(!store.has_app("dev1"));
+
+        let revisions = store.subscribe();
+        assert!(store.update(
+            "dev1",
+            Grant {
+                input: true,
+                tabs: true,
+                app: true,
+            }
+        ));
+        assert!(store.has_app("dev1"));
+        assert!(revisions.has_changed().unwrap());
     }
 
     #[test]
     fn revoking_a_device_invalidates_its_token_and_opens_a_revision() {
         let store = store();
         let (info, token) = store.add("phone");
-        let mut revisions = store.subscribe();
+        let revisions = store.subscribe();
         assert!(store.authenticate(&token).is_some());
         assert!(store.revoke(&info.id));
         assert!(store.authenticate(&token).is_none());

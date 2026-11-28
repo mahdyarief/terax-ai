@@ -517,7 +517,11 @@ fn device_json(caller: &Caller) -> serde_json::Value {
     serde_json::json!({
         "id": caller.id,
         "name": caller.name,
-        "grant": { "input": caller.grant.input, "tabs": caller.grant.tabs },
+        "grant": {
+            "input": caller.grant.input,
+            "tabs": caller.grant.tabs,
+            "app": caller.grant.app,
+        },
     })
 }
 
@@ -1145,7 +1149,8 @@ mod tests {
             &info.id,
             crate::modules::web_remote::devices::Grant {
                 input: true,
-                tabs: false
+                tabs: false,
+                app: false,
             }
         ));
         for chunk in ["abc", "def"] {
@@ -1202,7 +1207,8 @@ mod tests {
             &info.id,
             crate::modules::web_remote::devices::Grant {
                 input: false,
-                tabs: true
+                tabs: true,
+                app: false,
             }
         ));
         let created = post(port, &host, "/api/tabs", &[("Cookie", &cookie)], new_tab);
