@@ -93,7 +93,7 @@ So the server does not re-implement 159 commands. It forwards an allowlisted sub
 ## Phase 0: spike (decides the rest)
 
 ### Task 0: prove dispatch, callbacks, channels and schemes
-Make a throwaway branch. The code only stays if it passes; the findings go into this plan's "Spike result" section.
+The spike lives on `dydev` (the user wants a single branch), behind `TERAX_REMOTE_SPIKE=1` because its route has no auth. Task 3 replaces it. The findings go into this plan's "Spike result" section.
 - [ ] Create a hidden window `remote-0` loading a minimal `remote-relay.html`. Add `remote-*` to `capabilities/default.json`, `desktop.json` and `clipboard.json`.
 - [ ] From an HTTP handler, run `pty_list` (or any read command) through `Webview::on_message` with `app.invoke_key()` and the webview's own URL. Confirm the JSON response reaches the HTTP response through `OwnedInvokeResponder`, and that ACL denial works for a command the capability lacks.
 - [ ] Register `plugin:event|listen` through the same path with a callback id. Confirm that `app.emit("fs:changed", …)` runs that callback id inside the relay page, and that the relay can forward it, by overriding `__TAURI_INTERNALS__.runCallback` or whatever 2.12.2 uses; record which.

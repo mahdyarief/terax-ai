@@ -7,6 +7,7 @@ pub mod devices;
 pub mod http_rules;
 pub mod https;
 pub mod server;
+pub mod spike;
 pub mod sse;
 pub mod stream;
 pub mod tabs;
@@ -35,6 +36,7 @@ pub struct WebRemoteState {
     pub(crate) running: Mutex<Option<Running>>,
     devices: Mutex<Arc<DeviceStore>>,
     pairing: Arc<Pairing>,
+    pub(crate) spike: Arc<spike::SpikeEvents>,
 }
 
 impl Default for WebRemoteState {
@@ -44,6 +46,7 @@ impl Default for WebRemoteState {
             running: Mutex::new(None),
             devices: Mutex::new(Arc::new(DeviceStore::memory())),
             pairing: Arc::new(Pairing::default()),
+            spike: Arc::new(spike::SpikeEvents::default()),
         }
     }
 }
@@ -216,6 +219,7 @@ pub async fn start_listener(
         limits: Arc::new(stream::StreamLimits::default()),
         events: Arc::new(server::AppTabEvents(app.clone())),
         https,
+        spike: Some(Arc::new(spike::AppSpike(app.clone()))),
     };
     let running = Running {
         bind,

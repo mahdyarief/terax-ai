@@ -8,7 +8,8 @@
   "windows": [
     "main",
     "settings",
-    "space-*"
+    "space-*",
+    "remote-*"
   ],
   "permissions": [
     "autostart:default",

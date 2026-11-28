@@ -13,14 +13,14 @@ Also read the plan it builds on, `docs/superpowers/plans/2026-11-27-web-remote/p
 Goal: open `/app/` in a browser and use the unchanged desktop app bundle, backed by Tauri's own command dispatcher through a hidden relay webview per session. The existing mirror at `/web-index.html` stays as the light, phone-first view.
 
 ## Phase 0 is a gate
-Do **Task 0 (the spike) first, on a throwaway branch** (for example `dydev-spike-full-app`).
+Do **Task 0 (the spike) first, on `dydev`**. The user wants everything on one branch, so do not create a spike branch.
 
 Then **stop and report to the user**:
 - which of the five checks passed;
 - how Tauri 2.12.2 runs callbacks inside a webview;
 - the relay webview's memory on aspirexc (on Windows only with the user's go-ahead, see Hard rules).
 
-The spike work so far is uncommitted on `dydev-spike-full-app` in the main working copy: `src-tauri/src/modules/web_remote/spike.rs` (the five checks behind `GET /spike/check`), `remote-relay.html`, `pty::protocol::dispatch_for_label`, and `remote-*` added to the capabilities. It builds, but the checks have not been run yet. Continue from it, and run it on aspirexc. `/spike/check` has no auth, so it must never reach `dydev`.
+The spike code is already committed on `dydev`. `resume.md` in this folder says where it stands and what is left. `/spike/check` has no auth: it answers only when `TERAX_REMOTE_SPIKE=1` is set, and that must never be set on the `terax-remote` service.
 
 Write the findings into a "Spike result" section of the plan on `dydev`.
 
@@ -46,7 +46,7 @@ Ask before:
 
 ## How to work
 - **One task = one commit.** Write the test first where the task adds behaviour (RED, then GREEN).
-- After each finished task, **commit and push to `dydev` without asking**. The spike branch is the exception: push it only if the user asks.
+- After each finished task, **commit and push to `dydev` without asking**.
 - Commit messages end with:
   `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`
 - Tick the task's checkboxes in the plan file in the same commit, and update the plan's **Status** line when a phase is done.

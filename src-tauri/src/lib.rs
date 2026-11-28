@@ -424,6 +424,8 @@ pub fn run() {
             modules::web_remote::remote_devices_list,
             modules::web_remote::remote_device_update,
             modules::web_remote::remote_device_revoke,
+            modules::web_remote::spike::spike_relay_push,
+            modules::web_remote::spike::spike_test_channel,
             pty::pty_open,
             pty::pty_write,
             pty::pty_stream_open,

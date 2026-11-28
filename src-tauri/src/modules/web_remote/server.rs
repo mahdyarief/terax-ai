@@ -140,6 +140,11 @@ pub(crate) struct Deps {
     /// Whether browsers reach us over HTTPS (through `tailscale serve`), so
     /// the device cookie can be `Secure`.
     pub https: bool,
+    /// The Phase 0 spike's checks. A trait object, not an `AppHandle`: the
+    /// tests build `Deps`, and an `AppHandle` field links the webview runtime
+    /// into the test binary, which then fails to start on Windows
+    /// (STATUS_ENTRYPOINT_NOT_FOUND).
+    pub spike: Option<Arc<dyn super::spike::SpikeRunner>>,
 }
 
 pub(crate) type Body = BoxBody<Bytes, Infallible>;
@@ -191,6 +196,14 @@ pub(crate) async fn respond(deps: &Deps, request: Request<Incoming>) -> Response
             StatusCode::METHOD_NOT_ALLOWED,
             "Only GET and HEAD are served here.",
         ));
+    }
+    // Phase 0 spike of the full-app plan: no auth, so it only answers when
+    // the process was started with TERAX_REMOTE_SPIKE=1. Removed in Task 3.
+    if path == "/spike/check" && super::spike::enabled() {
+        if let Some(spike) = &deps.spike {
+            let report = spike.run().await;
+            return secure(json(StatusCode::OK, &report));
+        }
     }
     if path == "/api/me" {
         return match caller(deps, request.headers()) {
@@ -750,6 +763,7 @@ mod tests {
             limits: Arc::new(StreamLimits::default()),
             events: Arc::new(NoEvents),
             https: false,
+            spike: None,
         }
     }
 

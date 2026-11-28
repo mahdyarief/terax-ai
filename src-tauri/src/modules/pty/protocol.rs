@@ -125,6 +125,41 @@ pub fn stream_protocol<R: Runtime>(
     );
 }
 
+/// Decoupled entry point for HTTP routes (e.g. web remote `/scheme/terax-pty/*`).
+pub(crate) fn dispatch_for_label(
+    app: &tauri::AppHandle,
+    label: &str,
+    method: &http::Method,
+    path: &str,
+    origin: Option<&[u8]>,
+    body: &[u8],
+    reply: Box<dyn Reply>,
+) {
+    let Some(state) = app.try_state::<PtyState>() else {
+        reply.send(503, b"PTY transport unavailable".to_vec());
+        return;
+    };
+    let origins = state.origins.get_or_init(|| {
+        AllowedOrigins::for_app(
+            app.config().build.dev_url.as_ref(),
+            tauri::is_dev(),
+            cfg!(windows),
+        )
+    });
+    dispatch(
+        &state.hub,
+        origins,
+        &Incoming {
+            label,
+            method,
+            path,
+            origin,
+            body,
+        },
+        move |_| reply,
+    );
+}
+
 /// Answers refusals here and hands only admitted requests to the hub, so a
 /// request that is not allowed never wakes its thread.
 fn dispatch(

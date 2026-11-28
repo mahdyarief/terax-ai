@@ -5,7 +5,8 @@
   "platforms": ["linux", "macOS", "windows"],
   "windows": [
     "main",
-    "space-*"
+    "space-*",
+    "remote-*"
   ],
   "permissions": [
     "clipboard-manager:allow-read-text",

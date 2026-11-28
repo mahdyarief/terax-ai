@@ -44,7 +44,7 @@ pub(super) const STATUS_FORBIDDEN: u16 = 403;
 pub(super) const STATUS_SUPERSEDED: u16 = 409;
 pub(super) const STATUS_GONE: u16 = 410;
 
-pub(super) trait Reply: Send {
+pub(crate) trait Reply: Send {
     fn send(self: Box<Self>, status: u16, body: Vec<u8>);
 }
 

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Terax Remote Relay</title>
+  </head>
+  <body>
+    <script>
+      (() => {
+        const tauri = window.__TAURI_INTERNALS__;
+        if (!tauri || !tauri.callbacks) {
+          console.error("remote-relay: __TAURI_INTERNALS__.callbacks missing");
+          return;
+        }
+        const callbacks = tauri.callbacks;
+        const origGet = callbacks.get.bind(callbacks);
+        function sanitize(val) {
+          if (val instanceof ArrayBuffer) {
+            return Array.from(new Uint8Array(val));
+          }
+          if (val && typeof val === "object" && val.message instanceof ArrayBuffer) {
+            return { ...val, message: Array.from(new Uint8Array(val.message)) };
+          }
+          return val;
+        }
+        callbacks.get = (id) => {
+          const local = origGet(id);
+          if (local) return local;
+          return (data) => {
+            tauri
+              .invoke("spike_relay_push", {
+                id,
+                payload: sanitize(data),
+              })
+              .catch((err) => console.error("spike_relay_push failed", err));
+          };
+        };
+      })();
+    </script>
+  </body>
+</html>
