@@ -143,6 +143,8 @@ pub(crate) struct Deps {
     pub relay: Option<Arc<super::app::sessions::SessionManager>>,
     pub schemes: Option<Arc<dyn super::app::schemes::SchemeHandler>>,
     pub ports: Option<Arc<dyn super::app::proxy::PortAllowlist>>,
+    pub audit: Option<Arc<super::app::audit::AuditLog>>,
+    pub rate_limit: Option<Arc<super::app::audit::RateLimiter>>,
 }
 
 pub(crate) type Body = BoxBody<Bytes, Infallible>;
@@ -780,6 +782,8 @@ mod tests {
             relay: None,
             schemes: None,
             ports: None,
+            audit: None,
+            rate_limit: None,
         }
     }
 

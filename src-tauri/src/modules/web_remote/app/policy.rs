@@ -28,7 +28,9 @@ pub fn class(cmd: &str) -> Option<CommandClass> {
 
     match cmd {
         // Web remote
-        "remote_access_status" | "remote_devices_list" => Some(CommandClass::Read),
+        "remote_access_status" | "remote_devices_list" | "remote_audit_log" => {
+            Some(CommandClass::Read)
+        }
         "remote_report_ports" => Some(CommandClass::Write),
         "remote_access_start"
         | "remote_access_stop"

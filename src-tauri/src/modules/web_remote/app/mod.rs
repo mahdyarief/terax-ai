@@ -1,5 +1,6 @@
 //! Full-app web remote bridge: policy, relay sessions, invoke, callbacks, and schemes.
 
+pub mod audit;
 pub mod callbacks;
 pub mod invoke;
 #[cfg(test)]

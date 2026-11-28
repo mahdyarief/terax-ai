@@ -431,6 +431,7 @@ pub fn run() {
             modules::web_remote::remote_device_revoke,
             modules::web_remote::app::sessions::remote_relay_push,
             modules::web_remote::app::proxy::remote_report_ports,
+            modules::web_remote::app::audit::remote_audit_log,
             pty::pty_open,
             pty::pty_write,
             pty::pty_stream_open,

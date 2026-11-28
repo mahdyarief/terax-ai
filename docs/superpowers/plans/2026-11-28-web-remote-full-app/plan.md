@@ -266,9 +266,9 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 ## Phase 5: hardening and rollout
 
 ### Task 21: limits and audit
-- [ ] Per-device rate limits on invoke.
-- [ ] An audit log of `Control` and `Secret` commands (command name, device, time; never arguments), shown in Settings → Remote.
-- [ ] Idle timeout for `app` sessions (default 12 h).
+- [x] Per-device rate limits on invoke.
+- [x] An audit log of `Control` and `Secret` commands (command name, device, time; never arguments), shown in Settings -> Remote.
+- [x] Idle timeout for `app` sessions (default 12 h).
 
 ### Task 22: deploy and verify on aspirexc
 - [ ] Rebuild under `--remote-serve`, grant `app` to one device, and run through the feature matrix by hand.

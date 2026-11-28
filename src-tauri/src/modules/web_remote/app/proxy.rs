@@ -363,6 +363,8 @@ mod tests {
             relay: None,
             schemes: None,
             ports: Some(Arc::new(StaticPorts(vec![upstream_port]))),
+            audit: None,
+            rate_limit: None,
         };
         tokio::spawn(accept_loop(listener, deps, stop_rx));
 

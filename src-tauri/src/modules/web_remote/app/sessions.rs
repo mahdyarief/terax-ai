@@ -22,6 +22,7 @@ use super::super::devices::DeviceStore;
 
 pub const MAX_RELAY_SESSIONS: usize = 3;
 pub const DISCONNECT_GRACE: Duration = Duration::from_secs(60);
+pub const SESSION_IDLE_TIMEOUT: Duration = Duration::from_secs(12 * 60 * 60);
 pub const REPLAY_MAX_EVENTS: usize = 1_000;
 pub const REPLAY_MAX_BYTES: usize = 4 * 1024 * 1024;
 const BROADCAST_CAP: usize = 256;
@@ -197,6 +198,7 @@ struct SessionEntry {
     next_seq: u64,
     subscribers: usize,
     last_disconnected: Option<Instant>,
+    last_activity: Instant,
 }
 
 pub enum ReplayResult {
@@ -239,9 +241,10 @@ impl SessionManager {
         requested_id: Option<&str>,
     ) -> Result<SessionInfo, SessionError> {
         if let Some(req_id) = requested_id {
-            let guard = self.sessions.lock().unwrap();
-            if let Some(entry) = guard.get(req_id) {
+            let mut guard = self.sessions.lock().unwrap();
+            if let Some(entry) = guard.get_mut(req_id) {
                 if entry.device_id == device_id {
+                    entry.last_activity = Instant::now();
                     return Ok(SessionInfo {
                         id: entry.id.clone(),
                         label: entry.label.clone(),
@@ -266,6 +269,7 @@ impl SessionManager {
 
         let id = random_hex(16);
         let (tx, _) = broadcast::channel(BROADCAST_CAP);
+        let now = Instant::now();
         let entry = SessionEntry {
             id: id.clone(),
             device_id: device_id.to_string(),
@@ -275,7 +279,8 @@ impl SessionManager {
             history_bytes: 0,
             next_seq: 1,
             subscribers: 0,
-            last_disconnected: Some(Instant::now()),
+            last_disconnected: Some(now),
+            last_activity: now,
         };
 
         {
@@ -347,6 +352,7 @@ impl SessionManager {
             .ok_or(SessionError::NotFound)?;
         entry.subscribers += 1;
         entry.last_disconnected = None;
+        entry.last_activity = Instant::now();
         let rx = entry.tx.subscribe();
 
         if let Some(last_id) = last_event_id {
@@ -387,9 +393,15 @@ impl SessionManager {
         body: InvokeRequestBody,
         headers: Vec<(String, String)>,
     ) -> Result<InvokeResult, SessionError> {
-        let label = self
-            .lookup(session_id, device_id)
-            .ok_or(SessionError::NotFound)?;
+        let label = {
+            let mut guard = self.sessions.lock().unwrap();
+            let entry = guard
+                .get_mut(session_id)
+                .filter(|e| e.device_id == device_id)
+                .ok_or(SessionError::NotFound)?;
+            entry.last_activity = Instant::now();
+            entry.label.clone()
+        };
         let (cb, err) = self.next_callback_pair();
         self.host
             .invoke(&label, cmd, body, headers, cb, err)
@@ -439,10 +451,13 @@ impl SessionManager {
             let expired: Vec<String> = guard
                 .iter()
                 .filter(|(_, e)| {
-                    e.subscribers == 0
+                    let disconnected_expired = e.subscribers == 0
                         && e.last_disconnected
                             .map(|t| now.saturating_duration_since(t) >= DISCONNECT_GRACE)
-                            .unwrap_or(false)
+                            .unwrap_or(false);
+                    let idle_expired =
+                        now.saturating_duration_since(e.last_activity) >= SESSION_IDLE_TIMEOUT;
+                    disconnected_expired || idle_expired
                 })
                 .map(|(id, _)| id.clone())
                 .collect();
@@ -647,11 +662,17 @@ mod tests {
         assert!(mgr.is_empty());
 
         let s2 = mgr.create_or_reuse("dev-c", None).await.unwrap();
-        mgr.close_for_device("dev-c");
+        let _sub2 = mgr.subscribe(&s2.id, "dev-c", None).unwrap();
+        // Idle timeout (12h) closes even with an active subscriber.
+        mgr.sweep_expired(Instant::now() + SESSION_IDLE_TIMEOUT + Duration::from_secs(1));
         assert!(mgr.lookup(&s2.id, "dev-c").is_none());
+
+        let s3 = mgr.create_or_reuse("dev-d", None).await.unwrap();
+        mgr.close_for_device("dev-d");
+        assert!(mgr.lookup(&s3.id, "dev-d").is_none());
         assert_eq!(
             host.closed.lock().unwrap().as_slice(),
-            &["remote-1", "remote-0", "remote-2"]
+            &["remote-1", "remote-0", "remote-2", "remote-3"]
         );
     }
 }

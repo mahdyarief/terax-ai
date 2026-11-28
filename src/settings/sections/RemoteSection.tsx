@@ -45,6 +45,14 @@ type PairedDevice = {
 
 type Pairing = { code: string; url: string; expiresInSec: number };
 
+type AuditEntry = {
+  timestampMs: number;
+  deviceId: string;
+  deviceName: string;
+  cmd: string;
+  class: string;
+};
+
 const BIND_LABEL: Record<Bind, string> = {
   loopback: "This computer only",
   tailscale: "Tailscale",
@@ -69,6 +77,7 @@ function when(ms: number): string {
 export function RemoteSection() {
   const [info, setInfo] = useState<RemoteInfo | null>(null);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
+  const [audit, setAudit] = useState<AuditEntry[]>([]);
   const [pairing, setPairing] = useState<Pairing | null>(null);
   // The last start, so the form matches what the status bar would turn on.
   const [last] = useState(readRemoteOptions);
@@ -81,12 +90,14 @@ export function RemoteSection() {
 
   const refresh = useCallback(async () => {
     try {
-      const [status, list] = await Promise.all([
+      const [status, list, entries] = await Promise.all([
         invoke<RemoteInfo>("remote_access_status"),
         invoke<PairedDevice[]>("remote_devices_list"),
+        invoke<AuditEntry[]>("remote_audit_log").catch(() => []),
       ]);
       setInfo(status);
       setDevices(list);
+      setAudit(entries);
       if (status.bind) setBind(status.bind);
       if (status.port) setPort(status.port);
     } catch (failure) {
@@ -354,6 +365,27 @@ export function RemoteSection() {
           </>
         )}
       </div>
+
+      {audit.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          <Label>Recent remote commands</Label>
+          <div className="max-h-44 overflow-y-auto rounded-md border border-border/60 bg-card/40 px-3 py-2 text-[11px]">
+            {audit.slice(0, 50).map((entry, idx) => (
+              <div
+                key={`${entry.timestampMs}-${entry.cmd}-${idx}`}
+                className="flex items-center justify-between gap-2 py-0.5 text-muted-foreground"
+              >
+                <span className="truncate font-mono text-foreground">
+                  {entry.cmd}
+                </span>
+                <span className="shrink-0">
+                  {entry.deviceName} · {entry.class} · {when(entry.timestampMs)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

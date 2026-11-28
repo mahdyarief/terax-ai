@@ -228,6 +228,8 @@ mod tests {
             relay: Some(relay.clone()),
             schemes: None,
             ports: None,
+            audit: None,
+            rate_limit: None,
         };
         tokio::spawn(accept_loop(listener, deps, stop_rx));
 

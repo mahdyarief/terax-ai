@@ -38,6 +38,8 @@ pub struct WebRemoteState {
     pairing: Arc<Pairing>,
     relay_sessions: Mutex<Option<Arc<app::sessions::SessionManager>>>,
     pub(crate) reported_ports: app::proxy::ReportedPorts,
+    pub(crate) audit: Arc<app::audit::AuditLog>,
+    pub(crate) rate_limit: Arc<app::audit::RateLimiter>,
 }
 
 impl Default for WebRemoteState {
@@ -49,6 +51,8 @@ impl Default for WebRemoteState {
             pairing: Arc::new(Pairing::default()),
             relay_sessions: Mutex::new(None),
             reported_ports: app::proxy::ReportedPorts::default(),
+            audit: Arc::new(app::audit::AuditLog::default()),
+            rate_limit: Arc::new(app::audit::RateLimiter::default()),
         }
     }
 }
@@ -235,6 +239,8 @@ pub async fn start_listener(
         relay: Some(relay),
         schemes: Some(Arc::new(app::schemes::AppSchemeHandler(app.clone()))),
         ports: Some(Arc::new(app::proxy::AppPortAllowlist(app.clone()))),
+        audit: Some(state.audit.clone()),
+        rate_limit: Some(state.rate_limit.clone()),
     };
     let running = Running {
         bind,

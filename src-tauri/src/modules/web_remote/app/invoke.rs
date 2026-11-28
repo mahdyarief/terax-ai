@@ -66,6 +66,14 @@ pub(crate) async fn handle_session(deps: &Deps, request: Request<Incoming>) -> R
             "Relay sessions are unavailable.",
         ));
     };
+    if let Some(limiter) = &deps.rate_limit {
+        if !limiter.check(&caller.id) {
+            return secure(text(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many commands; slow down.",
+            ));
+        }
+    }
     let body = match read_limited(request.into_body(), 4096).await {
         Ok(b) => b,
         Err(resp) => return resp,
@@ -120,6 +128,14 @@ pub(crate) async fn handle_invoke(deps: &Deps, request: Request<Incoming>) -> Re
             "Relay sessions are unavailable.",
         ));
     };
+    if let Some(limiter) = &deps.rate_limit {
+        if !limiter.check(&caller.id) {
+            return secure(text(
+                StatusCode::TOO_MANY_REQUESTS,
+                "Too many commands; slow down.",
+            ));
+        }
+    }
 
     let transport = transport_for(deps, request.headers());
     let invoke_headers: Vec<(String, String)> = request
@@ -144,7 +160,8 @@ pub(crate) async fn handle_invoke(deps: &Deps, request: Request<Incoming>) -> Re
         .and_then(|v| v.to_str().ok())
         .map(str::to_string);
 
-    let (session_id, cmd, body) = if let (Some(cmd), Some(session_id)) = (header_cmd, header_session)
+    let (session_id, cmd, class, body) = if let (Some(cmd), Some(session_id)) =
+        (header_cmd, header_session)
     {
         let Some(class) = policy::class(&cmd) else {
             return secure(text(StatusCode::FORBIDDEN, "Command is not allowed."));
@@ -156,7 +173,7 @@ pub(crate) async fn handle_invoke(deps: &Deps, request: Request<Incoming>) -> Re
             Ok(b) => b,
             Err(resp) => return resp,
         };
-        (session_id, cmd, InvokeRequestBody::Raw(bytes))
+        (session_id, cmd, class, InvokeRequestBody::Raw(bytes))
     } else {
         let bytes = match read_limited(request.into_body(), MAX_CONTROL_BYTES).await {
             Ok(b) => b,
@@ -180,9 +197,14 @@ pub(crate) async fn handle_invoke(deps: &Deps, request: Request<Incoming>) -> Re
         (
             payload.session,
             payload.cmd,
+            class,
             InvokeRequestBody::Json(payload.args),
         )
     };
+
+    if let Some(audit) = &deps.audit {
+        audit.record(&caller.id, &caller.name, &cmd, class);
+    }
 
     match relay
         .invoke(&session_id, &caller.id, &cmd, body, invoke_headers)
@@ -336,6 +358,8 @@ mod tests {
             relay: Some(relay),
             schemes: None,
             ports: None,
+            audit: None,
+            rate_limit: None,
         };
         tokio::spawn(accept_loop(listener, deps, stop_rx));
 
