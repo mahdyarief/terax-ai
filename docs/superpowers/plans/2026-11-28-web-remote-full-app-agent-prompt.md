@@ -18,7 +18,9 @@ Do **Task 0 (the spike) first, on a throwaway branch** (for example `dydev-spike
 Then **stop and report to the user**:
 - which of the five checks passed;
 - how Tauri 2.12.2 runs callbacks inside a webview;
-- the relay webview's memory on aspirexc (and on Windows if you can).
+- the relay webview's memory on aspirexc (on Windows only with the user's go-ahead, see Hard rules).
+
+The spike work so far is uncommitted on `dydev-spike-full-app` in the main working copy: `src-tauri/src/modules/web_remote/spike.rs` (the five checks behind `GET /spike/check`), `remote-relay.html`, `pty::protocol::dispatch_for_label`, and `remote-*` added to the capabilities. It builds, but the checks have not been run yet. Continue from it, and run it on aspirexc. `/spike/check` has no auth, so it must never reach `dydev`.
 
 Write the findings into a "Spike result" section of the plan on `dydev`.
 
@@ -57,7 +59,9 @@ Ask before:
 
 ## Hard rules
 - Package manager: **pnpm only** (`pnpm exec …`). Never npm, npx or yarn.
-- Never touch the installed `D:\Terax\terax.exe`. To run the app, use `pnpm dev:app`.
+- **The user works inside the installed Terax on this machine. Never stop, kill or restart any `terax.exe` process** (no `Stop-Process`, `taskkill` or `kill`, not even to free a locked file), and never touch `D:\Terax\terax.exe`.
+- **Do not run `pnpm dev:app` (or any dev build of the app) on Windows without asking the user first.** It has the same identifier as the installed app: it takes over `%LOCALAPPDATA%\terax\control.json`, shares its settings and data, and running it has ended the user's open Terax. Run live checks on aspirexc instead: the spike's five checks and its memory measurement go there. Measure WebView2 memory on Windows only after the user says it is a good time and has closed Terax.
+- Prefer checks that need no GUI here: `cargo test`, `cargo check`, vitest.
 - Formatting:
   - Never run `cargo fmt` on the crate. `rustfmt --edition 2021 <file>` is fine on new files only.
   - Never run `biome format --write` on existing files. To check one, compare biome's `lint/…` and `assist/source/organizeImports` findings against HEAD (`git stash`, check, `git stash pop`) and fix only what you introduced. New files may be formatted.
