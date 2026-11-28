@@ -4,4 +4,5 @@ pub mod callbacks;
 pub mod invoke;
 pub mod policy;
 pub mod schemes;
+pub mod serve;
 pub mod sessions;

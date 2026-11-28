@@ -183,12 +183,12 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] Routes `/scheme/terax-pty/*`, `/scheme/asset/*` and `/scheme/terax-doc/*` call the cores with the session's relay label. Same grants, `Cache-Control`, `nosniff`.
 
 ### Task 7: serve `/app/`
-- [ ] `/app/` returns `index.html` from the bundled assets with `<script src="/app/remote-runtime.js">` inserted first in `<head>`. Other `/app/*` paths map to the bundle.
-- [ ] CSP for `/app/`:
+- [x] `/app/` returns `index.html` from the bundled assets with `<script src="/app/remote-runtime.js">` inserted first in `<head>`. Other `/app/*` paths map to the bundle.
+- [x] CSP for `/app/`:
   - same as the mirror's;
   - plus `connect-src 'self'`, `worker-src 'self' blob:` and `wasm-unsafe-eval` (already there).
-- [ ] No `tauri://` or `ipc://` origins.
-- [ ] Only devices with `app` get anything but the pairing page.
+- [x] No `tauri://` or `ipc://` origins.
+- [x] Only devices with `app` get anything but the pairing page.
 
 ### Task 8: register and wire
 - [ ] Register the new commands in `lib.rs`, manage the session state, and add `remote-*` to the capabilities.

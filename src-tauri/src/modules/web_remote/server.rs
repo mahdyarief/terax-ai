@@ -212,6 +212,14 @@ pub(crate) async fn respond(deps: &Deps, request: Request<Incoming>) -> Response
     if let Some((id, "stream")) = pty_route(&path) {
         return pty_stream(deps, request.headers(), id);
     }
+    if path == "/app" || path.starts_with("/app/") {
+        return super::app::serve::handle_app(
+            deps,
+            request.headers(),
+            &path,
+            request.method() == Method::HEAD,
+        );
+    }
     serve_static(deps, &path, request.method() == Method::HEAD)
 }
 
