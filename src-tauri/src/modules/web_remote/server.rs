@@ -149,23 +149,29 @@ pub(crate) struct Deps {
 
 pub(crate) type Body = BoxBody<Bytes, Infallible>;
 
+/// The connection's peer, attached to every request by `accept_loop`. The
+/// bridge decides "loopback" from it, never from the `Host` header.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PeerAddr(pub SocketAddr);
+
 pub(crate) async fn accept_loop(
     listener: tokio::net::TcpListener,
     deps: Deps,
     mut stopped: watch::Receiver<bool>,
 ) {
     loop {
-        let stream = tokio::select! {
+        let (stream, peer) = tokio::select! {
             _ = stopped.changed() => break,
             accepted = listener.accept() => match accepted {
-                Ok((stream, _)) => stream,
+                Ok(accepted) => accepted,
                 Err(_) => continue,
             },
         };
         let deps = deps.clone();
         let mut stopped = stopped.clone();
         tauri::async_runtime::spawn(async move {
-            let service = hyper::service::service_fn(move |request| {
+            let service = hyper::service::service_fn(move |mut request: Request<Incoming>| {
+                request.extensions_mut().insert(PeerAddr(peer));
                 let deps = deps.clone();
                 async move { Ok::<_, Infallible>(respond(&deps, request).await) }
             });

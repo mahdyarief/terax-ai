@@ -8,29 +8,31 @@ use serde::Deserialize;
 
 use super::policy::{self, CommandClass, Transport};
 use super::sessions::{InvokeRequestBody, InvokeResult, SessionError};
-use super::super::server::{caller, json, secure, text, Body, Deps};
+use super::super::server::{caller, json, secure, text, Body, Deps, PeerAddr};
 
 const MAX_READ_BYTES: usize = 64 * 1024;
 const MAX_WRITE_BYTES: usize = 1024 * 1024;
 const MAX_CONTROL_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SECRET_BYTES: usize = 16 * 1024;
 
-pub(crate) fn transport_for(deps: &Deps, headers: &hyper::header::HeaderMap) -> Transport {
-    if deps.https {
+/// How the request reached us. Loopback is decided by the connection's peer
+/// address, never by the `Host` header, which the client chooses: a device on
+/// the tailnet or LAN sending `Host: 127.0.0.1` must stay `PlainRemote`.
+pub(crate) fn transport_for<B>(deps: &Deps, request: &Request<B>) -> Transport {
+    let peer = request
+        .extensions()
+        .get::<PeerAddr>()
+        .map(|peer| peer.0.ip());
+    transport_from(deps.https, peer)
+}
+
+pub(crate) fn transport_from(https: bool, peer: Option<std::net::IpAddr>) -> Transport {
+    if https {
         return Transport::Https;
     }
-    let host = headers
-        .get(HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let name = host
-        .strip_prefix('[')
-        .and_then(|s| s.split(']').next())
-        .unwrap_or_else(|| host.split(':').next().unwrap_or(""));
-    if matches!(name, "localhost" | "127.0.0.1" | "::1") {
-        Transport::Loopback
-    } else {
-        Transport::PlainRemote
+    match peer {
+        Some(ip) if ip.to_canonical().is_loopback() => Transport::Loopback,
+        _ => Transport::PlainRemote,
     }
 }
 
@@ -137,7 +139,7 @@ pub(crate) async fn handle_invoke(deps: &Deps, request: Request<Incoming>) -> Re
         }
     }
 
-    let transport = transport_for(deps, request.headers());
+    let transport = transport_for(deps, &request);
     let invoke_headers: Vec<(String, String)> = request
         .headers()
         .get("x-terax-invoke-headers")
@@ -303,6 +305,41 @@ mod tests {
                 }
             })
         }
+    }
+
+    #[test]
+    fn loopback_comes_from_the_peer_address_never_the_host_header() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+        let tailnet = IpAddr::V4(Ipv4Addr::new(100, 84, 56, 62));
+        assert_eq!(transport_from(false, Some(tailnet)), Transport::PlainRemote);
+        assert_eq!(transport_from(false, None), Transport::PlainRemote);
+        assert_eq!(
+            transport_from(false, Some(IpAddr::V4(Ipv4Addr::LOCALHOST))),
+            Transport::Loopback
+        );
+        assert_eq!(
+            transport_from(false, Some(IpAddr::V6(Ipv6Addr::LOCALHOST))),
+            Transport::Loopback
+        );
+        // ::ffff:127.0.0.1, as a dual-stack listener reports it.
+        assert_eq!(
+            transport_from(
+                false,
+                Some(IpAddr::V6(Ipv4Addr::LOCALHOST.to_ipv6_mapped()))
+            ),
+            Transport::Loopback
+        );
+        assert_eq!(transport_from(true, Some(tailnet)), Transport::Https);
+
+        // A tailnet peer naming 127.0.0.1 in Host stays remote.
+        let request = Request::builder()
+            .header(HOST, "127.0.0.1:7681")
+            .extension(PeerAddr(std::net::SocketAddr::new(tailnet, 50000)))
+            .body(())
+            .unwrap();
+        let peer = request.extensions().get::<PeerAddr>().map(|p| p.0.ip());
+        assert_eq!(transport_from(false, peer), Transport::PlainRemote);
     }
 
     #[tokio::test]

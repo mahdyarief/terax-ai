@@ -2,7 +2,7 @@
 
 > **For agentic workers:** implement task by task. Each task is one commit on `dydev`, test first where it adds behaviour. Steps use checkbox (`- [ ]`) syntax for tracking. Phase 0 is a spike whose result decides whether Phases 1–5 go ahead as written.
 
-**Status (2026-11-28):** Phases 1-5 (Tasks 1-22) implemented, unit-tested, and verified on `aspirexc` (port 7690 + 1-3 session memory). Pending user confirmation to restart `terax-remote` and run manual Chrome walkthrough. Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
+**Status (2026-11-28):** Phases 1-5 (Tasks 1-22) implemented, unit-tested, and verified on `aspirexc` (port 7690 + 1-3 session memory). Pending user confirmation to restart `terax-remote` and run manual Chrome walkthrough. Review fixes after Task 22: the `remote_*` management commands and `remote_report_ports` are `Native` (a browser could widen grants, pair devices, move the listener, or aim `/proxy/` at any local port), and `Transport::Loopback` comes from the peer address instead of the client's `Host` header. Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
 
 ## Goal
 
