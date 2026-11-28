@@ -1,4 +1,11 @@
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
 import { invoke } from "@tauri-apps/api/core";
+
+const REMOTE_KEY_PREFIX = "__TERAX_REMOTE_KEY__:";
+
+function remotePlaceholder(account: string): string {
+  return `${REMOTE_KEY_PREFIX}${account}`;
+}
 import {
   getProvider,
   KEYRING_SERVICE,
@@ -29,10 +36,22 @@ export const EMPTY_PROVIDER_KEYS: ProviderKeys = {
 
 export async function getKey(provider: ProviderId): Promise<string | null> {
   if (!providerSupportsKey(provider)) return null;
+  const account = getProvider(provider).keyringAccount;
+  if (isRemoteRuntime()) {
+    try {
+      const [has] = await invoke<boolean[]>("secrets_has", {
+        service: KEYRING_SERVICE,
+        accounts: [account],
+      });
+      return has ? remotePlaceholder(account) : null;
+    } catch {
+      return null;
+    }
+  }
   try {
     const v = await invoke<string | null>("secrets_get", {
       service: KEYRING_SERVICE,
-      account: getProvider(provider).keyringAccount,
+      account,
     });
     return v && v.length > 0 ? v : null;
   } catch {
@@ -65,6 +84,20 @@ export async function clearKey(provider: ProviderId): Promise<void> {
 export async function getAllKeys(): Promise<ProviderKeys> {
   const out = { ...EMPTY_PROVIDER_KEYS };
   const need = PROVIDERS.filter((p) => providerSupportsKey(p.id));
+  if (isRemoteRuntime()) {
+    try {
+      const results = await invoke<boolean[]>("secrets_has", {
+        service: KEYRING_SERVICE,
+        accounts: need.map((p) => p.keyringAccount),
+      });
+      need.forEach((p, i) => {
+        out[p.id] = results[i] ? remotePlaceholder(p.keyringAccount) : null;
+      });
+    } catch {
+      // Never fall back to secrets_get in remote mode.
+    }
+    return out;
+  }
   try {
     const results = await invoke<(string | null)[]>("secrets_get_all", {
       service: KEYRING_SERVICE,
@@ -95,10 +128,22 @@ function compatKeyringAccount(endpointId: string): string {
 export async function getCustomEndpointKey(
   endpointId: string,
 ): Promise<string | null> {
+  const account = compatKeyringAccount(endpointId);
+  if (isRemoteRuntime()) {
+    try {
+      const [has] = await invoke<boolean[]>("secrets_has", {
+        service: KEYRING_SERVICE,
+        accounts: [account],
+      });
+      return has ? remotePlaceholder(account) : null;
+    } catch {
+      return null;
+    }
+  }
   try {
     const v = await invoke<string | null>("secrets_get", {
       service: KEYRING_SERVICE,
-      account: compatKeyringAccount(endpointId),
+      account,
     });
     return v && v.length > 0 ? v : null;
   } catch {
@@ -130,8 +175,22 @@ export async function getAllCustomEndpointKeys(
 ): Promise<CustomEndpointKeys> {
   if (endpoints.length === 0) return {};
   const out: CustomEndpointKeys = {};
+  const accounts = endpoints.map((e) => compatKeyringAccount(e.id));
+  if (isRemoteRuntime()) {
+    try {
+      const results = await invoke<boolean[]>("secrets_has", {
+        service: KEYRING_SERVICE,
+        accounts,
+      });
+      endpoints.forEach((e, i) => {
+        out[e.id] = results[i] ? remotePlaceholder(accounts[i]) : null;
+      });
+    } catch {
+      // Never fall back to secrets_get in remote mode.
+    }
+    return out;
+  }
   try {
-    const accounts = endpoints.map((e) => compatKeyringAccount(e.id));
     const results = await invoke<(string | null)[]>("secrets_get_all", {
       service: KEYRING_SERVICE,
       accounts,

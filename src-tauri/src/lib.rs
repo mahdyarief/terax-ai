@@ -577,6 +577,7 @@ pub fn run() {
             secrets::secrets_set,
             secrets::secrets_delete,
             secrets::secrets_get_all,
+            secrets::secrets_has,
             net::lm_ping,
             net::ai_http_stream,
             net::ai_http_cancel,

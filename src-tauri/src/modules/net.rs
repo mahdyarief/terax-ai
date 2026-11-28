@@ -8,7 +8,7 @@ use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use tauri::ipc::{InvokeBody, JavaScriptChannelId, Request, Response};
-use tauri::{State, WebviewWindow};
+use tauri::{Manager, State, WebviewWindow};
 
 mod clients;
 mod ip;
@@ -236,8 +236,46 @@ struct StreamRequest {
     on_event: JavaScriptChannelId,
 }
 
+const REMOTE_KEY_PREFIX: &str = "__TERAX_REMOTE_KEY__:";
+const KEYRING_SERVICE: &str = "terax-ai";
+
+fn resolve_remote_placeholders(
+    app: &tauri::AppHandle,
+    url: &mut String,
+    headers: &mut Option<HashMap<String, String>>,
+) -> Result<(), String> {
+    let state = app.state::<crate::modules::secrets::SecretsState>();
+    let resolve_account = |account: &str| -> Result<String, String> {
+        crate::modules::secrets::get_secret(app, &state, KEYRING_SERVICE, account)?
+            .filter(|v| !v.is_empty())
+            .ok_or_else(|| format!("missing API key for {account}"))
+    };
+    if let Some(pos) = url.find(REMOTE_KEY_PREFIX) {
+        let rest = &url[pos + REMOTE_KEY_PREFIX.len()..];
+        let end = rest.find('&').unwrap_or(rest.len());
+        let account = rest[..end].to_string();
+        let secret = resolve_account(&account)?;
+        let token = format!("{REMOTE_KEY_PREFIX}{account}");
+        *url = url.replacen(&token, &secret, 1);
+    }
+    if let Some(map) = headers.as_mut() {
+        for value in map.values_mut() {
+            if let Some(pos) = value.find(REMOTE_KEY_PREFIX) {
+                let rest = &value[pos + REMOTE_KEY_PREFIX.len()..];
+                let end = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
+                let account = rest[..end].to_string();
+                let secret = resolve_account(&account)?;
+                let token = format!("{REMOTE_KEY_PREFIX}{account}");
+                *value = value.replacen(&token, &secret, 1);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[tauri::command]
 pub async fn ai_http_stream(
+    app: tauri::AppHandle,
     window: WebviewWindow,
     state: State<'_, AiStreamState>,
     request: Request<'_>,
@@ -250,9 +288,9 @@ pub async fn ai_http_stream(
         .ok_or("missing or oversized AI request metadata")?;
     let StreamRequest {
         request_id,
-        url,
+        mut url,
         method,
-        headers,
+        mut headers,
         allow_private_network,
         on_event,
     } = serde_json::from_str(metadata).map_err(|e| e.to_string())?;
@@ -261,6 +299,20 @@ pub async fn ai_http_stream(
     let (lease, registration) = state.start(window.label(), &request_id)?;
     tauri::async_runtime::spawn(async move {
         let run = async {
+            if url.contains(REMOTE_KEY_PREFIX)
+                || headers
+                    .as_ref()
+                    .is_some_and(|h| h.values().any(|v| v.contains(REMOTE_KEY_PREFIX)))
+            {
+                let app_clone = app.clone();
+                let (resolved_url, resolved_headers) = crate::modules::fs::blocking(move || {
+                    resolve_remote_placeholders(&app_clone, &mut url, &mut headers)?;
+                    Ok((url, headers))
+                })
+                .await?;
+                url = resolved_url;
+                headers = resolved_headers;
+            }
             let allow_private = allow_private_network.unwrap_or(false);
             let parsed = validate_url(&url, allow_private)?;
             let host = parsed.host_str().ok_or("missing host")?.to_string();

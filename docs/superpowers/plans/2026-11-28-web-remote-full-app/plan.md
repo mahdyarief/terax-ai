@@ -252,8 +252,8 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 ## Phase 4: AI, agents, ports, desktop tabs
 
 ### Task 18: AI and agents
-- [ ] AI chat through the `net` proxy Channel. Prove from the network log that no API key reaches the browser. Fix any command that returns a key before enabling AI remotely.
-- [ ] The agents launcher (per-workspace commands, PATH hint), agent signals and the status pill.
+- [x] AI chat through the `net` proxy Channel. Prove from the network log that no API key reaches the browser. Fix any command that returns a key before enabling AI remotely. (`secrets_get` and `secrets_get_all` blocked in `policy.rs`; `keyring.ts` uses `secrets_has` + `__TERAX_REMOTE_KEY__:<account>` placeholder resolved in `net.rs`.)
+- [x] The agents launcher (per-workspace commands, PATH hint), agent signals and the status pill. (Commands/events classified and relayed.)
 
 ### Task 19: port proxy for previews and dev servers
 - [ ] `/proxy/<port>/…`: a reverse proxy to `127.0.0.1:<port>` for ports Terax itself reports (live server, detected dev servers), with WebSocket upgrade for HMR.

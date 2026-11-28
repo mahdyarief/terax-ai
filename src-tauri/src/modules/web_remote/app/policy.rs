@@ -189,7 +189,7 @@ pub fn class(cmd: &str) -> Option<CommandClass> {
         }
 
         // Secrets
-        "secrets_get" | "secrets_set" | "secrets_delete" | "secrets_get_all" => {
+        "secrets_get" | "secrets_set" | "secrets_delete" | "secrets_get_all" | "secrets_has" => {
             Some(CommandClass::Secret)
         }
 
@@ -295,7 +295,7 @@ pub fn allowed_class(c: CommandClass, cmd: &str, app_grant: bool, transport: Tra
     match c {
         CommandClass::Native => false,
         CommandClass::Secret => {
-            if cmd == "secrets_get_all" {
+            if matches!(cmd, "secrets_get" | "secrets_get_all") {
                 return false;
             }
             matches!(transport, Transport::Loopback | Transport::Https)
@@ -375,10 +375,13 @@ mod tests {
         assert!(!allowed("plugin:window|close", true, Transport::Loopback));
         assert!(!allowed("plugin:core|__FETCH_CHANNEL_DATA__", true, Transport::Loopback));
 
-        // Secrets require HTTPS or loopback, and secrets_get_all is never allowed.
-        assert!(!allowed("secrets_get", true, Transport::PlainRemote));
-        assert!(allowed("secrets_get", true, Transport::Loopback));
-        assert!(allowed("secrets_get", true, Transport::Https));
+        // Secrets require HTTPS or loopback, and secrets_get / secrets_get_all are never allowed.
+        assert!(!allowed("secrets_set", true, Transport::PlainRemote));
+        assert!(allowed("secrets_set", true, Transport::Loopback));
+        assert!(allowed("secrets_has", true, Transport::Https));
+        assert!(!allowed("secrets_has", true, Transport::PlainRemote));
+        assert!(!allowed("secrets_get", true, Transport::Loopback));
+        assert!(!allowed("secrets_get", true, Transport::Https));
         assert!(!allowed("secrets_get_all", true, Transport::Loopback));
         assert!(!allowed("secrets_get_all", true, Transport::Https));
 

@@ -147,7 +147,25 @@ pub async fn secrets_get(
     .await
 }
 
-fn get_secret(
+#[tauri::command]
+pub async fn secrets_has(
+    app: AppHandle,
+    service: String,
+    accounts: Vec<String>,
+) -> Result<Vec<bool>, String> {
+    blocking_secret(app, move |app, state| {
+        let mut out = Vec::with_capacity(accounts.len());
+        for account in &accounts {
+            let present = get_secret(app, state, &service, account)?
+                .is_some_and(|v| !v.is_empty());
+            out.push(present);
+        }
+        Ok(out)
+    })
+    .await
+}
+
+pub(crate) fn get_secret(
     app: &AppHandle,
     state: &SecretsState,
     service: &str,
