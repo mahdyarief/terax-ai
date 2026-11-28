@@ -1,0 +1,133 @@
+# Web Remote full app: fixes after the first browser walkthrough
+
+> **For agentic workers:**
+> - Implement task by task on `dydev`: one task per commit, test first.
+> - Read `../2026-11-28-web-remote-full-app/agent-prompt.md`; its rules apply here too: security, the user's running Terax, pnpm only, no `cargo fmt`, Indonesian reports.
+> - Deploy to aspirexc the way that prompt describes, and tell the user before you restart `terax-remote`.
+
+**Status (2026-11-28):** planned. Found while using `/app/` from Chrome against aspirexc, after `5732a20` (the terminal stream now sends the device cookie).
+
+## What the user saw, and why
+
+| # | Symptom in `/app/` | Root cause (verified) |
+|---|---|---|
+| 1 | "New tab" / "New terminal" adds no tab | A browser session's window label is `remote-<n>`. No space has `hostWindowLabel == "remote-<n>"`, so `useSpacesBoot` takes the "nothing hosted" branch: `hydrate(registry, null, {})` and `setActiveSpaceForNewTabs("")` (`src/modules/spaces/lib/useSpacesBoot.ts:186`). `newTab` then stamps `spaceId: ""` (`src/modules/tabs/lib/useTabs.ts:918`), so the tab exists but lives in a space nothing shows. |
+| 2 | No spaces | Same cause. On aspirexc the registry (`~/.local/share/app.crynta.terax/terax-spaces.json`) holds only `default`, hosted by `main`, a headless Xvfb window nobody looks at. The browser sees spaces "in another window" and hosts none. The label also changes on every session (`remote-0`, `remote-1`, …), so a space hosted by a browser session is orphaned on reconnect. |
+| 3 | "Open folder" does nothing | All three folder flows call `workspace_pick_folder` (`src/app/App.tsx:1504`, `:1536`, `:1593`). It opens a native `rfd` dialog on the host and is class `Native` in `policy.rs:177`, so the bridge refuses it. There is no in-app picker for local folders. |
+| 4 | The block tab's logo does not render | `BlockWatermark` loads `src="/logo.png"`. The listener serves only `web-index.html` and `assets/*` (`http_rules::asset_key`), so `/logo.png` is 404. `notification.mp3` and `licenses/` (Vite `public/` files at the root of `dist`) are 404 for the same reason. |
+| 5 | Unclear whether typing works | Verified: printable keys reach the shell. Each key is a `pty_write` with the right bytes and answers 200. Space, Enter, Backspace and Ctrl+U were **not** sent, but they were synthetic `keydown`s from the browser tool, which Ghostty's input path likely ignores. The repo's bench harness types through native OS events for the same reason. Still unverified with a real keyboard. |
+| 6 | No quick keys or typing area in `/app/` | By design: they belong to the mirror (`/web-index.html`). The mirror links nowhere to `/app/`, and the pairing URL points at the mirror, so users land on the light view. |
+
+## Decisions
+
+1. **A browser session gets a stable window label per device: `remote-<device id>`**, not `remote-<n>`.
+   - Spaces hosted by it survive reconnects and service restarts, exactly as `space-*` windows do.
+   - A second session from the same device takes the label over: the older session is closed with "Opened in another tab", the way `pty` handoff supersedes.
+   - The label stays within `remote-*`, so capabilities and `policy.rs` checks are unchanged.
+2. **A browser session that hosts no space adopts spaces instead of showing nothing:**
+   - **headless host** (`--remote-serve`): it takes over the spaces hosted by `main`, through the existing space handoff (`spaceTransfers`, `SPACE_TABS_MOVED_EVENT`). Nobody is looking at `main` there.
+   - **desktop host** (a person at the machine): it creates its own space, named after the device, rooted at the home folder, and never takes the desktop's tabs. Other windows' spaces stay in the switcher and can be brought over on purpose.
+   - **How Rust tells them apart:** the session API reports `headless: true` when the process runs with `--remote-serve`.
+3. **The folder picker becomes an in-app dialog in the browser**, built on the existing `RemoteFolderPicker` UI and generalized to take a `browse(path)` function.
+   - For the local workspace it lists directories through the already-allowed read commands.
+   - `workspace_pick_folder` stays `Native`.
+   - The desktop keeps the native dialog.
+4. **The listener serves the Vite `public/` files by an explicit allowlist** (`logo.png`, `notification.mp3`, `licenses/*`), not "any file at the root". `remote-relay.html`, `settings.html` and `index.html` stay unreachable outside `/app/`.
+5. **Special keys are verified with real key events** before anything is changed, so the cause is not guessed (see Task 5).
+
+## Tasks
+
+### Task 1: serve the Vite public files (symptom 4)
+- [ ] Test first (`http_rules.rs`):
+  - `asset_key("/logo.png")` and `asset_key("/notification.mp3")` give their keys;
+  - `asset_key("/licenses/<file>")` gives a key under `licenses/`;
+  - `/remote-relay.html`, `/settings.html`, `/index.html`, `/licenses/../web-index.html` and dotfiles give `None`.
+- [ ] Implement the allowlist in `asset_key`. Caching for these files is `no-cache`, not the immutable rule for hashed `assets/`.
+- [ ] Server test: `GET /logo.png` answers 200 with `image/png`.
+- [ ] After deploy: in `/app/`, open a block tab and confirm the watermark logo loads (network 200), and that an agent notification plays its sound.
+
+### Task 2: a stable per-device window label (symptom 2, part 1)
+- [ ] Rust, `app/sessions.rs`: the relay label is `remote-<device id>`.
+  - When a session for that device is already open, it is closed first: the relay webview is destroyed, and its callbacks SSE ends with `event: superseded`.
+  - The session id stays random and per session. Only the label is stable.
+- [ ] Revoking a device, or removing its `app` grant, still closes the session (existing behaviour, keep its test).
+- [ ] Tests:
+  - two sessions from one device: the first is superseded, and the label is reused;
+  - two devices get different labels;
+  - a label never holds a character outside `[a-z0-9-]`.
+- [ ] Shim (`src/web/runtime/main.ts`): on `superseded`, show "This app was opened in another tab" with a Reload button instead of the reconnect banner.
+
+### Task 3: a browser session always shows a space (symptoms 1 and 2)
+- [ ] `POST /api/app/session` reports `headless` (true under `--remote-serve`). The runtime exposes it as `__TERAX_REMOTE_HEADLESS__`.
+- [ ] `useSpacesBoot`, under `isRemoteRuntime()`, when `hosted` is empty:
+  - headless: move every space hosted by `main` to this label, using the same functions that bring a space to a window (`spaceTransfers.ts`). Their tabs and live PTYs come along by the existing handoff path. If `main` does not answer within the handoff timeout, reassign the registry entries and hydrate from the saved state.
+  - desktop host: create a space `{ name: <device name>, root: home, hostWindowLabel: <label> }` and make it active.
+  - Either way, `setActiveSpaceForNewTabs` gets a real id, never `""`.
+- [ ] Guard in `newTab` (all runtimes): if `activeSpaceIdRef.current` is empty, use the active space from `useSpaces`. If there is none, create the default one. A tab must never be created with `spaceId: ""`.
+- [ ] Tests:
+  - `resolveBootTargets` and boot under the remote runtime for headless and desktop hosts;
+  - `newTab` with an empty active space id;
+  - pure functions for the adoption choice.
+- [ ] After deploy, on aspirexc:
+  - the browser shows the `default` space with its tabs;
+  - "New tab" adds a tab;
+  - a new space can be created, and still exists after reload and after a service restart;
+  - the switcher lists the spaces.
+
+### Task 4: an in-app folder picker in the browser (symptom 3)
+- [ ] Route every folder pick through `pickWorkspaceFolder()` (`src/modules/workspace/env.ts`). Replace the three direct `invoke("workspace_pick_folder")` calls in `App.tsx`.
+- [ ] Generalize `RemoteFolderPicker` into a `FolderPickerDialog`:
+  - props: `browse(path)`, `home()`, `title`, `onPick` / `onCancel`;
+  - it keeps the typed-path field, the Up button and the directory list;
+  - the SSH picker becomes a thin wrapper.
+- [ ] Under `isRemoteRuntime()`, `pickWorkspaceFolder()` opens the dialog and resolves with the chosen path, or `null` on cancel.
+  - Local workspace: list directories with the existing read command the explorer uses (check its class in `policy.rs`; it must be `Read`, and no new command is added).
+  - WSL and SSH workspaces use their own browse functions.
+- [ ] Tests:
+  - a pure helper that turns a listing into directory rows (hidden folders behind a toggle);
+  - `pickWorkspaceFolder` resolves from the dialog in the remote runtime and still invokes the native command on the desktop;
+  - a render test of the dialog with props.
+- [ ] After deploy: "Open folder", "Open folder as space…" and "Choose folder" for a space all work from the browser, and the explorer shows the chosen root.
+
+### Task 5: verify special keys with real key events (symptom 5)
+- [ ] Drive Chrome through `chrome.debugger` `Input.dispatchKeyEvent`, which creates trusted events, or ask the user to type: Space, Enter, Backspace, Tab, arrows, Ctrl+C, Ctrl+U and Escape in a `/app/` terminal.
+  - Pass: the `pty_write` bodies are `20`, `0d`, `7f`, `09`, `1b[A…`, `03`, `15`, `1b`.
+  - Pass: `touch /tmp/<marker>` creates the file on aspirexc.
+- [ ] Only if a key is missing with real events: trace `keydown` → Ghostty encode → `pty_write` in the remote runtime. Check the shortcut remapping added for the browser (`src/modules/shortcuts/shortcuts.ts`, `remote` parameter), since a browser-reserved remap can swallow a key. Fix with a test.
+
+### Task 6: from the mirror to the full app (symptom 6)
+- [ ] `GET /api/me` already returns the grant. The mirror header shows "Open full app" (link to `/app/`) when `grant.app` is true.
+- [ ] The pairing URL keeps pointing at the mirror, since a new device starts without `app`. Settings and the headless log line add "after granting app access, open /app/".
+- [ ] Test: the header renders the link only with the grant.
+
+### Task 7: pairing codes without a restart, several at once (requested 2026-11-28)
+Work in progress: `devices.rs` has the RED tests, uncommitted (`a_new_code_leaves_the_earlier_ones_working_so_several_devices_can_pair`, `wrong_attempts_count_across_all_codes_and_end_them_all`, `only_the_newest_codes_stay_open`).
+- [ ] `Pairing` keeps up to `PAIRING_OPEN_CODES` (8) open codes, each one-time with a 10-minute lifetime. A new code leaves the others working, and the oldest drops past the cap.
+  - Wrong attempts count across all codes. `PAIRING_ATTEMPTS` wrong attempts end them all.
+  - `start()` resets the counter.
+- [ ] Unix: on `SIGUSR1` while remote access runs, mint a code and print the same `terax: pair a browser within 10 minutes: <url>` line to stderr.
+  - Use tokio `signal`. That is a feature of an existing dependency, not a new crate.
+  - Only the process owner can send the signal. The control socket is not used, because every terminal holds a token for it.
+- [ ] `docs/remote-serve.md`:
+
+  ```
+  systemctl --user kill -s USR1 terax-remote
+  journalctl --user -u terax-remote | grep "pair a browser" | tail -1
+  ```
+- [ ] Tests: the pairing unit tests above. The signal handler is a thin wrapper around `start_pairing`, so keep it out of unit tests and verify it on aspirexc: two codes, two devices paired, no restart.
+
+## Order
+Task 1 (small and independent). Then Task 7 (already started). Then Tasks 2 → 3, which depend on each other. Then Task 4, then Task 5, then Task 6. Deploy after Tasks 1+7, after Task 3, and after Task 4, so the user can try each step.
+
+## Verification notes
+- `fastmcp-browser` on this machine:
+  - screenshots fail ("image readback failed");
+  - fill/type and special keys are synthetic, and the terminal ignores them;
+  - Radix menus need `browser_pointer_click`, not `browser_click`;
+  - single printable keys via `browser_press` do reach the terminal after a pointer click.
+- Use the network log (decode `pty_write` bodies) and side effects on aspirexc (`ls /tmp/<marker>`) as evidence.
+- Every symptom needs a check in the real browser after deploy, not only unit tests. The cookie bug in `5732a20` passed every unit and live test.
+
+## Risks
+- Taking over `main`'s spaces on a headless host moves live PTYs between webviews. The handoff path was built for desktop windows; watch for a replay gap on the first attach.
+- A stable label means two browser tabs of one device cannot both run the app. That is accepted. The mirror view still works in parallel.
