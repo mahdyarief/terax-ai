@@ -4,7 +4,7 @@
 
 **Goal:** Open `http://<host>:<port>/web-index.html` in any browser (desktop or phone, typically over Tailscale) and see every terminal tab of every workspace (local, WSL, SSH; main window and space windows) live, in terminal or block mode, exactly as the desktop shows it, and type into any of them when the device is allowed to. On a machine nobody sits at (the test host `aspirexc`), the browser can also open and close terminal tabs.
 
-**Status (2026-11-27):** planned, nothing implemented.
+**Status (2026-11-28):** Phases 1–3 implemented. Phase 4 deployed on `aspirexc` (port 7681, systemd user unit `terax-remote`); API checks pass, visual checks (blocks, phone layout) still need a person.
 
 ## Why this works (evidence, no prototype needed)
 
@@ -157,10 +157,10 @@
 `aspirexc` (Ubuntu 26.04, x86_64, 12 cores, 14 GiB, Tailscale `100.84.56.62`, SSH `dy-aspire`) is headless. It has Xvfb but not `libwebkit2gtk-4.1-0`, and passwordless sudo. Orca already runs there on port 6768, so Terax uses another port, for example 7681.
 
 ### Task 19: deploy
-- [ ] Install the runtime dependencies with apt: `libwebkit2gtk-4.1-0`, `libgtk-3-0` and the `.deb`'s own dependencies.
-- [ ] Build on the host from `dydev` (Rust, Node and pnpm in user space; avoids spending GitHub Actions), or install a `.deb` built there.
-- [ ] Run `xvfb-run terax --remote-serve --bind tailscale --port 7681` as a systemd user unit.
-- [ ] Pair from a browser on the tailnet. Verify:
+- [x] Install the runtime dependencies with apt: `libwebkit2gtk-4.1-0`, `libgtk-3-0` and the `.deb`'s own dependencies. (Already present on the host.)
+- [x] Build on the host from `dydev` (Rust, Node and pnpm in user space; avoids spending GitHub Actions), or install a `.deb` built there. (`tauri build --no-bundle`, binary at `~/.local/bin/terax`; the SSH agent binaries are skipped, `cargo-zigbuild` is not installed.)
+- [x] Run `xvfb-run terax --remote-serve --bind tailscale --port 7681` as a systemd user unit.
+- [ ] Pair from a browser on the tailnet. Verify (2026-11-28: pairing, tab list, live stream with OSC 133, input refused without the grant and delivered with it, new and close tab, and the tab list after a server restart pass through the API; blocks and a phone layout not yet looked at):
   - live output;
   - blocks;
   - input with and without the grant;

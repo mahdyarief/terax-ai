@@ -8,6 +8,11 @@ stderr (`journalctl --user -u terax-remote` under systemd). It works once and
 expires after 10 minutes; restart the service for a new one. Desktops with a
 window can also create codes from Settings → Remote.
 
+A new device may only watch. Without a window there is no Settings page to
+grant typing or opening tabs, so edit the device store while the service is
+stopped: in `~/.local/share/app.crynta.terax/remote-devices.json`, set the
+device's `"grant": {"input": true, "tabs": true}`, then start it again.
+
 ```sh
 terax --remote-serve --bind tailscale --port 7681
 ```
