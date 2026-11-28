@@ -142,9 +142,9 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 ## Phase 1: backend bridge (`src-tauri/src/modules/web_remote/app/`)
 
 ### Task 1: command policy and guard test
-- [ ] `policy.rs`: `enum CommandClass { Read, Write, Control, Secret, Native }` and `fn class(cmd: &str) -> Option<CommandClass>`, covering app and plugin commands (`plugin:store|*`, `plugin:event|*`, `plugin:path|*`, …).
-- [ ] Guard test: parse `generate_handler!` in `lib.rs` (as the SSH guard test does) and fail on any unclassified command.
-- [ ] `fn allowed(class, grant, transport) -> bool`:
+- [x] `policy.rs`: `enum CommandClass { Read, Write, Control, Secret, Native }` and `fn class(cmd: &str) -> Option<CommandClass>`, covering app and plugin commands (`plugin:store|*`, `plugin:event|*`, `plugin:path|*`, …).
+- [x] Guard test: parse `generate_handler!` in `lib.rs` (as the SSH guard test does) and fail on any unclassified command.
+- [x] `fn allowed(class, grant, transport) -> bool`:
   - `Native` is never allowed;
   - `Secret` needs HTTPS or loopback, and `secrets_get_all` is never allowed;
   - everything else needs the `app` grant.

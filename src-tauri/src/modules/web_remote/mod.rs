@@ -3,6 +3,7 @@
 //! Off until the user turns it on. Each paired device gets its own token and
 //! grant; the HTTP server (`server.rs`) enforces both on every request.
 
+pub mod app;
 pub mod devices;
 pub mod http_rules;
 pub mod https;
