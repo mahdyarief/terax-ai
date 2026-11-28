@@ -34,9 +34,7 @@ pub fn class(cmd: &str) -> Option<CommandClass> {
         | "remote_pairing_start"
         | "remote_device_update"
         | "remote_device_revoke" => Some(CommandClass::Control),
-        "remote_publish_tabs" | "spike_relay_push" | "spike_test_channel" | "remote_relay_push" => {
-            Some(CommandClass::Native)
-        }
+        "remote_publish_tabs" | "remote_relay_push" => Some(CommandClass::Native),
 
         // PTY
         "pty_diagnostics"

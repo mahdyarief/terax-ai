@@ -155,13 +155,13 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] Tests.
 
 ### Task 3: relay sessions
-- [ ] `sessions.rs`: create `remote-<n>` hidden webview windows on demand (cap 3) loading `remote-relay.html`.
-  - Map session id → (device id, label, SSE sender).
+- [x] `sessions.rs`: create `remote-<n>` hidden webview windows on demand (cap 3) loading `remote-relay.html`.
+  - Map session id -> (device id, label, SSE sender).
   - Close after 60 s with no SSE subscriber, on revoke, and on listener stop.
-- [ ] Teach the window-label helpers in `lib.rs` about `remote-*`:
+- [x] Teach the window-label helpers in `lib.rs` about `remote-*`:
   - not `main`, not a space window;
   - excluded from close-all-on-main-destroyed ordering, so it closes itself.
-- [ ] `remote-relay.html` + `src/web/relay/main.ts`: forward every callback (event or channel) to Rust with `remote_relay_push(id, payload)` (a `Native`-class command only the relay label may call).
+- [x] `remote-relay.html` + `src/web/relay/main.ts`: forward every callback (event or channel) to Rust with `remote_relay_push(id, payload)` (a `Native`-class command only the relay label may call).
 
 ### Task 4: `POST /api/app/invoke`
 - [ ] Body: `{ session, cmd, args }` (JSON) or raw bytes with `cmd` in a header, for `InvokeBody::Raw` commands.

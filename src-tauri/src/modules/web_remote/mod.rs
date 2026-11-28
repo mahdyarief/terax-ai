@@ -8,7 +8,6 @@ pub mod devices;
 pub mod http_rules;
 pub mod https;
 pub mod server;
-pub mod spike;
 pub mod sse;
 pub mod stream;
 pub mod tabs;
@@ -37,7 +36,7 @@ pub struct WebRemoteState {
     pub(crate) running: Mutex<Option<Running>>,
     devices: Mutex<Arc<DeviceStore>>,
     pairing: Arc<Pairing>,
-    pub(crate) spike: Arc<spike::SpikeEvents>,
+    relay_sessions: Mutex<Option<Arc<app::sessions::SessionManager>>>,
 }
 
 impl Default for WebRemoteState {
@@ -47,7 +46,7 @@ impl Default for WebRemoteState {
             running: Mutex::new(None),
             devices: Mutex::new(Arc::new(DeviceStore::memory())),
             pairing: Arc::new(Pairing::default()),
-            spike: Arc::new(spike::SpikeEvents::default()),
+            relay_sessions: Mutex::new(None),
         }
     }
 }
@@ -64,6 +63,10 @@ impl WebRemoteState {
 
     pub(crate) fn devices(&self) -> Arc<DeviceStore> {
         self.devices.lock().unwrap().clone()
+    }
+
+    pub fn relay_sessions(&self) -> Option<Arc<app::sessions::SessionManager>> {
+        self.relay_sessions.lock().unwrap().clone()
     }
 
     /// Loads the paired devices from app data. Called once at setup, before
@@ -209,6 +212,13 @@ pub async fn start_listener(
     let urls = public_urls.unwrap_or(bound.urls);
     let (stop, stopped) = watch::channel(false);
     let viewers = Arc::new(AtomicUsize::new(0));
+    let relay = Arc::new(app::sessions::SessionManager::new(Arc::new(
+        app::sessions::AppRelayHost(app.clone()),
+    )));
+    if let Some(old_relay) = state.relay_sessions.lock().unwrap().replace(relay.clone()) {
+        old_relay.close_all();
+    }
+    app::sessions::spawn_reaper(relay.clone(), state.devices(), stopped.clone());
     let deps = Deps {
         assets: Arc::new(server::BundledAssets(app.clone())),
         tabs: state.tabs.clone(),
@@ -220,7 +230,7 @@ pub async fn start_listener(
         limits: Arc::new(stream::StreamLimits::default()),
         events: Arc::new(server::AppTabEvents(app.clone())),
         https,
-        spike: Some(Arc::new(spike::AppSpike(app.clone()))),
+        relay: Some(relay),
     };
     let running = Running {
         bind,
@@ -242,6 +252,9 @@ pub async fn start_listener(
 
 #[tauri::command]
 pub fn remote_access_stop(app: tauri::AppHandle, state: tauri::State<'_, WebRemoteState>) {
+    if let Some(relay) = state.relay_sessions.lock().unwrap().take() {
+        relay.close_all();
+    }
     if let Some(running) = state.running.lock().unwrap().take() {
         let _ = running.stop.send(true);
         if running.https {
@@ -309,6 +322,11 @@ pub fn remote_device_update(
     grant: Grant,
 ) -> Result<(), String> {
     if state.devices().update(&id, grant) {
+        if !grant.app {
+            if let Some(relay) = state.relay_sessions() {
+                relay.close_for_device(&id);
+            }
+        }
         Ok(())
     } else {
         Err("No such device.".into())
@@ -321,6 +339,9 @@ pub fn remote_device_revoke(
     id: String,
 ) -> Result<(), String> {
     if state.devices().revoke(&id) {
+        if let Some(relay) = state.relay_sessions() {
+            relay.close_for_device(&id);
+        }
         Ok(())
     } else {
         Err("No such device.".into())

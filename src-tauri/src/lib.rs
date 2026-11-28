@@ -87,6 +87,11 @@ const fn settings_always_on_top(is_macos: bool) -> bool {
 }
 
 const SPACE_WINDOW_PREFIX: &str = "space-";
+const REMOTE_WINDOW_PREFIX: &str = "remote-";
+
+fn is_remote_relay_label(label: &str) -> bool {
+    label.starts_with(REMOTE_WINDOW_PREFIX)
+}
 
 fn space_window_label(space_id: &str) -> String {
     format!("{SPACE_WINDOW_PREFIX}{space_id}")
@@ -424,8 +429,7 @@ pub fn run() {
             modules::web_remote::remote_devices_list,
             modules::web_remote::remote_device_update,
             modules::web_remote::remote_device_revoke,
-            modules::web_remote::spike::spike_relay_push,
-            modules::web_remote::spike::spike_test_channel,
+            modules::web_remote::app::sessions::remote_relay_push,
             pty::pty_open,
             pty::pty_write,
             pty::pty_stream_open,
@@ -743,7 +747,9 @@ mod launch_target_tests {
 
 #[cfg(test)]
 mod space_window_tests {
-    use super::{can_open_space_window, space_id_from_label, space_window_label};
+    use super::{
+        can_open_space_window, is_remote_relay_label, space_id_from_label, space_window_label,
+    };
 
     #[test]
     fn space_window_label_round_trips() {
@@ -763,5 +769,14 @@ mod space_window_tests {
         assert!(can_open_space_window("main"));
         assert!(!can_open_space_window("space-abc"));
         assert!(!can_open_space_window("settings"));
+        assert!(!can_open_space_window("remote-0"));
+    }
+
+    #[test]
+    fn remote_relay_labels_are_recognized_and_not_spaces() {
+        assert!(is_remote_relay_label("remote-0"));
+        assert!(!is_remote_relay_label("main"));
+        assert!(!is_remote_relay_label("space-abc"));
+        assert_eq!(space_id_from_label("remote-0"), None);
     }
 }
