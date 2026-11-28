@@ -189,6 +189,7 @@ import {
   WindowVibrancyBridge,
 } from "@/modules/theme";
 import { UpdaterDialog } from "@/modules/updater";
+import { DesktopTabsPanel } from "@/modules/web-remote/DesktopTabsPanel";
 import {
   AskpassDialog,
   folderName,
@@ -2709,6 +2710,23 @@ export default function App() {
                           onFollowRepositoryContext={
                             handleFollowRepositoryContext
                           }
+                        />
+                      ) : sidebarView === "desktop" ? (
+                        <DesktopTabsPanel
+                          activeSpaceId={activeSpaceId ?? "default"}
+                          localTerminalTabs={tabs
+                            .filter((t) => t.kind === "terminal")
+                            .map((t) => ({ id: t.id, title: t.title }))}
+                          onSendBack={(tabId) => {
+                            const target = tabs.find((t) => t.id === tabId);
+                            if (!target) return;
+                            void emitTo("main", "remote:take-over-tab", {
+                              tabId: target.id,
+                              targetWindow: "main",
+                              spaceId: target.spaceId ?? activeSpaceId,
+                              fromWindow: getCurrentWindow().label,
+                            });
+                          }}
                         />
                       ) : (
                         <ProblemsPanel onOpenAt={openContentHit} />

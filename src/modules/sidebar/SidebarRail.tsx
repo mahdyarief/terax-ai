@@ -1,7 +1,9 @@
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
 import { cn } from "@/lib/utils";
 import { useDiagnosticsStore } from "@/modules/editor/lib/diagnosticsStore";
 import {
   Alert02Icon,
+  ComputerIcon,
   FolderGitTwoIcon,
   FolderTreeIcon,
 } from "@hugeicons/core-free-icons";
@@ -63,6 +65,9 @@ export function SidebarRail({ activeView, onSelectView, changedCount }: Props) {
       icon: Alert02Icon,
       badge: problemCount,
     },
+    ...(isRemoteRuntime()
+      ? [{ id: "desktop" as const, label: "Desktop", icon: ComputerIcon }]
+      : []),
   ];
 
   return (

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** implement task by task. Each task is one commit on `dydev`, test first where it adds behaviour. Steps use checkbox (`- [ ]`) syntax for tracking. Phase 0 is a spike whose result decides whether Phases 1–5 go ahead as written.
 
-**Status (2026-11-28):** Phases 1-3 (Tasks 1-17) implemented and unit/live-tested; ready for Phase 4 (or manual browser walkthrough). Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
+**Status (2026-11-28):** Phases 1-4 (Tasks 1-20) implemented and unit/live-tested; ready for Phase 5. Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
 
 ## Goal
 
@@ -260,8 +260,8 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] Off unless the device has `app`. Never an arbitrary host.
 
 ### Task 20: desktop tabs inside the full app
-- [ ] A "Desktop" sidebar section listing other windows' tabs from the registry, rendered with the mirror's `RemoteTerminal` (read-only unless `input`).
-- [ ] "Take over" moves a terminal into the browser window through the existing handoff, and "Send back" returns it.
+- [x] A "Desktop" sidebar section listing other windows' tabs from the registry, rendered with the mirror's `RemoteTerminal` (read-only unless `input`).
+- [x] "Take over" moves a terminal into the browser window through the existing handoff, and "Send back" returns it.
 
 ## Phase 5: hardening and rollout
 
