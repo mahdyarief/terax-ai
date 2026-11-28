@@ -2,6 +2,8 @@
 
 pub mod callbacks;
 pub mod invoke;
+#[cfg(test)]
+mod live_tests;
 pub mod policy;
 pub mod schemes;
 pub mod serve;
