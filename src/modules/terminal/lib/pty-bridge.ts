@@ -27,6 +27,7 @@ import { currentWorkspaceEnv } from "@/modules/workspace";
 import { convertFileSrc, invoke } from "@tauri-apps/api/core";
 import { toast } from "sonner";
 import { whenServerReady } from "@/modules/remote/connections";
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
 
 const textEncoder = new TextEncoder();
 const receivers = new Map<number, PtyOutputReceiver>();
@@ -36,6 +37,15 @@ const receivers = new Map<number, PtyOutputReceiver>();
  * a custom protocol (the same mechanism Tauri's own IPC uses), so no per-chunk
  * channel eval or per-acknowledgement invoke is needed.
  */
+/**
+ * The desktop's scheme needs no credentials. In a browser over the web remote
+ * the same request goes to `/scheme/terax-pty/…` on the listener, which knows
+ * the device only by its cookie, so the cookie must go with it.
+ */
+export function ptyFetchCredentials(remote: boolean): RequestCredentials {
+  return remote ? "same-origin" : "omit";
+}
+
 function tauriTransport(): PtyStreamTransport {
   const request = (
     path: string,
@@ -47,7 +57,7 @@ function tauriTransport(): PtyStreamTransport {
       body,
       signal,
       cache: "no-store",
-      credentials: "omit",
+      credentials: ptyFetchCredentials(isRemoteRuntime()),
       referrerPolicy: "no-referrer",
     });
   return {

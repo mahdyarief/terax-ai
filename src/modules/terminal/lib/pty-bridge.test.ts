@@ -49,6 +49,7 @@ async function load() {
     afterPtyExit: bridge.afterPtyExit,
     PTY_EXIT_CONNECTION_ENDED: bridge.PTY_EXIT_CONNECTION_ENDED,
     openPty: bridge.openPty,
+    ptyFetchCredentials: bridge.ptyFetchCredentials,
     tabAgentStatus: activity.tabAgentStatus,
     useAgentActivityStore: activity.useAgentActivityStore,
     setLeafPresentation: presentation.setLeafPresentation,
@@ -168,6 +169,33 @@ describe("PTY bridge over the multiplexed stream", () => {
     await first.close();
     await flush();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("sends the device cookie with stream requests only in a browser session", async () => {
+    const native = globalThis.fetch as unknown as (
+      url: string,
+      init: RequestInit & { body: Uint8Array },
+    ) => Promise<Response>;
+    const credentials: (RequestCredentials | undefined)[] = [];
+    vi.stubGlobal("fetch", (url: string, init: RequestInit & { body: Uint8Array }) => {
+      credentials.push(init.credentials);
+      return native(url, init);
+    });
+    const flag = globalThis as { __TERAX_REMOTE__?: boolean };
+    try {
+      flag.__TERAX_REMOTE__ = true;
+      nativeInvoke();
+      const { openPty } = await load();
+      const pty = await openPty(80, 24, { onData: vi.fn() });
+      await flush();
+      expect(credentials.length).toBeGreaterThan(0);
+      expect(new Set(credentials)).toEqual(new Set(["same-origin"]));
+      await pty.close();
+    } finally {
+      delete flag.__TERAX_REMOTE__;
+    }
+    const { ptyFetchCredentials } = await load();
+    expect(ptyFetchCredentials(false)).toBe("omit");
   });
 
   it("starts a server's terminal once its server is back", async () => {

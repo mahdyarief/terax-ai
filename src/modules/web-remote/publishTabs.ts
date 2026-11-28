@@ -3,6 +3,7 @@ import { subscribePtyChanges } from "@/modules/terminal/lib/ptyChanges";
 import { ptyIdForLeaf } from "@/modules/terminal/lib/terminalSessionApi";
 import type { Tab } from "@/modules/tabs";
 import { useSpaces } from "@/modules/spaces";
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef } from "react";
@@ -30,7 +31,9 @@ export function subscribeRemotePublishing(listener: Listener): () => void {
   };
 }
 
-export function setRemotePublishingEnabled(next: boolean): void {
+export function setRemotePublishingEnabled(requested: boolean): void {
+  // The app in a browser is itself a viewer: only desktop windows publish.
+  const next = requested && !isRemoteRuntime();
   if (enabled === next) return;
   enabled = next;
   if (!next && scheduled !== null) {
