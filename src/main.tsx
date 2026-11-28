@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import ReactDOM from "react-dom/client";
 import App from "./app/App";
 import { initLaunchDir } from "./lib/launchDir";
+import { isRemoteRuntime, waitForRemoteSession } from "./lib/remoteRuntime";
 import { ensureTauriBridge } from "./lib/tauriBridge";
 import { USE_CUSTOM_WINDOW_CONTROLS } from "./lib/platform";
 import { terminalDiagnosticsEnabled } from "@/modules/terminal/lib/terminalDiagnosticsEnabled";
@@ -25,6 +26,10 @@ if (import.meta.env.DEV && import.meta.env.VITE_REACT_SCAN === "true") {
 if (__TERAX_BENCH__) {
   const { installBenchEarly } = await import("@/bench/early");
   await installBenchEarly();
+}
+
+if (isRemoteRuntime()) {
+  await waitForRemoteSession();
 }
 
 // Every Tauri call below needs this window's metadata; a new space window can

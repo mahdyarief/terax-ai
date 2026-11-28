@@ -1,6 +1,7 @@
 import { createTauriInternals, type RemoteSessionState } from "./internals";
 
 const SESSION_STORAGE_KEY = "terax:remote-session";
+const BANNER_ID = "terax-remote-reconnect-banner";
 
 let currentSession: RemoteSessionState = { id: "", label: "remote-0" };
 let resolveSession!: (s: RemoteSessionState) => void;
@@ -22,6 +23,35 @@ const { tauriInternals, eventPluginInternals } = createTauriInternals({
     __TAURI_EVENT_PLUGIN_INTERNALS__?: typeof eventPluginInternals;
   }
 ).__TAURI_EVENT_PLUGIN_INTERNALS__ = eventPluginInternals;
+
+function setReconnectBanner(visible: boolean): void {
+  if (typeof document === "undefined") return;
+  const existing = document.getElementById(BANNER_ID);
+  if (!visible) {
+    existing?.remove();
+    return;
+  }
+  if (existing || !document.body) return;
+  const banner = document.createElement("div");
+  banner.id = BANNER_ID;
+  banner.textContent = "Reconnecting to Terax...";
+  Object.assign(banner.style, {
+    position: "fixed",
+    top: "8px",
+    left: "50%",
+    transform: "translateX(-50%)",
+    zIndex: "99999",
+    padding: "6px 12px",
+    borderRadius: "6px",
+    background: "#b45309",
+    color: "#fff",
+    fontSize: "12px",
+    fontWeight: "600",
+    fontFamily: "system-ui, sans-serif",
+    boxShadow: "0 4px 12px rgba(0, 0, 0, 0.3)",
+  });
+  document.body.appendChild(banner);
+}
 
 async function bootstrap(): Promise<void> {
   const savedId = sessionStorage.getItem(SESSION_STORAGE_KEY) ?? undefined;
@@ -49,6 +79,7 @@ async function bootstrap(): Promise<void> {
     );
     let opened = false;
     source.onopen = () => {
+      setReconnectBanner(false);
       if (!opened) {
         opened = true;
         resolve();
@@ -69,7 +100,9 @@ async function bootstrap(): Promise<void> {
       window.location.reload();
     });
     source.onerror = () => {
-      if (!opened) {
+      if (opened) {
+        setReconnectBanner(true);
+      } else {
         opened = true;
         resolve();
       }
@@ -77,7 +110,8 @@ async function bootstrap(): Promise<void> {
   });
 }
 
-(globalThis as { __TERAX_REMOTE_READY__?: Promise<void> }).__TERAX_REMOTE_READY__ =
-  bootstrap().catch((err) => {
-    console.error("remote-runtime bootstrap failed", err);
-  });
+(
+  globalThis as { __TERAX_REMOTE_READY__?: Promise<void> }
+).__TERAX_REMOTE_READY__ = bootstrap().catch((err) => {
+  console.error("remote-runtime bootstrap failed", err);
+});

@@ -211,11 +211,11 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] Import guard test (as `src/web/importGuard.test.ts`): the runtime never imports app code.
 
 ### Task 11: session bootstrap
-- [ ] `/app/` boot:
+- [x] `/app/` boot:
   - fetch `/api/app/session`, which creates or reuses a relay;
   - open the callback SSE;
   - then let the app's `main.tsx` run.
-- [ ] Reconnect UI as in the mirror; on `reset`, reload.
+- [x] Reconnect UI as in the mirror; on `reset`, reload.
 
 ### Task 12: native features in remote mode
 - [ ] `isRemoteRuntime()` branches:
