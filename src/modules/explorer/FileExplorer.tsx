@@ -28,7 +28,10 @@ import {
   useState,
 } from "react";
 import { IS_MAC } from "@/lib/platform";
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
 import { cn } from "@/lib/utils";
+import { currentWorkspaceEnv } from "@/modules/workspace";
+import { invoke } from "@tauri-apps/api/core";
 import { ExplorerSearch, type ExplorerSearchHandle } from "./ExplorerSearch";
 import {
   EntryRow,
@@ -40,6 +43,7 @@ import {
 import { InlineInput } from "./InlineInput";
 import {
   copyToClipboard,
+  downloadRemoteFile,
   relativePath,
   revealInFinder,
 } from "./lib/contextActions";
@@ -826,6 +830,31 @@ export const FileExplorer = memo(
                 )}
                 onPointerDown={dnd.onPointerDown}
                 onClickCapture={dnd.onClickCapture}
+                onDragOver={(e) => {
+                  if (isRemoteRuntime() && rootPath && e.dataTransfer.types.includes("Files")) {
+                    e.preventDefault();
+                  }
+                }}
+                onDrop={(e) => {
+                  if (!isRemoteRuntime() || !rootPath || !e.dataTransfer.files.length) {
+                    return;
+                  }
+                  e.preventDefault();
+                  const files = Array.from(e.dataTransfer.files);
+                  const workspace = currentWorkspaceEnv();
+                  void (async () => {
+                    for (const file of files) {
+                      const buf = await file.arrayBuffer();
+                      await invoke("fs_upload_file", {
+                        dir: rootPath,
+                        name: file.name,
+                        data: Array.from(new Uint8Array(buf)),
+                        workspace,
+                      });
+                    }
+                    await tree.refresh(rootPath);
+                  })();
+                }}
                 onContextMenuCapture={(e) => {
                   const el = (e.target as HTMLElement).closest<HTMLElement>(
                     "[data-fs-path]",
@@ -1017,12 +1046,27 @@ export const FileExplorer = memo(
                         Serve with Live Server
                       </ContextMenuItem>
                     )}
-                  <ContextMenuItem
-                    className={COMPACT_ITEM}
-                    onSelect={() => void revealInFinder(menuTarget.path)}
-                  >
-                    Reveal in Finder
-                  </ContextMenuItem>
+                  {isRemoteRuntime() && !menuTarget.isDir ? (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() =>
+                        void downloadRemoteFile(
+                          menuTarget.path,
+                          currentWorkspaceEnv(),
+                        )
+                      }
+                    >
+                      Download
+                    </ContextMenuItem>
+                  ) : null}
+                  {!isRemoteRuntime() ? (
+                    <ContextMenuItem
+                      className={COMPACT_ITEM}
+                      onSelect={() => void revealInFinder(menuTarget.path)}
+                    >
+                      Reveal in Finder
+                    </ContextMenuItem>
+                  ) : null}
                   <ContextMenuSeparator />
                   <ContextMenuItem
                     className={COMPACT_ITEM}
@@ -1155,7 +1199,7 @@ export const FileExplorer = memo(
                       Serve with Live Server
                     </ContextMenuItem>
                   )}
-                  {rootPath && (
+                  {rootPath && !isRemoteRuntime() && (
                     <ContextMenuItem
                       className={COMPACT_ITEM}
                       onSelect={() => void revealInFinder(rootPath)}

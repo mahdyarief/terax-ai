@@ -476,6 +476,7 @@ pub fn run() {
             fs::mutate::fs_move,
             fs::mutate::fs_delete,
             fs::mutate::fs_delete_batch,
+            fs::mutate::fs_upload_file,
             fs::copy::fs_copy,
             fs::clipboard::fs_clipboard_paths,
             pty::paste_image::pty_paste_image,

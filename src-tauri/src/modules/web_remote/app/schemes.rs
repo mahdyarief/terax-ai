@@ -96,7 +96,7 @@ impl SchemeHandler for AppSchemeHandler {
                         body: resp_body,
                     }
                 }
-                "asset" => {
+                "asset" | "download" => {
                     let Some(req) = build_tauri_request(method, path_and_query, &headers, body) else {
                         return plain_scheme(400, "invalid request");
                     };
@@ -121,7 +121,15 @@ impl SchemeHandler for AppSchemeHandler {
                             .body(Vec::new())
                             .unwrap()
                     });
-                    from_tauri_response(resp)
+                    let mut out = from_tauri_response(resp);
+                    if scheme == "download" && out.status == 200 {
+                        let name = attachment_filename(path_and_query);
+                        out.headers.push((
+                            "Content-Disposition".into(),
+                            format!("attachment; filename=\"{name}\""),
+                        ));
+                    }
+                    out
                 }
                 "terax-doc" => {
                     let Some(req) = build_tauri_request(method, path_and_query, &headers, body) else {
@@ -189,11 +197,30 @@ fn from_tauri_response(resp: tauri::http::Response<Vec<u8>>) -> SchemeResponse {
     }
 }
 
+fn attachment_filename(path_and_query: &str) -> String {
+    let raw_path = path_and_query.split('?').next().unwrap_or(path_and_query);
+    let decoded = percent_encoding::percent_decode_str(raw_path).decode_utf8_lossy();
+    let base = decoded
+        .rsplit(['/', '\\'])
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("download");
+    base.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
 /// Parses `/scheme/<scheme>/<session>/<rest>` into `(scheme, session, "/<rest>")`.
 pub(crate) fn parse_scheme_path(path: &str) -> Option<(&str, &str, String)> {
     let rest = path.strip_prefix("/scheme/")?;
     let (scheme, after_scheme) = rest.split_once('/')?;
-    if !matches!(scheme, "terax-pty" | "asset" | "terax-doc") {
+    if !matches!(scheme, "terax-pty" | "asset" | "terax-doc" | "download") {
         return None;
     }
     let (session, tail) = match after_scheme.split_once('/') {
@@ -469,6 +496,18 @@ mod tests {
                 "GET".to_string(),
                 "/foo.png?token=abc".to_string()
             )]
+        );
+    }
+
+    #[test]
+    fn download_route_parses_and_sanitizes_attachment_filename() {
+        assert_eq!(
+            parse_scheme_path("/scheme/download/sess1/path/to/my%20file.txt"),
+            Some(("download", "sess1", "/path/to/my%20file.txt".to_string()))
+        );
+        assert_eq!(
+            attachment_filename("/path/to/my%20file%22.txt?token=123"),
+            "my_file_.txt"
         );
     }
 }

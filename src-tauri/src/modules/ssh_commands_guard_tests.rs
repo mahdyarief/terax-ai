@@ -143,6 +143,11 @@ const COMMANDS: &[(&str, &str, Ssh)] = &[
         Works("files_are_created_renamed_moved_and_deleted_on_the_server"),
     ),
     (
+        "fs/mutate.rs",
+        "fs_upload_file",
+        Works("files_are_created_renamed_moved_and_deleted_on_the_server"),
+    ),
+    (
         "fs/project_memory.rs",
         "fs_read_project_memory",
         Works("previews_canonical_paths_and_project_memory_come_from_the_server"),

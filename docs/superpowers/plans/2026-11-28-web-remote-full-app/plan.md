@@ -235,8 +235,8 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 ## Phase 3: files, editor, git
 
 ### Task 14: explorer and file ops
-- [ ] Browse, create, rename, delete, drag-and-drop move. `fs:changed` is relayed. Upload from the browser (drop files) is a new `Control`-class command writing into the workspace.
-- [ ] Download a file from the host: new route `/scheme/download/…` with the asset grant.
+- [x] Browse, create, rename, delete, drag-and-drop move. `fs:changed` is relayed. Upload from the browser (drop files) is a new `Control`-class command writing into the workspace.
+- [x] Download a file from the host: new route `/scheme/download/...` with the asset grant.
 
 ### Task 15: editor and LSP
 - [ ] Open, edit, save, and format through LSP over the relayed Channel. Check large documents and fast typing (channel ordering).

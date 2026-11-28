@@ -158,6 +158,65 @@ pub(crate) fn create_file(ws: &dyn Workspace, path: &str) -> Result<(), String> 
     })
 }
 
+fn validate_upload_name(name: &str) -> Result<&str, String> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.contains('/')
+        || name.contains('\\')
+        || name.contains('\0')
+    {
+        return Err("invalid upload file name".into());
+    }
+    Ok(name)
+}
+
+pub(crate) fn upload_file(
+    ws: &dyn Workspace,
+    registry: &WorkspaceRegistry,
+    dir: &str,
+    name: &str,
+    data: &[u8],
+) -> Result<String, String> {
+    let name = validate_upload_name(name)?;
+    let canon_dir = resolve_authorized_root(ws, dir, registry)?;
+    let target = if canon_dir == "/" {
+        format!("/{name}")
+    } else {
+        format!("{}/{name}", canon_dir.trim_end_matches('/'))
+    };
+    ws.write_atomic(&target, data).map_err(|e| {
+        log::debug!("fs_upload_file({target}) failed: {e}");
+        e.to_string()
+    })?;
+    Ok(target)
+}
+
+#[tauri::command]
+pub async fn fs_upload_file(
+    app: AppHandle,
+    index: State<'_, FileIndexState>,
+    dir: String,
+    name: String,
+    data: Vec<u8>,
+    workspace: Option<WorkspaceEnv>,
+) -> Result<String, String> {
+    let index = index.inner().clone();
+    blocking(move || {
+        let workspace = WorkspaceEnv::from_option(workspace);
+        let target = upload_file(
+            &*backend_for(&workspace),
+            &app.state::<WorkspaceRegistry>(),
+            &dir,
+            &name,
+            &data,
+        )?;
+        note_changed_in(&index, &workspace, &target);
+        Ok(target)
+    })
+    .await
+}
+
 /// Creates a new directory. Fails if the directory already exists.
 /// Parents are created as needed — matches the common "new folder" UX
 /// where typing "a/b/c" creates the full chain.
@@ -629,5 +688,23 @@ mod tests {
         assert!(!link.exists(), "symlink itself should be gone");
         assert!(real.is_dir(), "target dir must survive");
         assert_eq!(std::fs::read(real.join("keep.txt")).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn upload_file_writes_authorized_and_rejects_traversal() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = WorkspaceRegistry::default();
+        let ws = local();
+        let dir_str = at(dir.path());
+        assert!(upload_file(&*ws, &registry, &dir_str, "a.txt", b"hello").is_err());
+
+        registry.authorize(&dir_str).unwrap();
+        let written = upload_file(&*ws, &registry, &dir_str, "a.txt", b"hello").unwrap();
+        assert_eq!(std::fs::read(dir.path().join("a.txt")).unwrap(), b"hello");
+        assert!(written.ends_with("a.txt"));
+
+        assert!(upload_file(&*ws, &registry, &dir_str, "../escape.txt", b"x").is_err());
+        assert!(upload_file(&*ws, &registry, &dir_str, "sub/file.txt", b"x").is_err());
+        assert!(upload_file(&*ws, &registry, &dir_str, "", b"x").is_err());
     }
 }

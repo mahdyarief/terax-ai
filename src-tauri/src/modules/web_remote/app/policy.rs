@@ -87,6 +87,7 @@ pub fn class(cmd: &str) -> Option<CommandClass> {
         | "fs_move"
         | "fs_delete"
         | "fs_delete_batch"
+        | "fs_upload_file"
         | "fs_copy" => Some(CommandClass::Control),
         "fs_clipboard_paths" => Some(CommandClass::Native),
 
@@ -168,8 +169,10 @@ pub fn class(cmd: &str) -> Option<CommandClass> {
         "workspace_pick_folder" => Some(CommandClass::Native),
 
         // Control & agent events
-        "control_frontend_ready" | "control_respond" => Some(CommandClass::Native),
-        "agent_decisions_ready" | "agent_decision_respond" => Some(CommandClass::Control),
+        "control_frontend_ready" => Some(CommandClass::Write),
+        "control_respond" | "agent_decisions_ready" | "agent_decision_respond" => {
+            Some(CommandClass::Control)
+        }
 
         // Launch & windows
         "get_launch_dir" | "get_launch_files" => Some(CommandClass::Read),
