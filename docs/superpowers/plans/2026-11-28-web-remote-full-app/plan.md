@@ -164,15 +164,15 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] `remote-relay.html` + `src/web/relay/main.ts`: forward every callback (event or channel) to Rust with `remote_relay_push(id, payload)` (a `Native`-class command only the relay label may call).
 
 ### Task 4: `POST /api/app/invoke`
-- [ ] Body: `{ session, cmd, args }` (JSON) or raw bytes with `cmd` in a header, for `InvokeBody::Raw` commands.
+- [x] Body: `{ session, cmd, args }` (JSON) or raw bytes with `cmd` in a header, for `InvokeBody::Raw` commands.
   - Check the cookie, the device's `app` grant, `X-Terax-Remote`, same-origin, policy, then the size cap (reuse `MAX_INPUT_BYTES`-style limits per class).
-- [ ] Build the `InvokeRequest`:
+- [x] Build the `InvokeRequest`:
   - fresh callback ids;
   - the relay webview's URL (so `is_local` holds);
   - `app.invoke_key()`, server side only.
 
   Then dispatch through `on_message` and map `InvokeResponse` to HTTP 200/4xx with the payload.
-- [ ] Tests with a mock runtime where possible; otherwise the live test in Task 9.
+- [x] Tests with a mock runtime where possible; otherwise the live test in Task 9.
 
 ### Task 5: `GET /api/app/callbacks` (SSE)
 - [ ] Stream the session's relayed callbacks as `event: callback`, `data: {id, payload}`, with `id:` as a sequence number.

@@ -350,6 +350,8 @@ async fn post(deps: &Deps, request: Request<Incoming>, path: &str) -> Response<B
     match path {
         "/api/pair" => pair(deps, request).await,
         "/api/tabs" => tabs_action(deps, request).await,
+        "/api/app/session" => super::app::invoke::handle_session(deps, request).await,
+        "/api/app/invoke" => super::app::invoke::handle_invoke(deps, request).await,
         _ => match pty_route(path) {
             Some((id, "input")) => pty_input(deps, request, id).await,
             _ => secure(text(StatusCode::NOT_FOUND, "Not found.")),
@@ -496,7 +498,7 @@ fn cookie_header(token: &str, secure: bool) -> String {
 
 /// The device behind a request, from its cookie. A revoked device's cookie no
 /// longer resolves, and its requests get 401.
-fn caller(deps: &Deps, headers: &hyper::header::HeaderMap) -> Option<Caller> {
+pub(crate) fn caller(deps: &Deps, headers: &hyper::header::HeaderMap) -> Option<Caller> {
     let token = cookie(headers, DEVICE_COOKIE)?;
     deps.devices.authenticate(&token)
 }
@@ -563,7 +565,7 @@ pub(crate) fn asset_response(
     response
 }
 
-pub(crate) fn text(status: StatusCode, message: &'static str) -> Response<Body> {
+pub(crate) fn text(status: StatusCode, message: &str) -> Response<Body> {
     asset_response(
         status,
         "text/plain; charset=utf-8",
