@@ -241,7 +241,7 @@ mod tests {
                 serde_json::to_vec(&serde_json::json!({
                     "session": session_id,
                     "cmd": "fs_watch_add",
-                    "args": { "root": watch_path }
+                    "args": { "paths": [watch_path] }
                 }))
                 .unwrap()
                 .as_slice(),
