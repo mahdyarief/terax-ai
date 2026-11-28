@@ -33,7 +33,7 @@ type RemoteInfo = {
   allowPlainLan: boolean;
 };
 
-type Grant = { input: boolean; tabs: boolean };
+type Grant = { input: boolean; tabs: boolean; app: boolean };
 
 type PairedDevice = {
   id: string;
@@ -303,7 +303,11 @@ export function RemoteSection() {
             No device has paired yet.
           </p>
         ) : (
-          devices.map((device) => (
+          <>
+            <p className="px-1 text-[11px] text-muted-foreground">
+              Full app access lets this device run anything you can.
+            </p>
+            {devices.map((device) => (
             <SettingRow
               key={device.id}
               title={device.name}
@@ -328,6 +332,15 @@ export function RemoteSection() {
                     }
                   />
                 </span>
+                <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                  App
+                  <Switch
+                    checked={device.grant.app}
+                    onCheckedChange={(next) =>
+                      void update(device, { ...device.grant, app: next })
+                    }
+                  />
+                </span>
                 <Button
                   size="sm"
                   variant="ghost"
@@ -337,7 +350,8 @@ export function RemoteSection() {
                 </Button>
               </div>
             </SettingRow>
-          ))
+          ))}
+          </>
         )}
       </div>
     </div>

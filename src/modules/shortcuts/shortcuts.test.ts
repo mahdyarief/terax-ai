@@ -254,4 +254,14 @@ describe("palette shortcuts", () => {
       }
     },
   );
+
+  it("remaps browser-reserved shortcuts when running remotely", () => {
+    const remote = buildShortcuts(false, true);
+    const byId = new Map(remote.map((s) => [s.id, s.defaultBindings]));
+    expect(byId.get("tab.new")).toEqual([{ alt: true, key: "t" }]);
+    expect(byId.get("tab.close")).toEqual([{ alt: true, key: "w" }]);
+    expect(byId.get("tab.newEditor")).toEqual([{ alt: true, key: "n" }]);
+    expect(byId.get("tab.next")).toEqual([{ alt: true, key: "PageDown" }]);
+    expect(byId.get("tab.prev")).toEqual([{ alt: true, key: "PageUp" }]);
+  });
 });

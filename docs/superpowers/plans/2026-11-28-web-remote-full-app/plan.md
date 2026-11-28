@@ -218,14 +218,14 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] Reconnect UI as in the mirror; on `reset`, reload.
 
 ### Task 12: native features in remote mode
-- [ ] `isRemoteRuntime()` branches:
+- [x] `isRemoteRuntime()` branches:
   - hide window controls, vibrancy and updater UI;
   - `openSettingsWindow` routes in-page (`#settings/<tab>`);
   - `plugin-opener` URLs open with `window.open`, and opening host paths is hidden;
   - notifications use Web Notifications;
   - the clipboard uses `navigator.clipboard`, with a fallback.
-- [ ] Shortcut table: browser-reserved combos get alternatives, shown in the palette.
-- [ ] Settings → Remote access shows the `app` grant per device with a warning line.
+- [x] Shortcut table: browser-reserved combos get alternatives, shown in the palette.
+- [x] Settings -> Remote access shows the `app` grant per device with a warning line.
 
 ### Task 13: terminal, tabs, spaces end to end
 - [ ] New tab, split, blocks, close; local, WSL (Windows host) and SSH workspaces opened from the browser.

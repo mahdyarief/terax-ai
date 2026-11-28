@@ -142,6 +142,16 @@ export function createTauriInternals(options: {
     if (LOCAL_NOOP_COMMANDS.has(cmd)) {
       return null;
     }
+    if (cmd === "plugin:opener|open_url") {
+      const url =
+        args && typeof args === "object" && "url" in args
+          ? (args as { url?: unknown }).url
+          : undefined;
+      if (typeof url === "string" && typeof window !== "undefined") {
+        window.open(url, "_blank", "noopener,noreferrer");
+      }
+      return null;
+    }
 
     const session = await options.waitForSession();
     let response: Response;

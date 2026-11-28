@@ -30,6 +30,20 @@ export async function writeClipboardText(text: string): Promise<void> {
     }
     return;
   }
-  if (!navigator.clipboard) throw new Error("Clipboard is unavailable");
-  await navigator.clipboard.writeText(text);
+  if (navigator.clipboard) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+  if (typeof document !== "undefined") {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(area);
+    if (ok) return;
+  }
+  throw new Error("Clipboard is unavailable");
 }

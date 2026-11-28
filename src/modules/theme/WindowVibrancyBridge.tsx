@@ -1,3 +1,4 @@
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { useEffect } from "react";
 import { useTheme } from "./ThemeProvider";
@@ -10,7 +11,7 @@ export function WindowVibrancyBridge() {
   const { resolvedMode, activeTheme } = useTheme();
 
   useEffect(() => {
-    if (!hydrated) return;
+    if (isRemoteRuntime() || !hydrated) return;
     void applyVibrancy(enabled, resolvedMode === "dark", activeTheme.id);
   }, [enabled, hydrated, resolvedMode, activeTheme.id]);
 

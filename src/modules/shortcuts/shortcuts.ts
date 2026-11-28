@@ -1,4 +1,5 @@
 import { IS_MAC } from "@/lib/platform";
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
 import { MAC_DEFAULTS, WIN_LINUX_DEFAULTS } from "./shortcutDefaults";
 
 /**
@@ -348,11 +349,26 @@ const SHORTCUT_META: Omit<Shortcut, "defaultBindings">[] = [
   },
 ];
 
-export function buildShortcuts(isMac: boolean): Shortcut[] {
+const REMOTE_OVERRIDES: Partial<Record<ShortcutId, readonly KeyBinding[]>> = {
+  "tab.new": [{ alt: true, key: "t" }],
+  "tab.close": [{ alt: true, key: "w" }],
+  "tab.newEditor": [{ alt: true, key: "n" }],
+  "tab.next": [{ alt: true, key: "PageDown" }],
+  "tab.prev": [{ alt: true, key: "PageUp" }],
+};
+
+export function buildShortcuts(
+  isMac: boolean,
+  remote = isRemoteRuntime(),
+): Shortcut[] {
   const defaults = isMac ? MAC_DEFAULTS : WIN_LINUX_DEFAULTS;
   return SHORTCUT_META.map((meta) => ({
     ...meta,
-    defaultBindings: [...defaults[meta.id]],
+    defaultBindings: [
+      ...(remote && REMOTE_OVERRIDES[meta.id]
+        ? REMOTE_OVERRIDES[meta.id]!
+        : defaults[meta.id]),
+    ],
   }));
 }
 

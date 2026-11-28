@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { consumeLaunchFiles, getLaunchDir } from "@/lib/launchDir";
 import { IS_MAC } from "@/lib/platform";
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
 import { quoteShellArg } from "@/lib/shellQuote";
 import { usePresence } from "@/lib/usePresence";
 import { useZoom } from "@/lib/useZoom";
@@ -60,7 +61,10 @@ import {
 import { setPreviewNavigator } from "@/modules/preview";
 import { isAllowedPreviewUrl } from "@/modules/preview/lib/previewUrl";
 import type { PreviewPaneHandle } from "@/modules/preview";
-import { openSettingsWindow } from "@/modules/settings/openSettingsWindow";
+import {
+  openSettingsWindow,
+  type SettingsTab,
+} from "@/modules/settings/openSettingsWindow";
 import { usePreferencesStore } from "@/modules/settings/preferences";
 import { setShowHidden } from "@/modules/settings/store";
 import {
@@ -263,7 +267,27 @@ function restoreHandoffSource(
   return hydrateTabs(serialized, spaceId, allocId, { keepPty: true });
 }
 
+const RemoteSettingsOverlay = lazy(() =>
+  import("@/settings/SettingsApp").then((m) => ({ default: m.SettingsApp })),
+);
+
+function parseRemoteSettingsHash(): SettingsTab | null {
+  if (!isRemoteRuntime() || typeof window === "undefined") return null;
+  const h = window.location.hash;
+  if (!h.startsWith("#settings")) return null;
+  const part = h.slice("#settings".length).replace(/^\//, "");
+  return (part || "general") as SettingsTab;
+}
+
 export default function App() {
+  const [remoteSettingsTab, setRemoteSettingsTab] =
+    useState<SettingsTab | null>(parseRemoteSettingsHash);
+  useEffect(() => {
+    if (!isRemoteRuntime()) return;
+    const onHash = () => setRemoteSettingsTab(parseRemoteSettingsHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
   const {
     tabs,
     activeId,
@@ -2779,7 +2803,7 @@ export default function App() {
             />
           )}
 
-          <WindowVibrancyBridge />
+          {!isRemoteRuntime() && <WindowVibrancyBridge />}
           {IS_MAC ? <LivePageResizeBridge /> : null}
           <WindowActivityBridge
             bindFocus={bindTerminalWindowFocus}
@@ -2838,7 +2862,19 @@ export default function App() {
             onCreated={(path) => openFileTab(path)}
           />
 
-          <UpdaterDialog />
+          {!isRemoteRuntime() && <UpdaterDialog />}
+          {remoteSettingsTab ? (
+            <div className="fixed inset-0 z-50 bg-background">
+              <Suspense fallback={null}>
+                <RemoteSettingsOverlay
+                  initialTab={remoteSettingsTab}
+                  onClose={() => {
+                    window.location.hash = "";
+                  }}
+                />
+              </Suspense>
+            </div>
+          ) : null}
 
           <AskpassDialog />
           <RemoteConnections />

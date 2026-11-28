@@ -1,3 +1,4 @@
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
 import {
   isPermissionGranted,
   requestPermission,
@@ -23,6 +24,21 @@ export async function osNotify(
   title: string,
   body: string,
 ): Promise<OsNotificationResult> {
+  if (isRemoteRuntime()) {
+    try {
+      const WebNotif = globalThis.Notification;
+      if (!WebNotif) return "failed";
+      let perm = WebNotif.permission;
+      if (perm === "default") {
+        perm = await WebNotif.requestPermission();
+      }
+      if (perm !== "granted") return "denied";
+      new WebNotif(title, { body });
+      return "requested";
+    } catch {
+      return "failed";
+    }
+  }
   try {
     if (!(await ensurePermission())) return "denied";
     sendNotification({ title, body });

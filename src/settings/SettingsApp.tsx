@@ -108,10 +108,22 @@ function readInitialTab(): SettingsTab {
   return "general";
 }
 
-export function SettingsApp() {
-  const [active, setActive] = useState<SettingsTab>(readInitialTab);
+export function SettingsApp({
+  initialTab,
+  onClose,
+}: {
+  initialTab?: SettingsTab;
+  onClose?: () => void;
+} = {}) {
+  const [active, setActive] = useState<SettingsTab>(
+    initialTab ?? readInitialTab,
+  );
   const init = usePreferencesStore((s) => s.init);
   const ActiveSection = TABS.find((t) => t.id === active)?.component;
+
+  useEffect(() => {
+    if (initialTab) setActive(initialTab);
+  }, [initialTab]);
 
   useEffect(() => {
     void init();
@@ -164,7 +176,17 @@ export function SettingsApp() {
             ))}
           </TabsList>
         </Tabs>
-        {USE_CUSTOM_WINDOW_CONTROLS && <WindowControls closeOnly />}
+        {onClose ? (
+          <button
+            type="button"
+            onClick={onClose}
+            className="mr-3 rounded px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            Close
+          </button>
+        ) : (
+          USE_CUSTOM_WINDOW_CONTROLS && <WindowControls closeOnly />
+        )}
       </header>
       <WindowActivityBridge />
       <Toaster position="bottom-right" />

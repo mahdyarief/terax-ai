@@ -11,7 +11,13 @@ export async function readTerminalClipboard(): Promise<string> {
       const { readText } = await import("@tauri-apps/plugin-clipboard-manager");
       return await readText();
     }
-    return (await navigator.clipboard?.readText()) ?? "";
+    if (navigator.clipboard?.readText) {
+      return await navigator.clipboard.readText();
+    }
+    if (typeof window !== "undefined") {
+      return window.prompt("Paste text into terminal:") ?? "";
+    }
+    return "";
   } catch {
     return "";
   }
