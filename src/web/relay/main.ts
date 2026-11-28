@@ -1,5 +1,13 @@
+interface TauriInternals {
+  callbacks?: {
+    get: (id: number) => ((data: unknown) => void) | undefined;
+  };
+  invoke: (cmd: string, args: Record<string, unknown>) => Promise<unknown>;
+}
+
 (() => {
-  const tauri = window.__TAURI_INTERNALS__;
+  const tauri = (window as unknown as { __TAURI_INTERNALS__?: TauriInternals })
+    .__TAURI_INTERNALS__;
   if (!tauri || !tauri.callbacks) {
     console.error("remote-relay: __TAURI_INTERNALS__.callbacks missing");
     return;
