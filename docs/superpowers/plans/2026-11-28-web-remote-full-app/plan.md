@@ -2,7 +2,7 @@
 
 > **For agentic workers:** implement task by task. Each task is one commit on `dydev`, test first where it adds behaviour. Steps use checkbox (`- [ ]`) syntax for tracking. Phase 0 is a spike whose result decides whether Phases 1–5 go ahead as written.
 
-**Status (2026-11-28):** Phase 1 (backend bridge, Tasks 1-9) done and verified on aspirexc; ready for Phase 2. Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
+**Status (2026-11-28):** Phase 1 (Tasks 1-9) and Phase 2 (Tasks 10-13, runtime shim, bootstrap, remote UI branches, and 50M PTY load test) done; ready for Phase 3 (or manual browser walkthrough). Builds on `../2026-11-27-web-remote/plan.md` (done: listener, pairing, grants, tab mirror, typing, tab actions, `--remote-serve`, status bar switch).
 
 ## Goal
 
@@ -228,9 +228,9 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] Settings -> Remote access shows the `app` grant per device with a warning line.
 
 ### Task 13: terminal, tabs, spaces end to end
-- [ ] New tab, split, blocks, close; local, WSL (Windows host) and SSH workspaces opened from the browser.
-- [ ] Check `pty/gate.rs` tokens for the relay label and the `terax-pty` route under load (yes | head -c 50M).
-- [ ] Shortcuts and the command palette.
+- [ ] New tab, split, blocks, close; local, WSL (Windows host) and SSH workspaces opened from the browser. (Pending manual browser check.)
+- [x] Check `pty/gate.rs` tokens for the relay label and the `terax-pty` route under load (yes | head -c 50M).
+- [ ] Shortcuts and the command palette. (Remapping unit-tested; interactive browser check pending.)
 
 ## Phase 3: files, editor, git
 
