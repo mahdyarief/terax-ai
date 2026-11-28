@@ -11,6 +11,12 @@ pub const WEB_INDEX: &str = "web-index.html";
 pub const WEB_INDEX_PATH: &str = "/web-index.html";
 /// Hashed build output; everything else is not served.
 pub const ASSETS_PREFIX: &str = "/assets/";
+/// Files from Vite's `public/` that the app loads by an absolute path (the
+/// block watermark's logo, the notification sound). Listed one by one so the
+/// relay page, the settings page and the desktop index stay unreachable.
+const PUBLIC_FILES: [&str; 2] = ["logo.png", "notification.mp3"];
+/// Third-party notices, also from `public/`: one level, plain names only.
+const LICENSES_PREFIX: &str = "/licenses/";
 
 /// No inline script anywhere: the page and every bundle come from Terax's
 /// own bundle, and the Ghostty core is WASM. `wasm-unsafe-eval` is what
@@ -154,6 +160,21 @@ pub fn asset_key(path: &str) -> Option<String> {
     if path == "/" || path == WEB_INDEX_PATH {
         return Some(WEB_INDEX.to_string());
     }
+    if let Some(name) = path.strip_prefix('/').filter(|name| PUBLIC_FILES.contains(name)) {
+        return Some(name.to_string());
+    }
+    if let Some(name) = path.strip_prefix(LICENSES_PREFIX) {
+        let decoded = percent_encoding::percent_decode_str(name)
+            .decode_utf8()
+            .ok()?;
+        if decoded.is_empty()
+            || decoded.starts_with('.')
+            || decoded.contains(['/', '\\', '\0', ':'])
+        {
+            return None;
+        }
+        return Some(format!("licenses/{decoded}"));
+    }
     let rest = path.strip_prefix(ASSETS_PREFIX)?;
     if rest.is_empty() {
         return None;
@@ -198,6 +219,8 @@ pub fn content_type(key: &str) -> &'static str {
         "woff2" => "font/woff2",
         "ttf" => "font/ttf",
         "otf" => "font/otf",
+        "mp3" => "audio/mpeg",
+        "txt" => "text/plain; charset=utf-8",
         _ => "application/octet-stream",
     }
 }
@@ -242,6 +265,35 @@ mod tests {
             ..tailnet
         };
         assert!(tls.allows(Some("box.tail.ts.net")));
+    }
+
+    #[test]
+    fn the_listed_public_files_are_served_and_nothing_else_at_the_root() {
+        assert_eq!(asset_key("/logo.png"), Some("logo.png".into()));
+        assert_eq!(asset_key("/notification.mp3"), Some("notification.mp3".into()));
+        assert_eq!(
+            asset_key("/licenses/terminal-symbols.txt"),
+            Some("licenses/terminal-symbols.txt".into())
+        );
+        for bad in [
+            "/remote-relay.html",
+            "/settings.html",
+            "/index.html",
+            "/remote-runtime.js",
+            "/licenses/",
+            "/licenses/../web-index.html",
+            "/licenses/%2e%2e/web-index.html",
+            "/licenses/a/b.txt",
+            "/licenses/.hidden",
+            "/.logo.png",
+            "/logo.png/x",
+        ] {
+            assert_eq!(asset_key(bad), None, "{bad}");
+        }
+        assert_eq!(content_type("logo.png"), "image/png");
+        assert_eq!(content_type("notification.mp3"), "audio/mpeg");
+        assert_eq!(content_type("licenses/x.txt"), "text/plain; charset=utf-8");
+        assert!(!is_immutable("/logo.png"));
     }
 
     #[test]

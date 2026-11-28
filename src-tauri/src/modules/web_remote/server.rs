@@ -760,6 +760,7 @@ mod tests {
             match key {
                 "web-index.html" => Some(b"<html>web</html>".to_vec()),
                 "assets/app.js" => Some(b"console.log(1)".to_vec()),
+                "logo.png" => Some(b"PNG".to_vec()),
                 _ => None,
             }
         }
@@ -987,6 +988,10 @@ mod tests {
         assert!(asset
             .to_ascii_lowercase()
             .contains("cache-control: public, max-age=31536000, immutable"));
+
+        let logo = raw_get(port, &format!("localhost:{port}"), "/logo.png");
+        assert!(logo.starts_with("HTTP/1.1 200"), "{logo}");
+        assert!(logo.to_ascii_lowercase().contains("content-type: image/png"), "{logo}");
 
         let rebound = raw_get(port, &format!("evil.example:{port}"), "/web-index.html");
         assert!(rebound.starts_with("HTTP/1.1 403"), "{rebound}");

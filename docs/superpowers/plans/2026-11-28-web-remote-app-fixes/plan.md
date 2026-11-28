@@ -38,12 +38,12 @@
 ## Tasks
 
 ### Task 1: serve the Vite public files (symptom 4)
-- [ ] Test first (`http_rules.rs`):
+- [x] Test first (`http_rules.rs`):
   - `asset_key("/logo.png")` and `asset_key("/notification.mp3")` give their keys;
   - `asset_key("/licenses/<file>")` gives a key under `licenses/`;
   - `/remote-relay.html`, `/settings.html`, `/index.html`, `/licenses/../web-index.html` and dotfiles give `None`.
-- [ ] Implement the allowlist in `asset_key`. Caching for these files is `no-cache`, not the immutable rule for hashed `assets/`.
-- [ ] Server test: `GET /logo.png` answers 200 with `image/png`.
+- [x] Implement the allowlist in `asset_key`. Caching for these files is `no-store` (like the page), not the immutable rule for hashed `assets/`.
+- [x] Server test: `GET /logo.png` answers 200 with `image/png`.
 - [ ] After deploy: in `/app/`, open a block tab and confirm the watermark logo loads (network 200), and that an agent notification plays its sound.
 
 ### Task 2: a stable per-device window label (symptom 2, part 1)
