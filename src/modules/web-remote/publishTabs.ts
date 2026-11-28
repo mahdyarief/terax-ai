@@ -37,6 +37,8 @@ export function setRemotePublishingEnabled(next: boolean): void {
     clearTimeout(scheduled);
     scheduled = null;
   }
+  // Turned on after the window loaded: publish what is open now.
+  if (next) schedulePublish();
   for (const listener of listeners) listener();
 }
 
@@ -74,7 +76,8 @@ export function usePublishTabs(tabs: readonly Tab[]): void {
   latest = { tabs };
   useEffect(() => {
     latest = { tabs };
-    if (!enabled) return;
+    // Subscribed even while off: schedulePublish does nothing until remote
+    // access is on, and turning it on later must not wait for a tab change.
     schedulePublish();
     const unsubscribeActivity = useAgentActivityStore.subscribe(schedulePublish);
     const unsubscribeSpaces = useSpaces.subscribe(schedulePublish);
@@ -128,14 +131,25 @@ export function useRemoteTabActions(handlers: TabActionHandlers): void {
   }, []);
 }
 
-/** Reads the backend once so a page reload keeps publishing. */
+/**
+ * Follows the listener: read once so a page reload keeps publishing, then on
+ * every start or stop, from Settings or the status bar.
+ */
 export function useRemotePublishingStatus(): void {
-  const asked = useRef(false);
   useEffect(() => {
-    if (asked.current) return;
-    asked.current = true;
+    let disposed = false;
     void invoke<{ running: boolean }>("remote_access_status")
-      .then((status) => setRemotePublishingEnabled(status.running))
-      .catch(() => setRemotePublishingEnabled(false));
+      .then((status) => {
+        if (!disposed) setRemotePublishingEnabled(status.running);
+      })
+      .catch(() => undefined);
+    const unlisten = listen<{ running: boolean }>(
+      "terax:remote-access",
+      (event) => setRemotePublishingEnabled(event.payload.running),
+    );
+    return () => {
+      disposed = true;
+      void unlisten.then((stop) => stop());
+    };
   }, []);
 }

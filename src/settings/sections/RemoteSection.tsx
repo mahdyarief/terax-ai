@@ -12,6 +12,10 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { SettingRow } from "@/settings/components/SettingRow";
 import { SectionHeader } from "@/settings/components/SectionHeader";
+import {
+  readRemoteOptions,
+  writeRemoteOptions,
+} from "@/modules/web-remote/lastOptions";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useState } from "react";
@@ -66,10 +70,12 @@ export function RemoteSection() {
   const [info, setInfo] = useState<RemoteInfo | null>(null);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [pairing, setPairing] = useState<Pairing | null>(null);
-  const [bind, setBind] = useState<Bind>("loopback");
-  const [port, setPort] = useState(7681);
-  const [plainLan, setPlainLan] = useState(false);
-  const [https, setHttps] = useState(false);
+  // The last start, so the form matches what the status bar would turn on.
+  const [last] = useState(readRemoteOptions);
+  const [bind, setBind] = useState<Bind>(last.bind);
+  const [port, setPort] = useState(last.port);
+  const [plainLan, setPlainLan] = useState(last.allowPlainLan);
+  const [https, setHttps] = useState(last.https);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -115,14 +121,16 @@ export function RemoteSection() {
   };
 
   const start = () =>
-    run(() =>
-      invoke("remote_access_start", {
+    run(async () => {
+      const options = {
         bind,
         port,
         allowPlainLan: plainLan,
         https: https && bind === "tailscale",
-      }),
-    );
+      };
+      await invoke("remote_access_start", options);
+      writeRemoteOptions(options);
+    });
 
   const stop = () => {
     setPairing(null);
