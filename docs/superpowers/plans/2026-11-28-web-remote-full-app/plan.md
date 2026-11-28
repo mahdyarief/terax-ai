@@ -191,8 +191,8 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] Only devices with `app` get anything but the pairing page.
 
 ### Task 8: register and wire
-- [ ] Register the new commands in `lib.rs`, manage the session state, and add `remote-*` to the capabilities.
-- [ ] Keep the ACL as narrow as `main`'s, not wider.
+- [x] Register the new commands in `lib.rs`, manage the session state, and add `remote-*` to the capabilities.
+- [x] Keep the ACL as narrow as `main`'s, not wider.
 
 ### Task 9: live backend test
 - [ ] Add `web_remote/app/live_tests.rs`, `#[ignore]` by default, run with a flag:
