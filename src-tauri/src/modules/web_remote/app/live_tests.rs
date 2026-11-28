@@ -441,6 +441,7 @@ mod tests {
         let hdr_json = serde_json::json!({
             "x-pty-id": pty_id.to_string(),
             "x-pty-token": write_token,
+            "x-pty-epoch": "0",
         })
         .to_string();
         let (status, body) = raw_post(
