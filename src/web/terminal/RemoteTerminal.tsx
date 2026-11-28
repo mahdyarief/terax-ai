@@ -12,7 +12,7 @@ import { GhosttyBlocks } from "@/modules/terminal/ghostty/GhosttyBlocks";
 import { useEffect, useRef, useState } from "react";
 import { sendInput } from "../api";
 import { RemoteTerminalFeed } from "./feed";
-import { encodeKeydown, encodePaste } from "./input";
+import { encodeCtrlLetter, encodeKeydown, encodePaste } from "./input";
 import { RemoteBlockOverlay } from "./RemoteBlockOverlay";
 import { TypingBar } from "./TypingBar";
 import {
@@ -295,10 +295,11 @@ export function RemoteTerminal({
       {typing ? (
         <TypingBar
           onBytes={sendBytes}
-          onPasteText={(text) => {
+          onText={(text) => {
             const model = modelRef.current;
             if (model) sendBytes(encodePaste(model, text));
           }}
+          onCtrlLetter={(letter) => sendBytes(encodeCtrlLetter(letter))}
           ctrl={ctrl}
           onCtrl={setCtrl}
         />
