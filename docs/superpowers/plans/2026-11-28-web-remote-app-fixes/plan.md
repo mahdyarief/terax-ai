@@ -101,20 +101,20 @@
 - [ ] Test: the header renders the link only with the grant.
 
 ### Task 7: pairing codes without a restart, several at once (requested 2026-11-28)
-Work in progress: `devices.rs` has the RED tests, uncommitted (`a_new_code_leaves_the_earlier_ones_working_so_several_devices_can_pair`, `wrong_attempts_count_across_all_codes_and_end_them_all`, `only_the_newest_codes_stay_open`).
-- [ ] `Pairing` keeps up to `PAIRING_OPEN_CODES` (8) open codes, each one-time with a 10-minute lifetime. A new code leaves the others working, and the oldest drops past the cap.
+Done. Note: `afd7767` had rewritten two of the RED tests to match the old single-code behaviour (`only_the_newest_code_stays_open` expected the earlier code to fail, and the several-devices test was dropped). They are restored. A test is never changed to fit the code it is meant to change.
+- [x] `Pairing` keeps up to `PAIRING_OPEN_CODES` (8) open codes, each one-time with a 10-minute lifetime. A new code leaves the others working, and the oldest drops past the cap.
   - Wrong attempts count across all codes. `PAIRING_ATTEMPTS` wrong attempts end them all.
   - `start()` resets the counter.
-- [ ] Unix: on `SIGUSR1` while remote access runs, mint a code and print the same `terax: pair a browser within 10 minutes: <url>` line to stderr.
+- [x] Unix: on `SIGUSR1` while remote access runs, mint a code and print the same `terax: pair a browser within 10 minutes: <url>` line to stderr.
   - Use tokio `signal`. That is a feature of an existing dependency, not a new crate.
   - Only the process owner can send the signal. The control socket is not used, because every terminal holds a token for it.
-- [ ] `docs/remote-serve.md`:
+- [x] `docs/remote-serve.md`:
 
   ```
   systemctl --user kill -s USR1 terax-remote
   journalctl --user -u terax-remote | grep "pair a browser" | tail -1
   ```
-- [ ] Tests: the pairing unit tests above. The signal handler is a thin wrapper around `start_pairing`, so keep it out of unit tests and verify it on aspirexc: two codes, two devices paired, no restart.
+- [x] Tests: the pairing unit tests above. The signal handler is a thin wrapper around `start_pairing`, so keep it out of unit tests and verify it on aspirexc: two codes, two devices paired, no restart (checked at deploy).
 
 ## Order
 Task 1 (small and independent). Then Task 7 (already started). Then Tasks 2 → 3, which depend on each other. Then Task 4, then Task 5, then Task 6. Deploy after Tasks 1+7, after Task 3, and after Task 4, so the user can try each step.

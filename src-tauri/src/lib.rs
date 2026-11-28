@@ -86,6 +86,37 @@ const fn settings_always_on_top(is_macos: bool) -> bool {
     !is_macos
 }
 
+/// Headless serve has no window to show a pairing code, so it goes to stderr
+/// (the user's journal).
+fn print_pairing_url(state: &modules::web_remote::WebRemoteState) {
+    match state.start_pairing() {
+        Ok(pairing) => eprintln!(
+            "terax: pair a browser within {} minutes: {}",
+            pairing.expires_in_sec / 60,
+            pairing.url
+        ),
+        Err(error) => log::warn!("no pairing code: {error}"),
+    }
+}
+
+#[cfg(unix)]
+fn reprint_pairing_on_sigusr1(handle: tauri::AppHandle) {
+    use tauri::Manager;
+    tauri::async_runtime::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut signals = match signal(SignalKind::user_defined1()) {
+            Ok(signals) => signals,
+            Err(error) => {
+                log::warn!("SIGUSR1 pairing unavailable: {error}");
+                return;
+            }
+        };
+        while signals.recv().await.is_some() {
+            print_pairing_url(&handle.state::<modules::web_remote::WebRemoteState>());
+        }
+    });
+}
+
 const SPACE_WINDOW_PREFIX: &str = "space-";
 #[cfg(test)]
 const REMOTE_WINDOW_PREFIX: &str = "remote-";
@@ -350,13 +381,13 @@ pub fn run() {
                             );
                             // No window can show a pairing code here, so the
                             // first one goes to stderr (the user's journal).
-                            if let Ok(pairing) = state.start_pairing() {
-                                eprintln!(
-                                    "terax: pair a browser within {} minutes: {}",
-                                    pairing.expires_in_sec / 60,
-                                    pairing.url
-                                );
-                            }
+                            print_pairing_url(&state);
+                            // `kill -USR1` (or `systemctl --user kill -s USR1`)
+                            // prints another code without a restart. Only the
+                            // process owner can send it; a terminal's control
+                            // token cannot.
+                            #[cfg(unix)]
+                            reprint_pairing_on_sigusr1(handle.clone());
                         }
                         Err(error) => log::error!("remote serve could not start: {error}"),
                     }

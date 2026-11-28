@@ -295,6 +295,8 @@ const CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 pub const CODE_LEN: usize = 6;
 pub const PAIRING_TTL: Duration = Duration::from_secs(10 * 60);
 pub const PAIRING_ATTEMPTS: u32 = 5;
+/// How many pairing codes can be open at the same time.
+pub const PAIRING_OPEN_CODES: usize = 8;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum PairError {
@@ -318,54 +320,85 @@ impl PairError {
 struct Pending {
     code: String,
     expires: Instant,
+}
+
+#[derive(Default)]
+struct Open {
+    codes: Vec<Pending>,
+    /// Wrong answers since the last code was made, across every open code.
     attempts: u32,
 }
 
-/// One code at a time: starting again replaces the previous one.
+/// Several one-time codes can be open at once, so more than one device can
+/// pair without a restart. Wrong answers are counted across all of them, and
+/// too many end every open code.
 #[derive(Default)]
 pub struct Pairing {
-    pending: Mutex<Option<Pending>>,
+    open: Mutex<Open>,
 }
 
 impl Pairing {
+    /// Makes a new code. Earlier codes keep working until they expire, are
+    /// used, or are pushed out by newer ones past `PAIRING_OPEN_CODES`.
     pub fn start(&self) -> String {
         let code = self.new_code();
-        *self.pending.lock().unwrap() = Some(Pending {
+        let mut open = self.open.lock().unwrap();
+        let now = Instant::now();
+        open.codes.retain(|entry| entry.expires > now);
+        while open.codes.len() >= PAIRING_OPEN_CODES {
+            open.codes.remove(0);
+        }
+        open.codes.push(Pending {
             code: code.clone(),
-            expires: Instant::now() + PAIRING_TTL,
-            attempts: 0,
+            expires: now + PAIRING_TTL,
         });
+        open.attempts = 0;
         code
     }
 
-    /// Answers a code once, and only while it is fresh and under its attempt
-    /// limit.
+    /// Answers a code once, and only while it is fresh and the wrong-attempt
+    /// limit has not been reached.
     pub fn consume(&self, code: &str) -> Result<(), PairError> {
-        let mut pending = self.pending.lock().unwrap();
-        let Some(entry) = pending.as_mut() else {
-            return Err(PairError::NotStarted);
-        };
-        if entry.expires <= Instant::now() {
-            *pending = None;
-            return Err(PairError::Expired);
+        let mut open = self.open.lock().unwrap();
+        let now = Instant::now();
+        let before = open.codes.len();
+        open.codes.retain(|entry| entry.expires > now);
+        if open.codes.is_empty() {
+            return Err(if before > 0 {
+                PairError::Expired
+            } else {
+                PairError::NotStarted
+            });
         }
-        if entry.attempts >= PAIRING_ATTEMPTS {
-            *pending = None;
+        if open.attempts >= PAIRING_ATTEMPTS {
+            open.codes.clear();
             return Err(PairError::TooManyAttempts);
         }
-        entry.attempts += 1;
         let entered = normalize_code(code);
-        if !constant_time_eq(&entry.code, &entered) {
-            return Err(PairError::Wrong);
+        // Compare against every code so the time taken does not say which matched.
+        let mut matched = None;
+        for (index, entry) in open.codes.iter().enumerate() {
+            if constant_time_eq(&entry.code, &entered) && matched.is_none() {
+                matched = Some(index);
+            }
         }
-        *pending = None;
-        Ok(())
+        match matched {
+            Some(index) => {
+                open.codes.remove(index);
+                Ok(())
+            }
+            None => {
+                open.attempts += 1;
+                Err(PairError::Wrong)
+            }
+        }
     }
 
     #[cfg(test)]
     fn expire(&self) {
-        if let Some(entry) = self.pending.lock().unwrap().as_mut() {
-            entry.expires = Instant::now() - Duration::from_secs(1);
+        let past = Instant::now() - Duration::from_secs(1);
+        for entry in self.open.lock().unwrap().codes.iter_mut() {
+            entry.expires = past;
         }
     }
 
@@ -545,12 +578,37 @@ mod tests {
     }
 
     #[test]
-    fn only_the_newest_code_stays_open() {
+    fn a_new_code_leaves_the_earlier_ones_working_so_several_devices_can_pair() {
+        let pairing = Pairing::default();
+        let laptop = pairing.start();
+        let phone = pairing.start();
+        assert_ne!(laptop, phone);
+        assert_eq!(pairing.consume(&laptop), Ok(()));
+        assert_eq!(pairing.consume(&phone), Ok(()));
+        assert_eq!(pairing.consume(&phone), Err(PairError::NotStarted));
+    }
+
+    #[test]
+    fn only_the_newest_codes_stay_open() {
         let pairing = Pairing::default();
         let oldest = pairing.start();
-        let newest = pairing.start();
+        let newer: Vec<String> = (0..PAIRING_OPEN_CODES).map(|_| pairing.start()).collect();
         assert_eq!(pairing.consume(&oldest), Err(PairError::Wrong));
-        assert_eq!(pairing.consume(&newest), Ok(()));
+        for code in &newer {
+            assert_eq!(pairing.consume(code), Ok(()));
+        }
+    }
+
+    #[test]
+    fn a_new_code_resets_the_wrong_attempts() {
+        let pairing = Pairing::default();
+        pairing.start();
+        for _ in 0..PAIRING_ATTEMPTS - 1 {
+            assert_eq!(pairing.consume("AAAAAA"), Err(PairError::Wrong));
+        }
+        let code = pairing.start();
+        assert_eq!(pairing.consume("AAAAAA"), Err(PairError::Wrong));
+        assert_eq!(pairing.consume(&code), Ok(()));
     }
 
     #[test]

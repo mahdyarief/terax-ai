@@ -4,14 +4,24 @@
 window hidden, so a machine nobody sits at still serves its terminals to a
 browser. Pair a device from that browser: open `http://<host>:<port>/web-index.html`
 with a pairing code. On start, `--remote-serve` prints one pairing URL to
-stderr (`journalctl --user -u terax-remote` under systemd). It works once and
-expires after 10 minutes; restart the service for a new one. Desktops with a
-window can also create codes from Settings → Remote.
+stderr (`journalctl --user -u terax-remote` under systemd). Each code works
+once and expires after 10 minutes. For another code, without a restart, send
+the process `SIGUSR1`; it prints a new URL the same way:
+
+```sh
+systemctl --user kill -s USR1 terax-remote
+journalctl --user -u terax-remote | grep "pair a browser" | tail -1
+```
+
+Up to 8 codes can be open at once, so several devices can pair; a new code
+does not end the earlier ones. Five wrong codes in a row end every open code.
+Desktops with a window can also create codes from Settings → Remote.
 
 A new device may only watch. Without a window there is no Settings page to
 grant typing or opening tabs, so edit the device store while the service is
 stopped: in `~/.local/share/app.crynta.terax/remote-devices.json`, set the
-device's `"grant": {"input": true, "tabs": true}`, then start it again.
+device's `"grant": {"input": true, "tabs": true, "app": true}`, then start it
+again. `app` lets the device open the full app at `/app/`.
 
 ```sh
 terax --remote-serve --bind tailscale --port 7681
