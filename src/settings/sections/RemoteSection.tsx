@@ -71,25 +71,147 @@ function when(ms: number): string {
   return new Date(ms).toLocaleString();
 }
 
+/** Device times come from the store in seconds since the epoch. */
+function whenSeconds(seconds: number): string {
+  return when(seconds * 1000);
+}
+
 /**
  * Remote access: the listener, its pairings and the devices that may watch —
  * or type — into this machine's terminals.
  */
 /**
- * Remote access is managed on the desktop only: the bridge refuses these
- * commands from a browser, so a paired device cannot widen its own grants.
+ * Grants, revoking and the listener are managed on the desktop only: the
+ * bridge refuses those commands from a browser, so a paired device cannot
+ * widen its own access. A browser may list devices and pair new ones.
  */
 export function RemoteSection() {
   return isRemoteRuntime() ? <RemoteSectionInBrowser /> : <DesktopRemoteSection />;
 }
 
+/** Seen within this long counts as connected now. */
+const CONNECTED_MS = 2 * 60 * 1000;
+
+export function grantSummary(grant: Grant): string {
+  const parts = [
+    grant.input ? "type" : null,
+    grant.tabs ? "tabs" : null,
+    grant.app ? "full app" : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(", ") : "watch only";
+}
+
+/**
+ * In a browser: the paired devices and a pairing code for another one.
+ * Grants, revoking and the listener stay on the machine itself, so a paired
+ * device cannot widen its own access; a device paired from here starts
+ * watch-only.
+ */
 function RemoteSectionInBrowser() {
+  const [devices, setDevices] = useState<PairedDevice[]>([]);
+  const [me, setMe] = useState<string | null>(null);
+  const [pairing, setPairing] = useState<Pairing | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(() => {
+    void invoke<PairedDevice[]>("remote_devices_list")
+      .then(setDevices)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    refresh();
+    void fetch("/api/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info: { id?: string } | null) => setMe(info?.id ?? null))
+      .catch(() => undefined);
+    const timer = window.setInterval(refresh, 15_000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
+  const pair = async () => {
+    setBusy(true);
+    try {
+      setPairing(await invoke<Pairing>("remote_pairing_start"));
+      refresh();
+    } catch (e) {
+      toast.error("Could not create a pairing code", { description: String(e) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const now = Date.now();
   return (
     <div className="flex flex-col gap-6">
       <SectionHeader
         title="Remote access"
-        description="Remote access, pairing and device grants are managed in Terax on the machine itself, not from a browser."
+        description="Pair another device and see which devices are paired. Grants, revoking and the listener are managed in Terax on the machine itself."
       />
+
+      <div className="flex flex-col gap-2">
+        <div className="flex items-center justify-between">
+          <Label>Pair a device</Label>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void pair()}
+          >
+            {pairing ? "New code" : "Pair a device"}
+          </Button>
+        </div>
+        {pairing ? (
+          <SettingRow
+            title={pairing.code}
+            description={`Expires in ${Math.round(pairing.expiresInSec / 60)} minutes. Open the link on the new device and give it a name. It starts watch-only.`}
+          >
+            <div className="flex items-center gap-2">
+              <code className="max-w-72 truncate rounded bg-muted px-2 py-1 text-[11px]">
+                {pairing.url}
+              </code>
+              <CopyButton text={pairing.url} label="Copy link" />
+            </div>
+          </SettingRow>
+        ) : (
+          <p className="px-1 text-[11px] text-muted-foreground">
+            Each code works once, for ten minutes. Earlier codes keep working.
+          </p>
+        )}
+      </div>
+
+      <div className="flex flex-col gap-2">
+        <Label>Devices</Label>
+        {devices.length === 0 ? (
+          <p className="px-1 text-[11px] text-muted-foreground">
+            No device has paired yet.
+          </p>
+        ) : (
+          devices.map((device) => {
+            const connected = now - device.lastSeen * 1000 < CONNECTED_MS;
+            return (
+              <SettingRow
+                key={device.id}
+                title={device.id === me ? `${device.name} (this device)` : device.name}
+                description={`Paired ${whenSeconds(device.createdAt)} · last seen ${whenSeconds(device.lastSeen)}`}
+              >
+                <div className="flex items-center gap-3 text-[11px] text-muted-foreground">
+                  <span>{grantSummary(device.grant)}</span>
+                  <span
+                    className={
+                      connected
+                        ? "rounded bg-emerald-500/15 px-1.5 py-0.5 text-emerald-600 dark:text-emerald-400"
+                        : "rounded bg-muted px-1.5 py-0.5"
+                    }
+                  >
+                    {connected ? "Connected" : "Offline"}
+                  </span>
+                </div>
+              </SettingRow>
+            );
+          })
+        )}
+      </div>
     </div>
   );
 }
@@ -342,7 +464,7 @@ function DesktopRemoteSection() {
             <SettingRow
               key={device.id}
               title={device.name}
-              description={`Paired ${when(device.createdAt)} · last seen ${when(device.lastSeen)}`}
+              description={`Paired ${whenSeconds(device.createdAt)} · last seen ${whenSeconds(device.lastSeen)}`}
             >
               <div className="flex items-center gap-4">
                 <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground">

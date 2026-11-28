@@ -126,3 +126,10 @@ Task 1 (small and independent). Then Task 7 (already started). Then Tasks 2 → 
 ## Risks
 - Taking over `main`'s spaces on a headless host moves live PTYs between webviews. The handoff path was built for desktop windows; watch for a replay gap on the first attach.
 - A stable label means two browser tabs of one device cannot both run the app. That is accepted. The mirror view still works in parallel.
+
+### Task 8: devices and pairing from the browser's Settings (requested 2026-11-28)
+- [x] The user asked for a Settings section in the web app that shows the connected devices and makes a pairing code.
+- [x] `remote_pairing_start` moves from `Native` to `Control`, so only a browser with the `app` grant may call it. A device paired this way starts watch-only, and a browser still cannot grant, revoke or move the listener (`remote_device_update`, `remote_device_revoke`, `remote_access_*` stay `Native`). Test: `only_a_browser_with_app_access_can_mint_a_pairing_code`.
+- [x] `RemoteSectionInBrowser`: a pairing button with the code and link; the device list with the grant in words, "(this device)" from `/api/me`, and Connected (seen in the last 2 minutes) or Offline. It refreshes every 15 s.
+- [x] Fixed a bug found on the way: device times are seconds, but Settings formatted them as milliseconds (dates in January 1970), on the desktop too.
+- [ ] After deploy: open Settings → Remote in `/app/`, make a code, pair a second device with it, and see it listed.

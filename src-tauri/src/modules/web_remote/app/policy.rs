@@ -31,13 +31,15 @@ pub fn class(cmd: &str) -> Option<CommandClass> {
         "remote_access_status" | "remote_devices_list" | "remote_audit_log" => {
             Some(CommandClass::Read)
         }
+        // A browser with full app access may mint a pairing code (the user
+        // asked for it, 2026-11-28). The new device starts with no grant and
+        // a browser cannot grant one, so this adds watch-only devices.
+        "remote_pairing_start" => Some(CommandClass::Control),
         // Desktop only. Managing remote access from a browser would let a
-        // paired device widen its own grants, pair more devices or move the
-        // listener; reporting ports would let it aim /proxy/ at any local
-        // service.
+        // paired device widen its own grants or move the listener; reporting
+        // ports would let it aim /proxy/ at any local service.
         "remote_access_start"
         | "remote_access_stop"
-        | "remote_pairing_start"
         | "remote_device_update"
         | "remote_device_revoke"
         | "remote_report_ports"
@@ -401,13 +403,12 @@ mod tests {
 
     #[test]
     fn a_browser_never_manages_remote_access_its_devices_or_the_proxy_ports() {
-        // A paired browser must not grant, revoke or pair devices, move the
+        // A paired browser must not grant or revoke devices, move the
         // listener, or name the ports /proxy/ may reach: those stay on the
         // desktop, whatever the grant or transport.
         for cmd in [
             "remote_access_start",
             "remote_access_stop",
-            "remote_pairing_start",
             "remote_device_update",
             "remote_device_revoke",
             "remote_report_ports",
@@ -420,5 +421,14 @@ mod tests {
         // Reading the status and the device list stays possible.
         assert!(allowed("remote_access_status", true, Transport::PlainRemote));
         assert!(allowed("remote_devices_list", true, Transport::PlainRemote));
+    }
+
+    #[test]
+    fn only_a_browser_with_app_access_can_mint_a_pairing_code() {
+        assert_eq!(class("remote_pairing_start"), Some(CommandClass::Control));
+        for transport in [Transport::Loopback, Transport::Https, Transport::PlainRemote] {
+            assert!(allowed("remote_pairing_start", true, transport), "{transport:?}");
+            assert!(!allowed("remote_pairing_start", false, transport), "{transport:?}");
+        }
     }
 }
