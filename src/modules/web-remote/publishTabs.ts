@@ -1,4 +1,5 @@
 import { useAgentActivityStore } from "@/modules/terminal/lib/agentActivity";
+import { subscribePtyChanges } from "@/modules/terminal/lib/ptyChanges";
 import { ptyIdForLeaf } from "@/modules/terminal/lib/terminalSessionApi";
 import type { Tab } from "@/modules/tabs";
 import { useSpaces } from "@/modules/spaces";
@@ -67,7 +68,7 @@ async function publishNow(): Promise<void> {
 /**
  * Mirrors this window's tabs to the native registry while remote access is
  * on. Re-runs at most every 250 ms, and only when something changed: tabs,
- * agent activity or a space's workspace label.
+ * agent activity, a space's workspace label or a pane's PTY.
  */
 export function usePublishTabs(tabs: readonly Tab[]): void {
   latest = { tabs };
@@ -77,9 +78,13 @@ export function usePublishTabs(tabs: readonly Tab[]): void {
     schedulePublish();
     const unsubscribeActivity = useAgentActivityStore.subscribe(schedulePublish);
     const unsubscribeSpaces = useSpaces.subscribe(schedulePublish);
+    // A pane's PTY opens after the tab exists; without this the browser
+    // would keep the first publish, which had no PTY yet.
+    const unsubscribePty = subscribePtyChanges(schedulePublish);
     return () => {
       unsubscribeActivity();
       unsubscribeSpaces();
+      unsubscribePty();
     };
   }, [tabs]);
 }

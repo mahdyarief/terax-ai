@@ -55,6 +55,7 @@ import { getWebGpuTerminalRuntime } from "./gpu/WebGpuTerminalRuntime";
 import { WebGpuTerminalSurface } from "./gpu/WebGpuTerminalSurface";
 import { GhosttyInputController } from "./input/GhosttyInputController";
 import { DevServerUrlScanner, useDevServerStore } from "../lib/devServers";
+import { notifyPtyChange } from "../lib/ptyChanges";
 import { useTerminalProgressStore } from "../lib/terminalProgress";
 import {
   encodeTerminalSubmission,
@@ -974,6 +975,7 @@ async function initializeSessionGeneration(
         session.cancelFocusRetry?.();
         session.writer.detach();
         session.pty = null;
+        notifyPtyChange();
         if (afterPtyExit(code) === "offer-new-terminal") {
           session.disconnected = true;
           session.callbacks.onError?.(sessionFailure(session));
@@ -1001,6 +1003,7 @@ async function initializeSessionGeneration(
   mark("ptyReadyMs");
   session.pty = pty;
   session.writer.attach(pty);
+  notifyPtyChange();
   if (model.cols !== startCols || model.rows !== startRows) {
     session.ptyResize.send(model.cols, model.rows);
   }
