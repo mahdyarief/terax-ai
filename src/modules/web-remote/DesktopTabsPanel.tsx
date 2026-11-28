@@ -1,5 +1,10 @@
 import { Button } from "@/components/ui/button";
-import { activePane, useTabsSnapshot, type RemoteTab, type TabSnapshot } from "@/web/tabs";
+import {
+  activePane,
+  type RemoteTab,
+  type TabSnapshot,
+  useTabsSnapshot,
+} from "@/web/tabs";
 import { RemoteTerminal } from "@/web/terminal/RemoteTerminal";
 import { emitTo } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -123,7 +128,9 @@ export function DesktopTabsPanel({
                       if (hasPty) setSelected(entry);
                     }}
                   >
-                    <div className="truncate font-medium">{entry.tab.title}</div>
+                    <div className="truncate font-medium">
+                      {entry.tab.title}
+                    </div>
                     <div className="truncate text-[10px] text-muted-foreground">
                       {entry.windowLabel}
                       {entry.tab.workspace?.label

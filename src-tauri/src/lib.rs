@@ -87,8 +87,10 @@ const fn settings_always_on_top(is_macos: bool) -> bool {
 }
 
 const SPACE_WINDOW_PREFIX: &str = "space-";
+#[cfg(test)]
 const REMOTE_WINDOW_PREFIX: &str = "remote-";
 
+#[cfg(test)]
 fn is_remote_relay_label(label: &str) -> bool {
     label.starts_with(REMOTE_WINDOW_PREFIX)
 }

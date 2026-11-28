@@ -8,7 +8,7 @@ interface TauriInternals {
 (() => {
   const tauri = (window as unknown as { __TAURI_INTERNALS__?: TauriInternals })
     .__TAURI_INTERNALS__;
-  if (!tauri || !tauri.callbacks) {
+  if (!tauri?.callbacks) {
     console.error("remote-relay: __TAURI_INTERNALS__.callbacks missing");
     return;
   }
@@ -47,7 +47,9 @@ interface TauriInternals {
           id,
           payload: sanitize(data),
         })
-        .catch((err: unknown) => console.error("remote_relay_push failed", err));
+        .catch((err: unknown) =>
+          console.error("remote_relay_push failed", err),
+        );
     };
   };
 })();

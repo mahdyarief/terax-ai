@@ -44,7 +44,9 @@ pub trait SchemeHandler: Send + Sync {
 
 pub struct AppSchemeHandler(pub tauri::AppHandle);
 
-struct HttpReply(Mutex<Option<oneshot::Sender<(u16, Vec<u8>)>>>);
+type ReplyTx = oneshot::Sender<(u16, Vec<u8>)>;
+
+struct HttpReply(Mutex<Option<ReplyTx>>);
 
 impl Reply for HttpReply {
     fn send(self: Box<Self>, status: u16, body: Vec<u8>) {

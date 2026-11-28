@@ -3,19 +3,21 @@ import { createTauriInternals, decodeRelayPayload } from "./internals";
 
 describe("createTauriInternals", () => {
   it("dispatches JSON and raw invokes to /api/app/invoke", async () => {
-    const fetchFn = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
-      const headers = new Headers(init?.headers);
-      if (headers.get("X-Terax-Cmd") === "fs_write_file") {
-        return new Response(new Uint8Array([9, 8]).buffer, {
+    const fetchFn = vi.fn(
+      async (_url: RequestInfo | URL, init?: RequestInit) => {
+        const headers = new Headers(init?.headers);
+        if (headers.get("X-Terax-Cmd") === "fs_write_file") {
+          return new Response(new Uint8Array([9, 8]).buffer, {
+            status: 200,
+            headers: { "Content-Type": "application/octet-stream" },
+          });
+        }
+        return new Response(JSON.stringify(["bash"]), {
           status: 200,
-          headers: { "Content-Type": "application/octet-stream" },
+          headers: { "Content-Type": "application/json" },
         });
-      }
-      return new Response(JSON.stringify(["bash"]), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
+      },
+    );
 
     const { tauriInternals } = createTauriInternals({
       getSession: () => ({ id: "sess-1", label: "remote-0" }),

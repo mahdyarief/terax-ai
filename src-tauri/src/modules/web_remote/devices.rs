@@ -188,6 +188,10 @@ impl DeviceStore {
         self.devices.lock().unwrap().len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.devices.lock().unwrap().is_empty()
+    }
+
     /// Whether a device is still paired; open streams end when it is not.
     pub fn contains(&self, id: &str) -> bool {
         self.devices
@@ -526,6 +530,27 @@ mod tests {
         }
         assert_eq!(pairing.consume(&code), Err(PairError::TooManyAttempts));
         assert_eq!(pairing.consume(&code), Err(PairError::NotStarted));
+    }
+
+    #[test]
+    fn wrong_attempts_count_across_all_codes_and_end_them_all() {
+        let pairing = Pairing::default();
+        let first = pairing.start();
+        let second = pairing.start();
+        for _ in 0..PAIRING_ATTEMPTS {
+            assert_eq!(pairing.consume("AAAAAA"), Err(PairError::Wrong));
+        }
+        assert_eq!(pairing.consume(&first), Err(PairError::TooManyAttempts));
+        assert_eq!(pairing.consume(&second), Err(PairError::NotStarted));
+    }
+
+    #[test]
+    fn only_the_newest_code_stays_open() {
+        let pairing = Pairing::default();
+        let oldest = pairing.start();
+        let newest = pairing.start();
+        assert_eq!(pairing.consume(&oldest), Err(PairError::Wrong));
+        assert_eq!(pairing.consume(&newest), Ok(()));
     }
 
     #[test]

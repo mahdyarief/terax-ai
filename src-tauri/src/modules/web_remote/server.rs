@@ -416,7 +416,7 @@ async fn tabs_action(deps: &Deps, request: Request<Incoming>) -> Response<Body> 
     }
     let body = match read_body(request, 4096).await {
         Ok(body) => body,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let Ok(action) = serde_json::from_slice::<TabActionRequest>(&body) else {
         return secure(text(StatusCode::BAD_REQUEST, "Unknown tab action."));
@@ -473,7 +473,7 @@ async fn pty_input(deps: &Deps, request: Request<Incoming>, id: u32) -> Response
     };
     let bytes = match read_body(request, MAX_INPUT_BYTES).await {
         Ok(bytes) => bytes,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match terminal.write_remote(bytes).await {
         Ok(()) => secure(json(StatusCode::OK, &serde_json::json!({ "ok": true }))),
@@ -497,7 +497,7 @@ struct PairRequest {
 async fn pair(deps: &Deps, request: Request<Incoming>) -> Response<Body> {
     let body = match read_body(request, 4096).await {
         Ok(body) => body,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let Ok(pairing) = serde_json::from_slice::<PairRequest>(&body) else {
         return secure(text(StatusCode::BAD_REQUEST, "Expected a code and a name."));
@@ -543,15 +543,15 @@ fn device_json(caller: &Caller) -> serde_json::Value {
     })
 }
 
-async fn read_body(request: Request<Incoming>, limit: usize) -> Result<Vec<u8>, Response<Body>> {
+async fn read_body(request: Request<Incoming>, limit: usize) -> Result<Vec<u8>, Box<Response<Body>>> {
     let collected = Limited::new(request.into_body(), limit)
         .collect()
         .await
         .map_err(|_| {
-            secure(text(
+            Box::new(secure(text(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "That request body is too large.",
-            ))
+            )))
         })?;
     Ok(collected.to_bytes().to_vec())
 }

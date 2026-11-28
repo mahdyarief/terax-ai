@@ -16,10 +16,12 @@ describe("keyring in remote runtime", () => {
 
   it("never calls secrets_get or secrets_get_all and returns placeholders only", async () => {
     (globalThis as { __TERAX_REMOTE__?: boolean }).__TERAX_REMOTE__ = true;
-    invokeMock.mockImplementation(async (cmd: string, args: { accounts: string[] }) => {
-      expect(cmd).toBe("secrets_has");
-      return args.accounts.map((a) => a.includes("openai"));
-    });
+    invokeMock.mockImplementation(
+      async (cmd: string, args: { accounts: string[] }) => {
+        expect(cmd).toBe("secrets_has");
+        return args.accounts.map((a) => a.includes("openai"));
+      },
+    );
 
     const single = await getKey("openai");
     expect(single).toBe("__TERAX_REMOTE_KEY__:openai-api-key");

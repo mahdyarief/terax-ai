@@ -1,6 +1,6 @@
+import type { TabSnapshot } from "@/web/tabs";
 import { describe, expect, it } from "vitest";
 import { otherWindowTabs } from "./DesktopTabsPanel";
-import type { TabSnapshot } from "@/web/tabs";
 
 describe("otherWindowTabs", () => {
   it("excludes the current window and lists tabs from all other windows", () => {

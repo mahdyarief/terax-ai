@@ -228,6 +228,7 @@ impl Session {
         self.replay.lock().unwrap().replay_after(checkpoint)
     }
 
+    #[cfg(all(test, unix))]
     pub(crate) fn replay_sequence(&self) -> u64 {
         self.replay.lock().unwrap().sequence()
     }

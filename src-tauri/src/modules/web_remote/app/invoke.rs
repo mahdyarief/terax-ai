@@ -2,7 +2,7 @@
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, Limited};
-use hyper::header::{CONTENT_TYPE, HOST};
+use hyper::header::CONTENT_TYPE;
 use hyper::{Request, Response, StatusCode};
 use serde::Deserialize;
 
@@ -78,7 +78,7 @@ pub(crate) async fn handle_session(deps: &Deps, request: Request<Incoming>) -> R
     }
     let body = match read_limited(request.into_body(), 4096).await {
         Ok(b) => b,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     let requested = if body.is_empty() {
         None
@@ -173,13 +173,13 @@ pub(crate) async fn handle_invoke(deps: &Deps, request: Request<Incoming>) -> Re
         }
         let bytes = match read_limited(request.into_body(), max_body_for(class)).await {
             Ok(b) => b,
-            Err(resp) => return resp,
+            Err(resp) => return *resp,
         };
         (session_id, cmd, class, InvokeRequestBody::Raw(bytes))
     } else {
         let bytes = match read_limited(request.into_body(), MAX_CONTROL_BYTES).await {
             Ok(b) => b,
-            Err(resp) => return resp,
+            Err(resp) => return *resp,
         };
         let Ok(payload) = serde_json::from_slice::<InvokeJsonPayload>(&bytes) else {
             return secure(text(StatusCode::BAD_REQUEST, "Invalid invoke payload."));
@@ -236,15 +236,15 @@ pub(crate) async fn handle_invoke(deps: &Deps, request: Request<Incoming>) -> Re
     }
 }
 
-async fn read_limited(body: Incoming, limit: usize) -> Result<Vec<u8>, Response<Body>> {
+async fn read_limited(body: Incoming, limit: usize) -> Result<Vec<u8>, Box<Response<Body>>> {
     let collected = Limited::new(body, limit)
         .collect()
         .await
         .map_err(|_| {
-            secure(text(
+            Box::new(secure(text(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "That request body is too large.",
-            ))
+            )))
         })?;
     Ok(collected.to_bytes().to_vec())
 }
@@ -254,6 +254,8 @@ mod tests {
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
+
+    use hyper::header::HOST;
 
     use super::super::sessions::{RelayHost, SessionManager};
     use super::*;
@@ -478,14 +480,12 @@ mod tests {
         assert_eq!(body, b"\x01\x02\x03");
     }
 
+    type PostFuture = Pin<Box<dyn Future<Output = (u16, Vec<u8>)> + Send>>;
+
     fn reqwest_free_post(
         port: u16,
         token: &str,
-    ) -> impl Fn(
-        &str,
-        &[(&str, &str)],
-        &[u8],
-    ) -> Pin<Box<dyn Future<Output = (u16, Vec<u8>)> + Send>> {
+    ) -> impl Fn(&str, &[(&str, &str)], &[u8]) -> PostFuture {
         let token = token.to_string();
         move |path: &str, extra: &[(&str, &str)], body: &[u8]| {
             let path = path.to_string();
