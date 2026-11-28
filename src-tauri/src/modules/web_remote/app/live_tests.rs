@@ -423,7 +423,7 @@ mod tests {
         assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
         let pty_info: serde_json::Value = serde_json::from_slice(&body).unwrap();
         let pty_id = pty_info["id"].as_u64().unwrap() as u32;
-        let write_token = pty_info["writeToken"].as_str().unwrap().to_string();
+        let write_token = pty_info["token"].as_str().unwrap().to_string();
 
         // Announce receiver to hub via /scheme/terax-pty/<session>/ack.
         let ack_path = format!("/scheme/terax-pty/{session_id}/ack");
