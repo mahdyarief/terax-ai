@@ -231,6 +231,7 @@ pub async fn start_listener(
         events: Arc::new(server::AppTabEvents(app.clone())),
         https,
         relay: Some(relay),
+        schemes: Some(Arc::new(app::schemes::AppSchemeHandler(app.clone()))),
     };
     let running = Running {
         bind,

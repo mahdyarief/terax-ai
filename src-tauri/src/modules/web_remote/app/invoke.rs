@@ -319,6 +319,7 @@ mod tests {
             events: Arc::new(NoEvents),
             https: false,
             relay: Some(relay),
+            schemes: None,
         };
         tokio::spawn(accept_loop(listener, deps, stop_rx));
 

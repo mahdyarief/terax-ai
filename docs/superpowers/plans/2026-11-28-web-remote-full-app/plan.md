@@ -179,8 +179,8 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 - [x] Reconnect with `Last-Event-ID` replays a bounded buffer (1,000 events / 4 MiB); beyond that, `event: reset` makes the client reload.
 
 ### Task 6: scheme routes
-- [ ] Refactor the cores of `pty::stream_protocol`, `fs::assets::serve` and `fs::preview::serve` to take `(label, request)` instead of the Tauri context. The scheme handlers become thin wrappers.
-- [ ] Routes `/scheme/terax-pty/*`, `/scheme/asset/*` and `/scheme/terax-doc/*` call the cores with the session's relay label. Same grants, `Cache-Control`, `nosniff`.
+- [x] Refactor the cores of `pty::stream_protocol`, `fs::assets::serve` and `fs::preview::serve` to take `(label, request)` instead of the Tauri context. The scheme handlers become thin wrappers.
+- [x] Routes `/scheme/terax-pty/*`, `/scheme/asset/*` and `/scheme/terax-doc/*` call the cores with the session's relay label. Same grants, `Cache-Control`, `nosniff`.
 
 ### Task 7: serve `/app/`
 - [ ] `/app/` returns `index.html` from the bundled assets with `<script src="/app/remote-runtime.js">` inserted first in `<head>`. Other `/app/*` paths map to the bundle.

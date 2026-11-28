@@ -154,13 +154,13 @@ pub fn serve<R: Runtime>(
     request: Request<Vec<u8>>,
     responder: UriSchemeResponder,
 ) {
-    let app = context.app_handle().clone();
+    let app = context.app_handle();
     let owner = context.webview_label().to_owned();
-    responder.respond(respond(&app, &owner, &request));
+    responder.respond(respond_for_label(&app.state::<HtmlPreviews>(), &owner, &request));
 }
 
-fn respond<R: Runtime>(
-    app: &tauri::AppHandle<R>,
+pub(crate) fn respond_for_label(
+    state: &HtmlPreviews,
     owner: &str,
     request: &Request<Vec<u8>>,
 ) -> Response<Vec<u8>> {
@@ -169,7 +169,6 @@ fn respond<R: Runtime>(
         None => return plain(404),
     };
     let key = format!("{owner}:{token}");
-    let state = app.state::<HtmlPreviews>();
     // A HEAD probe must not consume the single-use token, so answer it by
     // looking the entry up without removing it.
     if request.method() == "HEAD" {

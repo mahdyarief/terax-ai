@@ -141,6 +141,7 @@ pub(crate) struct Deps {
     /// the device cookie can be `Secure`.
     pub https: bool,
     pub relay: Option<Arc<super::app::sessions::SessionManager>>,
+    pub schemes: Option<Arc<dyn super::app::schemes::SchemeHandler>>,
 }
 
 pub(crate) type Body = BoxBody<Bytes, Infallible>;
@@ -184,6 +185,9 @@ pub(crate) async fn respond(deps: &Deps, request: Request<Incoming>) -> Response
         return secure(text(StatusCode::FORBIDDEN, "This host is not allowed."));
     }
     let path = request.uri().path().to_string();
+    if path.starts_with("/scheme/") {
+        return super::app::schemes::handle_scheme(deps, request).await;
+    }
     if request.method() == Method::POST {
         return post(deps, request, &path).await;
     }
@@ -761,6 +765,7 @@ mod tests {
             events: Arc::new(NoEvents),
             https: false,
             relay: None,
+            schemes: None,
         }
     }
 
