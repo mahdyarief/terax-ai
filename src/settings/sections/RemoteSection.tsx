@@ -10,6 +10,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { isRemoteRuntime } from "@/lib/remoteRuntime";
 import { SettingRow } from "@/settings/components/SettingRow";
 import { SectionHeader } from "@/settings/components/SectionHeader";
 import {
@@ -74,7 +75,26 @@ function when(ms: number): string {
  * Remote access: the listener, its pairings and the devices that may watch —
  * or type — into this machine's terminals.
  */
+/**
+ * Remote access is managed on the desktop only: the bridge refuses these
+ * commands from a browser, so a paired device cannot widen its own grants.
+ */
 export function RemoteSection() {
+  return isRemoteRuntime() ? <RemoteSectionInBrowser /> : <DesktopRemoteSection />;
+}
+
+function RemoteSectionInBrowser() {
+  return (
+    <div className="flex flex-col gap-6">
+      <SectionHeader
+        title="Remote access"
+        description="Remote access, pairing and device grants are managed in Terax on the machine itself, not from a browser."
+      />
+    </div>
+  );
+}
+
+function DesktopRemoteSection() {
   const [info, setInfo] = useState<RemoteInfo | null>(null);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
   const [audit, setAudit] = useState<AuditEntry[]>([]);

@@ -115,6 +115,8 @@ export function DevServersPill({ onOpenPreview }: Props) {
     return out;
   }, [byLeaf, live]);
   useEffect(() => {
+    // Only the desktop names the ports /proxy/ may reach.
+    if (isRemoteRuntime()) return;
     const ports = Array.from(
       new Set(entries.filter((e) => !e.remoteHost).map((e) => e.port)),
     );
