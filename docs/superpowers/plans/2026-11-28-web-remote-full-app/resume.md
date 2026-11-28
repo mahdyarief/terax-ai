@@ -1,8 +1,8 @@
 # Resume: finish the full-app spike (Phase 0)
 
 You are continuing work another agent started. Read these first, in full, and follow them:
-1. `docs/superpowers/plans/2026-11-28-web-remote-full-app-agent-prompt.md`: rules, security, test host and reporting. Read the version on `dydev` (commit `e30b233` or later). Its **Hard rules** changed: read them again even if you saw an older copy.
-2. `docs/superpowers/plans/2026-11-28-web-remote-full-app.md`: the plan. Do only **Task 0 (the spike)**.
+1. `docs/superpowers/plans/2026-11-28-web-remote-full-app/agent-prompt.md`: rules, security, test host and reporting. Read the version on `dydev` (commit `e30b233` or later). Its **Hard rules** changed: read them again even if you saw an older copy.
+2. `docs/superpowers/plans/2026-11-28-web-remote-full-app/plan.md`: the plan. Do only **Task 0 (the spike)**.
 
 ## What went wrong last time
 - The previous run built and started a dev build of Terax on Windows, and the user's own running Terax ended.

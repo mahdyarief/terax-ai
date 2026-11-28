@@ -6,9 +6,9 @@ You are working in the Terax repo: a Tauri 2 desktop terminal with a Rust backen
 - Branch: **`dydev`**.
 
 ## What to build
-Follow **`docs/superpowers/plans/2026-11-28-web-remote-full-app.md`** exactly. Read all of it before starting, especially "Why this can reuse the whole app", "Decisions" and the feature matrix.
+Follow **`docs/superpowers/plans/2026-11-28-web-remote-full-app/plan.md`** exactly. Read all of it before starting, especially "Why this can reuse the whole app", "Decisions" and the feature matrix.
 
-Also read the plan it builds on, `docs/superpowers/plans/2026-11-27-web-remote.md`, which is done. It covers the listener, pairing, per-device grants, the tab mirror, typing, tab actions, `--remote-serve` and the status bar switch.
+Also read the plan it builds on, `docs/superpowers/plans/2026-11-27-web-remote/plan.md`, which is done. It covers the listener, pairing, per-device grants, the tab mirror, typing, tab actions, `--remote-serve` and the status bar switch.
 
 Goal: open `/app/` in a browser and use the unchanged desktop app bundle, backed by Tauri's own command dispatcher through a hidden relay webview per session. The existing mirror at `/web-index.html` stays as the light, phone-first view.
 

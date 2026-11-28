@@ -3,7 +3,7 @@
 You are working in the Terax repo (a Tauri 2 desktop terminal: Rust backend in `src-tauri/`, React/TS frontend in `src/`, Ghostty WASM renderer in `packages/ghostty-core`). Working copy: `D:\Github\agent-workspace\terax-ai`, fork `mahdyarief/terax-ai`, branch **`dydev`**.
 
 ## What to build
-Follow **`docs/superpowers/plans/2026-11-27-web-remote.md`** exactly. Read it fully before starting, including the "Why this works" and "Decisions" sections. Goal: from a browser (`http://<host>:<port>/web-index.html`, usually over Tailscale), watch every terminal tab of every workspace live, in terminal or block mode, and type into them or open and close tabs when the paired device has the grant.
+Follow **`docs/superpowers/plans/2026-11-27-web-remote/plan.md`** exactly. Read it fully before starting, including the "Why this works" and "Decisions" sections. Goal: from a browser (`http://<host>:<port>/web-index.html`, usually over Tailscale), watch every terminal tab of every workspace live, in terminal or block mode, and type into them or open and close tabs when the paired device has the grant.
 
 Work through Tasks 1 to 19 in order. If the code contradicts the plan, stop and say so; do not change a "Decision" on your own. Ask before:
 - adding a dependency the plan does not name;

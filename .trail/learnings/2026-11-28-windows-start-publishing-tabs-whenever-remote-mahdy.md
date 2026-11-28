@@ -14,7 +14,7 @@ touches:
   - src/web/terminal/composer.test.ts
   - src/web/terminal/composer.ts
   - docs/remote-serve.md
-  - docs/superpowers/plans/2026-11-27-web-remote.md
+  - docs/superpowers/plans/2026-11-27-web-remote/plan.md
   - src/modules/web-remote/lastOptions.ts
   - src/modules/web-remote/lastOptions.test.ts
   - src/modules/web-remote/RemoteAccessPill.tsx

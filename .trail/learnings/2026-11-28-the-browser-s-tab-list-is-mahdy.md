@@ -12,7 +12,7 @@ touches:
   - docs/remote-serve.md
   - src-tauri/src/lib.rs
   - src-tauri/src/modules/web_remote/mod.rs
-  - docs/superpowers/plans/2026-11-27-web-remote.md
+  - docs/superpowers/plans/2026-11-27-web-remote/plan.md
   - src-tauri/src/modules/web_remote/https.rs
   - src/settings/sections/RemoteSection.tsx
   - src/modules/settings/openSettingsWindow.ts
