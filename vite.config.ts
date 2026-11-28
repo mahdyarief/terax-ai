@@ -191,6 +191,7 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => ({
         settings: path.resolve(rootDir, "settings.html"),
         web: path.resolve(rootDir, "web-index.html"),
         relay: path.resolve(rootDir, "remote-relay.html"),
+        remoteRuntime: path.resolve(rootDir, "src/web/runtime/main.ts"),
       },
       // Oxc drops `debugger` by default. These calls return undefined, so
       // marking them pure lets DCE strip them from production builds.
@@ -202,6 +203,10 @@ export default defineConfig(async ({ mode }): Promise<UserConfig> => ({
         ],
       },
       output: {
+        entryFileNames: (chunkInfo) =>
+          chunkInfo.name === "remoteRuntime"
+            ? "remote-runtime.js"
+            : "assets/[name]-[hash].js",
         // Two prioritised groups instead of one `manualChunks` function. With a
         // single group Rolldown resolves overlapping claims in first-seen order
         // and `includeDependenciesRecursively` (default on) lets a feature

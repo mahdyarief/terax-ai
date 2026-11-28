@@ -203,12 +203,12 @@ Verified on `aspirexc` (Ubuntu 26.04 x86_64, WebKitGTK 4.1 under `xvfb-run`) wit
 ## Phase 2: browser runtime and the app shell
 
 ### Task 10: `__TAURI_INTERNALS__` shim (`src/web/runtime/`)
-- [ ] `invoke(cmd, args, options)` → `POST /api/app/invoke`, with raw bodies for `Uint8Array`/`ArrayBuffer`. `transformCallback` keeps a local callback table, fed by the SSE stream.
-- [ ] `convertFileSrc(path, protocol)` → `/scheme/<protocol>/…`.
-- [ ] `metadata` gives `currentWindow` / `currentWebview` the relay label from `/api/app/session`.
-- [ ] Plugin internals as the 2.12 packages expect them: event plugin unlisten, and window/webviewWindow calls answered locally or refused.
-- [ ] `isRemoteRuntime()` helper in `src/lib/remoteRuntime.ts`, false on desktop.
-- [ ] Import guard test (as `src/web/importGuard.test.ts`): the runtime never imports app code.
+- [x] `invoke(cmd, args, options)` -> `POST /api/app/invoke`, with raw bodies for `Uint8Array`/`ArrayBuffer`. `transformCallback` keeps a local callback table, fed by the SSE stream.
+- [x] `convertFileSrc(path, protocol)` -> `/scheme/<protocol>/...`.
+- [x] `metadata` gives `currentWindow` / `currentWebview` the relay label from `/api/app/session`.
+- [x] Plugin internals as the 2.12 packages expect them: event plugin unlisten, and window/webviewWindow calls answered locally or refused.
+- [x] `isRemoteRuntime()` helper in `src/lib/remoteRuntime.ts`, false on desktop.
+- [x] Import guard test (as `src/web/importGuard.test.ts`): the runtime never imports app code.
 
 ### Task 11: session bootstrap
 - [ ] `/app/` boot:

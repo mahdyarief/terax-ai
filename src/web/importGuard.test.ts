@@ -16,4 +16,16 @@ describe("web client import graph", () => {
     );
     expect(tauriBound).toEqual([]);
   });
+
+  it("remote runtime never imports app code or @tauri-apps", () => {
+    const { files } = traceEager("src/web/runtime/main.ts");
+    const invalid = [...files].filter((file) => {
+      const normalized = file.replace(/\\/g, "/");
+      if (!normalized.includes("/src/web/runtime/")) {
+        return true;
+      }
+      return readFileSync(file, "utf8").includes("@tauri-apps");
+    });
+    expect(invalid).toEqual([]);
+  });
 });
