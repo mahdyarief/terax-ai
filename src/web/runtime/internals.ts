@@ -106,7 +106,7 @@ export function createTauriInternals(options: {
   async function invoke(
     cmd: string,
     args?: unknown,
-    _invokeOptions?: { headers?: Record<string, string> },
+    invokeOptions?: { headers?: Record<string, string> },
   ): Promise<unknown> {
     if (cmd === "plugin:window|set_title") {
       const value =
@@ -154,6 +154,12 @@ export function createTauriInternals(options: {
     }
 
     const session = await options.waitForSession();
+    const extraHeaders: Record<string, string> = {};
+    if (invokeOptions?.headers) {
+      extraHeaders["X-Terax-Invoke-Headers"] = JSON.stringify(
+        invokeOptions.headers,
+      );
+    }
     let response: Response;
     if (isRawBody(args)) {
       const body =
@@ -170,6 +176,7 @@ export function createTauriInternals(options: {
           "X-Terax-Session": session.id,
           "X-Terax-Cmd": cmd,
           "Content-Type": "application/octet-stream",
+          ...extraHeaders,
         },
         body,
       });
@@ -179,6 +186,7 @@ export function createTauriInternals(options: {
         headers: {
           "X-Terax-Remote": "1",
           "Content-Type": "application/json",
+          ...extraHeaders,
         },
         body: JSON.stringify({
           session: session.id,

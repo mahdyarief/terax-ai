@@ -378,6 +378,7 @@ mod tests {
             _label: &'a str,
             _cmd: &'a str,
             _body: InvokeRequestBody,
+            _headers: Vec<(String, String)>,
             _callback_id: u32,
             _error_id: u32,
         ) -> Pin<Box<dyn Future<Output = Result<InvokeResult, String>> + Send + 'a>> {

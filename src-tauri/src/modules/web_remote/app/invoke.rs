@@ -122,6 +122,17 @@ pub(crate) async fn handle_invoke(deps: &Deps, request: Request<Incoming>) -> Re
     };
 
     let transport = transport_for(deps, request.headers());
+    let invoke_headers: Vec<(String, String)> = request
+        .headers()
+        .get("x-terax-invoke-headers")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|raw| serde_json::from_str::<std::collections::HashMap<String, String>>(raw).ok())
+        .map(|map| {
+            map.into_iter()
+                .filter(|(k, _)| k.to_ascii_lowercase().starts_with("x-"))
+                .collect()
+        })
+        .unwrap_or_default();
     let header_cmd = request
         .headers()
         .get("x-terax-cmd")
@@ -173,7 +184,10 @@ pub(crate) async fn handle_invoke(deps: &Deps, request: Request<Incoming>) -> Re
         )
     };
 
-    match relay.invoke(&session_id, &caller.id, &cmd, body).await {
+    match relay
+        .invoke(&session_id, &caller.id, &cmd, body, invoke_headers)
+        .await
+    {
         Ok(InvokeResult::OkJson(s)) => secure(
             Response::builder()
                 .status(StatusCode::OK)
@@ -247,6 +261,7 @@ mod tests {
             label: &'a str,
             cmd: &'a str,
             body: InvokeRequestBody,
+            _headers: Vec<(String, String)>,
             _callback_id: u32,
             _error_id: u32,
         ) -> Pin<Box<dyn Future<Output = Result<InvokeResult, String>> + Send + 'a>> {

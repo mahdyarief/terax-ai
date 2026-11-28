@@ -52,6 +52,7 @@ pub trait RelayHost: Send + Sync {
         label: &'a str,
         cmd: &'a str,
         body: InvokeRequestBody,
+        headers: Vec<(String, String)>,
         callback_id: u32,
         error_id: u32,
     ) -> Pin<Box<dyn Future<Output = Result<InvokeResult, String>> + Send + 'a>>;
@@ -107,6 +108,7 @@ impl RelayHost for AppRelayHost {
         label: &'a str,
         cmd: &'a str,
         body: InvokeRequestBody,
+        headers: Vec<(String, String)>,
         callback_id: u32,
         error_id: u32,
     ) -> Pin<Box<dyn Future<Output = Result<InvokeResult, String>> + Send + 'a>> {
@@ -123,13 +125,22 @@ impl RelayHost for AppRelayHost {
                 InvokeRequestBody::Json(v) => InvokeBody::Json(v),
                 InvokeRequestBody::Raw(b) => InvokeBody::Raw(b),
             };
+            let mut header_map = tauri::http::HeaderMap::new();
+            for (k, v) in headers {
+                if let (Ok(name), Ok(val)) = (
+                    tauri::http::HeaderName::from_bytes(k.as_bytes()),
+                    tauri::http::HeaderValue::from_str(&v),
+                ) {
+                    header_map.insert(name, val);
+                }
+            }
             let req = InvokeRequest {
                 cmd: cmd.to_string(),
                 callback: CallbackFn(callback_id),
                 error: CallbackFn(error_id),
                 url,
                 body: invoke_body,
-                headers: Default::default(),
+                headers: header_map,
                 invoke_key: self.0.invoke_key().to_string(),
             };
             webview.clone().on_message(
@@ -374,13 +385,14 @@ impl SessionManager {
         device_id: &str,
         cmd: &str,
         body: InvokeRequestBody,
+        headers: Vec<(String, String)>,
     ) -> Result<InvokeResult, SessionError> {
         let label = self
             .lookup(session_id, device_id)
             .ok_or(SessionError::NotFound)?;
         let (cb, err) = self.next_callback_pair();
         self.host
-            .invoke(&label, cmd, body, cb, err)
+            .invoke(&label, cmd, body, headers, cb, err)
             .await
             .map_err(SessionError::HostFailed)
     }
@@ -554,6 +566,7 @@ mod tests {
             _label: &'a str,
             _cmd: &'a str,
             _body: InvokeRequestBody,
+            _headers: Vec<(String, String)>,
             _callback_id: u32,
             _error_id: u32,
         ) -> Pin<Box<dyn Future<Output = Result<InvokeResult, String>> + Send + 'a>> {
